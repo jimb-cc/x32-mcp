@@ -1,0 +1,480 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<title>CFS² — x32-mcp</title>
+<!--
+  CFS² read-only dashboard (DESIGN.md §17). Single self-contained file: no build step, no CDN.
+  Server → client JSON over ws://<host>/ws: hello | rta | state | notches | event (client never sends).
+  "?demo=1" runs an in-page synthetic source (music + ring at 2.4 kHz → notch → ring at 630 Hz) with no server.
+  Waterfall: newest row at the BOTTOM, history scrolls upward (≈15 s at 20 fps); offscreen ring-buffer canvas + drawImage.
+  RTA band centres default to 10000·2^((i−90)/10) Hz per docs/research/meters.md §4.2; 'hello' overrides.
+-->
+<style>
+:root{--bg:#0b0d12;--panel:#141821;--line:#2a3140;--fg:#f2f4f8;--dim:#9aa4b5;--accent:#35c3ff;--green:#3ddc84;
+  --orange:#ffb020;--red:#ff4d5e;--purple:#b57bff;--yellow:#ffe066;--mono:ui-monospace,Consolas,"Cascadia Mono",Menlo,monospace}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--fg);font:18px/1.3 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;-webkit-text-size-adjust:100%}
+#banner{position:sticky;top:0;z-index:10;padding:10px 16px;font-weight:700;font-size:20px;text-align:center;color:#000;background:var(--red)}
+#banner.amber{background:var(--yellow)}
+#banner.hidden{display:none}
+header{display:flex;align-items:center;gap:16px;padding:10px 16px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+.brand{font-size:26px;font-weight:800;letter-spacing:.5px}
+.brand small{font-size:14px;font-weight:400;color:var(--dim);margin-left:10px}
+.hstat{margin-left:auto;color:var(--dim);font-size:15px;font-family:var(--mono);white-space:nowrap}
+.badge{display:inline-block;padding:6px 18px;border-radius:999px;font-weight:800;font-size:20px;letter-spacing:1px;color:#000;background:var(--dim)}
+.badge.idle{background:#8a94a6}.badge.watch{background:var(--green)}.badge.ringout{background:var(--orange)}.badge.system{background:var(--purple)}
+main{display:grid;gap:12px;padding:12px;grid-template-columns:minmax(0,1fr) 360px;grid-template-areas:"rta state" "wf state" "wf log"}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:10px 12px;min-width:0}
+.panel h2{margin:0 0 6px;font-size:15px;font-weight:700;text-transform:uppercase;letter-spacing:1px;color:var(--dim);display:flex;gap:10px;align-items:baseline}
+.panel h2 span{font-weight:400;text-transform:none;letter-spacing:0;margin-left:auto}
+#rtaPanel{grid-area:rta}#wfPanel{grid-area:wf}#statePanel{grid-area:state}#logPanel{grid-area:log;display:flex;flex-direction:column}
+canvas{display:block;width:100%;height:300px;border-radius:6px;background:#000;touch-action:pan-y}
+#wf{height:340px}
+.kv{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.cell{background:#0e1117;border:1px solid var(--line);border-radius:8px;padding:8px 10px;min-width:0}
+.cell.wide{grid-column:1/-1}
+.lbl{font-size:13px;text-transform:uppercase;letter-spacing:1px;color:var(--dim)}
+.val{font-size:30px;font-weight:700;font-variant-numeric:tabular-nums;line-height:1.15;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.val small{font-size:15px;font-weight:400;color:var(--dim)}
+.sub{font-size:16px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.bar{height:22px;border-radius:6px;background:#1c2230;overflow:hidden;margin-top:6px;border:1px solid var(--line)}
+.bar i{display:block;height:100%;width:0;background:var(--orange);transition:width .15s linear}
+.bar.hot i{background:var(--red)}
+.conn{font-size:22px}
+.conn.connected{color:var(--green)}.conn.degraded,.conn.connecting{color:var(--orange)}.conn.disconnected{color:var(--red)}
+.chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:4px;min-height:28px}
+.chip{padding:3px 10px;border-radius:6px;color:#000;font-weight:700;font-size:16px;font-family:var(--mono)}
+#log{flex:1;min-height:240px;max-height:520px;overflow-y:auto;font-family:var(--mono);font-size:14px;line-height:1.35;background:#0e1117;border:1px solid var(--line);border-radius:8px;padding:4px 0}
+.ev{display:grid;grid-template-columns:auto auto 1fr;gap:10px;padding:3px 8px;border-left:4px solid transparent;border-bottom:1px solid #161b25;align-items:baseline}
+.ev .ts{color:var(--dim)}.ev .ty{color:var(--accent);white-space:nowrap}.ev .tx{white-space:pre-wrap;word-break:break-word}
+.ev.notch{border-left-color:var(--red);background:#2a1418}.ev.notch .ty{color:var(--red);font-weight:700}
+.ev.stage .ty{color:var(--orange)}.ev.abort{border-left-color:var(--red)}.ev.abort .ty{color:var(--red)}
+.ev.candidate .ty{color:var(--yellow)}.ev.write .ty{color:var(--dim)}.ev.conn .ty{color:var(--green)}
+@media (max-width:1000px){main{grid-template-columns:1fr;grid-template-areas:"rta" "wf" "state" "log"}}
+@media (max-width:600px){html,body{font-size:16px}canvas{height:230px}#wf{height:260px}.val{font-size:26px}.brand{font-size:22px}
+  header{padding:8px 12px;gap:10px}main{padding:8px;gap:8px}.hstat{width:100%;margin-left:0;white-space:normal}.badge{font-size:17px;padding:5px 14px}
+  .ev{grid-template-columns:auto 1fr}.ev .tx{grid-column:1/-1}}
+</style>
+</head>
+<body>
+<div id="banner" class="hidden"></div>
+<header>
+  <div class="brand">CFS²<small>x32-mcp · feedback ring-out</small></div>
+  <div id="modeBadge" class="badge idle">IDLE</div>
+  <div class="hstat"><span id="wsState">WS: —</span> · <span id="fpsLbl">0 fps</span> · <span id="srv">—</span> · <span id="clock">--:--:--</span></div>
+</header>
+<main>
+  <section class="panel" id="rtaPanel"><h2>RTA · 100 bands<span>dB −90…0 · peak hold · notch markers</span></h2><canvas id="rta"></canvas></section>
+  <section class="panel" id="wfPanel"><h2>Waterfall<span>newest at bottom · ≈15 s</span></h2><canvas id="wf"></canvas></section>
+  <aside class="panel" id="statePanel"><h2>CFS² state</h2>
+    <div class="kv">
+      <div class="cell"><div class="lbl">Bus</div><div class="val" id="bus">—</div><div class="sub" id="busName">&nbsp;</div></div>
+      <div class="cell"><div class="lbl">Master</div><div class="val" id="master">—<small> dB</small></div><div class="sub" id="stage">stage —</div></div>
+      <div class="cell"><div class="lbl">Budget left</div><div class="val" id="budget">—</div></div>
+      <div class="cell"><div class="lbl">RTA source</div><div class="val" id="rtaSrc">—</div></div>
+      <div class="cell wide"><div class="lbl">Candidate</div><div class="val" id="cand">none</div><div class="bar" id="candBar"><i></i></div></div>
+      <div class="cell wide"><div class="lbl">Connection</div><div class="val conn" id="connState">—</div><div class="sub" id="connInfo">&nbsp;</div></div>
+      <div class="cell wide"><div class="lbl">Notches <span id="notchCount">0</span></div><div class="chips" id="chips"></div></div>
+    </div>
+  </aside>
+  <section class="panel" id="logPanel"><h2>Events<span>last 200 · newest on top</span></h2><div id="log"></div></section>
+</main>
+<script>
+(function () {
+'use strict';
+const $ = (id) => document.getElementById(id);
+const DEMO = new URLSearchParams(location.search).get('demo') === '1';
+const NB = 100, DB_LO = -90, DB_HI = 0, F_LO = 18, F_HI = 21000, LOG_MAX = 200, WF_ROWS = 300; // 300 rows ≈ 15 s at 20 fps
+const TICKS = [[20, '20'], [50, '50'], [100, '100'], [200, '200'], [500, '500'], [1000, '1k'], [2000, '2k'], [5000, '5k'], [10000, '10k'], [20000, '20k']];
+const C = { line: '#2a3140', fg: '#f2f4f8', dim: '#9aa4b5', green: '#3ddc84', orange: '#ffb020', red: '#ff4d5e', yellow: '#ffe066' };
+const FONT = '13px system-ui, sans-serif';
+
+// ---- data ---------------------------------------------------------------------------------
+// Band centres per docs/research/meters.md §4.2: 1/10-octave anchored at band 90 = 10 kHz.
+let bandHz = Array.from({ length: NB }, (_, i) => 10000 * Math.pow(2, (i - 90) / 10));
+let geqHz = [20, 25, 31.5, 40, 50, 63, 80, 100, 125, 160, 200, 250, 315, 400, 500, 630, 800, 1000, 1250, 1600, 2000,
+  2500, 3150, 4000, 5000, 6300, 8000, 10000, 12500, 16000, 20000];
+let edges = [];                       // per band: [xlo, xhi] as fractions (0..1) of the log-frequency plot width
+let frame = null, newFrame = null, pending = false;
+const peak = new Float32Array(NB).fill(DB_LO), peakT = new Float64Array(NB);
+let state = null, notches = [], rxCount = 0;
+
+const xf = (f) => Math.log(Math.max(f, 1) / F_LO) / Math.log(F_HI / F_LO);   // Hz → 0..1 on the log axis
+const clampDb = (v) => Math.max(DB_LO, Math.min(DB_HI, Number.isFinite(v) ? v : DB_LO));
+function setBands(hz) {
+  if (Array.isArray(hz) && hz.length >= 2) bandHz = hz.slice(0, NB).map(Number);
+  edges = bandHz.map((f, i, a) => {              // band edges = geometric means of neighbours (extrapolated at the ends)
+    const lo = i ? Math.sqrt(a[i - 1] * f) : f * f / Math.sqrt(f * a[1]);
+    const hi = i < a.length - 1 ? Math.sqrt(f * a[i + 1]) : f * f / Math.sqrt(a[i - 1] * f);
+    return [xf(lo), xf(hi)];
+  });
+}
+setBands(null);
+
+// ---- formatting ---------------------------------------------------------------------------
+function fmtDb(v, d = 1) {
+  if (v === '-oo' || v === -Infinity) return '−oo';
+  if (v == null || !Number.isFinite(Number(v))) return '—';
+  v = Number(v);
+  return (v > 0 ? '+' : v < 0 ? '−' : '') + Math.abs(v).toFixed(d);
+}
+function fmtHz(f) {
+  if (f == null || !Number.isFinite(Number(f))) return '—';
+  f = Number(f);
+  return f >= 1000 ? (f / 1000).toFixed(f >= 10000 ? 1 : 2).replace(/\.?0+$/, '') + 'k' : Math.round(f) + '';
+}
+const pad = (n, w) => String(n).padStart(w, '0');
+function fmtTs(ts) {                     // epoch seconds → HH:MM:SS.mmm (local time)
+  const d = new Date((Number(ts) || Date.now() / 1000) * 1000);
+  return pad(d.getHours(), 2) + ':' + pad(d.getMinutes(), 2) + ':' + pad(d.getSeconds(), 2) + '.' + pad(d.getMilliseconds(), 3);
+}
+function sessColor(id) {                 // stable colour per session_id (hash → hue)
+  let h = 7;
+  for (const ch of String(id || '')) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return 'hsl(' + (h % 360) + ' 95% 62%)';
+}
+function busLabel(b) {
+  if (b == null) return '—';
+  return typeof b === 'number' ? 'Bus ' + b : String(b).charAt(0).toUpperCase() + String(b).slice(1);
+}
+
+// ---- canvas helpers -----------------------------------------------------------------------
+function fit(c) {                        // size the backing store to CSS px × devicePixelRatio; returns a ctx in CSS px
+  const dpr = window.devicePixelRatio || 1, w = Math.max(1, c.clientWidth), h = Math.max(1, c.clientHeight);
+  if (c.width !== Math.round(w * dpr) || c.height !== Math.round(h * dpr)) { c.width = Math.round(w * dpr); c.height = Math.round(h * dpr); }
+  const ctx = c.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  return ctx;
+}
+function axes(ctx, L, T, pw, ph, grid) {
+  ctx.font = pw < 420 ? '11px system-ui, sans-serif' : FONT; ctx.lineWidth = 1;   // smaller labels on phones
+  for (const [f, lab] of TICKS) {
+    const x = Math.round(L + xf(f) * pw) + 0.5;
+    ctx.strokeStyle = C.line; ctx.beginPath();
+    ctx.moveTo(x, grid ? T : T + ph - 6); ctx.lineTo(x, T + ph); ctx.stroke();
+    ctx.fillStyle = C.dim; ctx.textBaseline = 'top'; ctx.textAlign = 'center';
+    ctx.fillText(lab, x, T + ph + 4);
+  }
+  ctx.font = FONT;
+  if (grid) for (let db = DB_LO; db <= DB_HI; db += 10) {
+    const y = Math.round(T + (DB_HI - db) / (DB_HI - DB_LO) * ph) + 0.5;
+    ctx.strokeStyle = db === 0 ? C.dim : C.line; ctx.beginPath(); ctx.moveTo(L, y); ctx.lineTo(L + pw, y); ctx.stroke();
+    if (db % 30 === 0) { ctx.fillStyle = C.dim; ctx.textAlign = 'right'; ctx.textBaseline = 'middle'; ctx.fillText(db, L - 6, y); }
+  }
+}
+function drawNotches(ctx, L, T, pw, ph, labels) {
+  notches.forEach((n, k) => {
+    const x = Math.round(L + xf(n.freq_hz) * pw) + 0.5, col = sessColor(n.session_id);
+    ctx.setLineDash([5, 4]); ctx.strokeStyle = col; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(x, T); ctx.lineTo(x, T + ph); ctx.stroke(); ctx.setLineDash([]);
+    if (!labels) return;
+    const txt = fmtDb(n.depth_db, 0) + ' · ' + fmtHz(n.freq_hz);
+    ctx.font = 'bold 14px system-ui, sans-serif';
+    const w = ctx.measureText(txt).width + 12, y = T + 2 + (k % 2) * 24;
+    const bx = Math.max(L, Math.min(L + pw - w, x - w / 2));
+    ctx.fillStyle = col; ctx.fillRect(bx, y, w, 21);
+    ctx.fillStyle = '#000'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(txt, bx + w / 2, y + 11);
+  });
+}
+function drawCandidate(ctx, L, T, pw, ph) {
+  const cand = state && state.candidate;
+  if (!cand || cand.freq_hz == null) return;
+  const x = L + xf(cand.freq_hz) * pw, hot = Number(cand.confidence) >= 0.7;
+  ctx.strokeStyle = hot ? C.red : C.orange; ctx.lineWidth = 2; ctx.strokeRect(Math.round(x) - 7 + 0.5, T + 0.5, 14, ph - 1);
+  ctx.fillStyle = ctx.strokeStyle; ctx.font = 'bold 14px system-ui, sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
+  ctx.fillText('? ' + Number(cand.confidence || 0).toFixed(2), Math.max(L + 30, Math.min(L + pw - 30, x)), T + ph - 4);
+}
+
+// ---- RTA bars -----------------------------------------------------------------------------
+function drawRta() {
+  const c = $('rta'), ctx = fit(c), W = c.clientWidth, H = c.clientHeight;
+  const L = 44, R = 14, T = 54, B = 22, pw = W - L - R, ph = H - T - B;
+  ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
+  axes(ctx, L, T, pw, ph, true);
+  if (frame) {
+    const g = ctx.createLinearGradient(0, T, 0, T + ph);
+    g.addColorStop(0, C.red); g.addColorStop(0.22, C.yellow); g.addColorStop(0.55, C.green); g.addColorStop(1, '#0a6a8a');
+    ctx.fillStyle = g;
+    const now = performance.now(), n = Math.min(NB, frame.length, edges.length);
+    for (let i = 0; i < n; i++) {
+      const v = clampDb(frame[i]);
+      if (v >= peak[i]) { peak[i] = v; peakT[i] = now; } else if (now - peakT[i] > 1000) peak[i] = Math.max(v, peak[i] - 0.6);
+      const x0 = L + edges[i][0] * pw, x1 = L + edges[i][1] * pw, y = T + (DB_HI - v) / (DB_HI - DB_LO) * ph;
+      ctx.fillRect(x0 + 0.5, y, Math.max(1, x1 - x0 - 1), T + ph - y);
+    }
+    ctx.strokeStyle = C.fg; ctx.lineWidth = 1.5; ctx.beginPath();          // peak-hold line through the band centres
+    for (let i = 0; i < n; i++) {
+      const x = L + (edges[i][0] + edges[i][1]) / 2 * pw, y = T + (DB_HI - peak[i]) / (DB_HI - DB_LO) * ph;
+      i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+    }
+    ctx.stroke();
+  }
+  drawCandidate(ctx, L, T, pw, ph);
+  drawNotches(ctx, L, T, pw, ph, true);
+}
+
+// ---- waterfall ----------------------------------------------------------------------------
+// Offscreen canvas, 1 px per band × WF_ROWS rows, used as a ring buffer: each frame writes ONE row (no per-frame
+// copy), and drawWf() blits the two chronological segments with drawImage so the newest row lands at the bottom.
+// Rows are pushed on message receipt (not in the rAF render) so history stays continuous when frames are dropped.
+const off = document.createElement('canvas');
+off.width = NB; off.height = WF_ROWS;
+const octx = off.getContext('2d');
+let wfHead = 0;                                             // next row to write; rows wfHead..end, then 0..wfHead-1 are oldest→newest
+const LUT = (() => {                                        // near-black → blue → magenta → yellow → white
+  const stops = [[0, [0, 0, 10]], [0.28, [12, 28, 215]], [0.55, [225, 0, 225]], [0.8, [255, 232, 0]], [1, [255, 255, 255]]];
+  const out = new Uint8ClampedArray(256 * 3);
+  for (let k = 0; k < 256; k++) {
+    const v = k / 255; let s = 0;
+    while (s < stops.length - 2 && v > stops[s + 1][0]) s++;
+    const [a, ca] = stops[s], [b, cb] = stops[s + 1], u = (v - a) / (b - a);
+    for (let j = 0; j < 3; j++) out[k * 3 + j] = ca[j] + (cb[j] - ca[j]) * u;
+  }
+  return out;
+})();
+octx.fillStyle = 'rgb(0,0,10)'; octx.fillRect(0, 0, NB, WF_ROWS);
+const rowImg = octx.createImageData(NB, 1);
+function pushRow(db) {
+  const d = rowImg.data;
+  for (let i = 0; i < NB; i++) {
+    const k = Math.round((clampDb(i < db.length ? db[i] : DB_LO) - DB_LO) / (DB_HI - DB_LO) * 255);
+    d[i * 4] = LUT[k * 3]; d[i * 4 + 1] = LUT[k * 3 + 1]; d[i * 4 + 2] = LUT[k * 3 + 2]; d[i * 4 + 3] = 255;
+  }
+  octx.putImageData(rowImg, 0, wfHead);
+  wfHead = (wfHead + 1) % WF_ROWS;
+}
+function drawWf() {
+  const c = $('wf'), ctx = fit(c), W = c.clientWidth, H = c.clientHeight;
+  const L = 44, R = 14, T = 8, B = 22, pw = W - L - R, ph = H - T - B;
+  ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
+  const x0 = L + edges[0][0] * pw, x1 = L + edges[edges.length - 1][1] * pw, older = WF_ROWS - wfHead, sy = ph / WF_ROWS;
+  ctx.imageSmoothingEnabled = false;
+  if (older) ctx.drawImage(off, 0, wfHead, NB, older, x0, T, x1 - x0, older * sy);                 // oldest rows on top
+  if (wfHead) ctx.drawImage(off, 0, 0, NB, wfHead, x0, T + older * sy, x1 - x0, wfHead * sy);      // newest at the bottom
+  axes(ctx, L, T, pw, ph, false);
+  ctx.fillStyle = C.dim; ctx.font = FONT; ctx.textAlign = 'right';
+  ctx.textBaseline = 'top'; ctx.fillText('−15 s', L - 6, T);
+  ctx.textBaseline = 'bottom'; ctx.fillText('now', L - 6, T + ph);
+  drawCandidate(ctx, L, T, pw, ph);
+  drawNotches(ctx, L, T, pw, ph, false);
+}
+
+// ---- render loop (rAF-decimated: only the latest frame is drawn) ---------------------------
+function schedule() { if (!pending) { pending = true; requestAnimationFrame(render); } }
+function render() {
+  pending = false;
+  if (newFrame) { frame = newFrame; newFrame = null; }
+  drawRta(); drawWf();
+}
+
+// ---- state panel --------------------------------------------------------------------------
+const MODES = { idle: ['IDLE', 'idle'], watch: ['WATCH', 'watch'], ringout: ['RING-OUT', 'ringout'], system: ['SYSTEM', 'system'] };
+function applyState(s) {
+  state = s;
+  const m = MODES[String(s.mode || 'idle').toLowerCase()] || [String(s.mode).toUpperCase(), 'idle'];
+  $('modeBadge').textContent = m[0]; $('modeBadge').className = 'badge ' + m[1];
+  $('bus').textContent = busLabel(s.bus);
+  $('busName').textContent = (s.bus_name || '') + (s.session_id ? '  ·  ' + s.session_id : '') || ' ';
+  $('master').innerHTML = ''; $('master').append(fmtDb(s.master_db), Object.assign(document.createElement('small'), { textContent: ' dB' }));
+  $('stage').textContent = 'stage ' + (s.stage || '—');
+  $('budget').textContent = s.budget_left == null ? '—' : s.budget_left;
+  $('rtaSrc').textContent = s.rta_source || '—';
+  const cand = s.candidate, conf = cand ? Math.max(0, Math.min(1, Number(cand.confidence) || 0)) : 0;
+  $('cand').textContent = cand ? fmtHz(cand.freq_hz) + ' · ' + conf.toFixed(2) + (cand.level_db != null ? ' · ' + fmtDb(cand.level_db) + ' dB' : '') : 'none';
+  $('candBar').className = 'bar' + (conf >= 0.7 ? ' hot' : '');
+  $('candBar').firstElementChild.style.width = (conf * 100) + '%';
+  const c = s.connection || {}, cs = String(c.state || 'unknown').toLowerCase();
+  $('connState').textContent = cs.toUpperCase(); $('connState').className = 'val conn ' + cs;
+  $('connInfo').textContent = (c.console || 'no console') + (c.rtt_ms != null ? '  ·  rtt ' + Math.round(c.rtt_ms) + ' ms' : '');
+  schedule();
+}
+function applyNotches(items) {
+  notches = (items || []).map((n) => Object.assign({}, n, { freq_hz: n.freq_hz != null ? n.freq_hz : geqHz[(n.band || 1) - 1] }))
+    .sort((a, b) => a.freq_hz - b.freq_hz);
+  $('notchCount').textContent = notches.length;
+  const chips = $('chips'); chips.textContent = '';
+  const multiBus = new Set(notches.map((n) => n.bus)).size > 1;   // system ring-out: chips from several buses
+  for (const n of notches) {
+    const el = document.createElement('span'); el.className = 'chip'; el.style.background = sessColor(n.session_id);
+    const showBus = n.bus != null && (multiBus || (state && state.bus != null && n.bus !== state.bus));
+    el.textContent = (showBus ? busLabel(n.bus) + ' · ' : '') + fmtHz(n.freq_hz) + ' ' + fmtDb(n.depth_db, 0);   // inline, never hover-only
+    chips.appendChild(el);
+  }
+  schedule();
+}
+
+// ---- event log ----------------------------------------------------------------------------
+const FIELD = { stage: (v) => v, mode: (v) => 'mode ' + String(v).toUpperCase(), state: (v) => String(v).toUpperCase(), console: (v) => v,
+  bus: (v) => busLabel(v), freq_hz: (v) => fmtHz(v), depth_db: (v) => fmtDb(v, 0) + ' dB', gain_db: (v) => 'gain ' + fmtDb(v) + ' dB',
+  confidence: (v) => 'conf ' + Number(v).toFixed(2), level_db: (v) => fmtDb(v) + ' dB', master_db: (v) => 'master ' + fmtDb(v) + ' dB',
+  target: (v) => v, address: (v) => v, value: (v) => '= ' + JSON.stringify(v), reason: (v) => v, error: (v) => v, rtt_ms: (v) => Math.round(v) + ' ms' };
+function summary(d) {
+  if (!d || typeof d !== 'object') return d == null ? '' : String(d);
+  const parts = [];
+  for (const k in FIELD) if (k in d && d[k] != null) parts.push(FIELD[k](d[k]));
+  return parts.length ? parts.join(' · ') : JSON.stringify(d).slice(0, 160);
+}
+function addEvent(ev) {
+  const type = String(ev.type || '?'), row = document.createElement('div');
+  row.className = 'ev' + (type === 'cfs.notch' ? ' notch' : type === 'cfs.stage' ? ' stage' : type === 'cfs.abort' ? ' abort'
+    : type === 'cfs.candidate' ? ' candidate' : type === 'write' ? ' write' : type === 'connection.state' ? ' conn' : '');
+  for (const [cls, txt] of [['ts', fmtTs(ev.ts)], ['ty', type], ['tx', summary(ev.data)]]) {
+    const s = document.createElement('span'); s.className = cls; s.textContent = txt; row.appendChild(s);
+  }
+  const log = $('log'); log.prepend(row);
+  while (log.childElementCount > LOG_MAX) log.lastElementChild.remove();
+}
+
+// ---- message dispatch (schema: DESIGN.md §17) ---------------------------------------------
+function handle(m) {
+  if (!m || typeof m !== 'object') return;
+  switch (m.t) {
+    case 'hello':
+      setBands(m.band_hz);
+      if (Array.isArray(m.geq_band_hz) && m.geq_band_hz.length) geqHz = m.geq_band_hz.map(Number);
+      $('srv').textContent = 'v' + (m.version || '?') + ' @ ' + (m.fps || '?') + ' fps';
+      schedule(); break;
+    case 'rta':
+      if (Array.isArray(m.db)) { newFrame = m.db; pushRow(m.db); rxCount++; schedule(); }
+      break;
+    case 'state': applyState(m); break;
+    case 'notches': applyNotches(m.items); break;
+    case 'event': addEvent(m); break;
+  }
+}
+
+// ---- WebSocket with reconnect/backoff -----------------------------------------------------
+let ws = null, backoff = 1000, retryTimer = null;
+function banner(text, cls) {
+  const b = $('banner');
+  if (text == null) { b.className = 'hidden'; return; }
+  b.textContent = text; b.className = cls || '';
+}
+function setWs(s) { $('wsState').textContent = 'WS: ' + s; }
+function wsUrl() {
+  const host = location.host || 'localhost:8032';          // file:// fallback for local testing
+  return (location.protocol === 'https:' ? 'wss://' : 'ws://') + host + '/ws';
+}
+function connect() {
+  setWs('connecting');
+  try { ws = new WebSocket(wsUrl()); } catch (e) { ws = null; retry(); return; }
+  ws.onopen = () => { backoff = 1000; setWs('open'); banner(null); };
+  ws.onmessage = (e) => { let m; try { m = JSON.parse(e.data); } catch (err) { return; } handle(m); };
+  ws.onclose = () => { ws = null; setWs('closed'); if (state) applyState(Object.assign({}, state, { connection: { state: 'disconnected' } })); retry(); };
+  ws.onerror = () => { try { if (ws) ws.close(); } catch (e) { /* ignore */ } };
+}
+function retry() {
+  if (retryTimer) return;
+  const wait = backoff + Math.round(Math.random() * 300);
+  backoff = Math.min(8000, backoff * 2);
+  let left = Math.ceil(wait / 1000);
+  const show = () => banner('DISCONNECTED from x32-mcp — reconnecting in ' + left + ' s', 'red');
+  show();
+  const iv = setInterval(() => { left = Math.max(0, left - 1); show(); }, 1000);
+  retryTimer = setTimeout(() => { clearInterval(iv); retryTimer = null; connect(); }, wait);
+}
+
+// ---- demo: in-page synthetic source (?demo=1) — exercises every message type, no server ------
+function startDemo() {
+  const T0 = performance.now(), noise = new Float32Array(NB);
+  const bump = (f, fc, w) => Math.exp(-Math.pow(Math.log2(f / fc) / w, 2));
+  // pink-ish music bed: −10 dB/decade above 100 Hz, kick bump at 80 Hz, presence around 1.4 kHz, air roll-off
+  const base = bandHz.map((f) => -30 - 10 * Math.log10(Math.max(f, 60) / 100) + 7 * bump(f, 80, 0.5) + 4 * bump(f, 1400, 1.1) - (f > 8000 ? 8 * Math.log2(f / 8000) : 0));
+  const nearestBand = (f) => bandHz.reduce((best, b, i) => Math.abs(Math.log(b / f)) < Math.abs(Math.log(bandHz[best] / f)) ? i : best, 0);
+  let D, cycle0 = 0, last = 0;
+  const now = () => Date.now() / 1000;
+  const ev = (type, data) => handle({ t: 'event', ts: now(), type, data });
+  const st = (patch) => {
+    Object.assign(D.s, patch);
+    handle(Object.assign({ t: 'state' }, D.s, { connection: { state: 'connected', console: 'X32-DEMO', rtt_ms: 2 + Math.round(Math.random() * 3) } }));
+  };
+  const stage = (s, extra) => { D.s.stage = s; ev('cfs.stage', Object.assign({ stage: s, bus: D.s.bus, master_db: D.s.master_db }, extra || {})); st({}); };
+  const notchAt = (r, depth) => {                      // −3 dB per action, deepening (DESIGN.md §12 NotchController)
+    let n = D.notches.find((x) => x.freq_hz === r.geq);
+    if (!n) { n = { bus: D.s.bus, band: geqHz.indexOf(r.geq) + 1, freq_hz: r.geq, depth_db: 0, session_id: D.s.session_id, ts: 0 }; D.notches.push(n); D.s.budget_left--; }
+    n.depth_db = depth; n.ts = now(); r.depth = depth;
+    ev('cfs.notch', { bus: n.bus, band: n.band, freq_hz: n.freq_hz, depth_db: depth, session_id: n.session_id, detections: r.dets });
+    handle({ t: 'notches', items: D.notches.map((x) => Object.assign({}, x)) });
+  };
+  function reset(n) {
+    D = { n, notches: [], frameNo: 0, raiseT: 0, done: 0, next: 0,
+      s: { mode: 'idle', session_id: null, bus: 3, bus_name: 'Wedge A', master_db: -20, budget_left: 6, candidate: null, stage: null, rta_source: 'bus.3' },
+      // ring 1: 2.4 kHz, +12 dB/s from t=3 s (−3 dB stalls it, −6 dB makes it decay); ring 2: 630 Hz, +7 dB/s from t=13 s
+      rings: [{ f: 2400, geq: 2500, start: 3, growth: 12, level: -75, depth: 0, phase: 'grow', t: 0, lv: 0, dets: 0 },
+              { f: 630, geq: 630, start: 13, growth: 7, level: -75, depth: 0, phase: 'grow', t: 0, lv: 0, dets: 0 }] };
+    for (const r of D.rings) r.band = nearestBand(r.f);
+    handle({ t: 'notches', items: [] });
+  }
+  const script = [
+    [0, () => { handle({ t: 'hello', band_hz: bandHz, geq_band_hz: geqHz, version: '0.1.0-demo', fps: 20 }); ev('connection.state', { state: 'connected', console: 'X32-DEMO', rtt_ms: 2 }); st({}); }],
+    [0.6, () => { D.s.mode = 'ringout'; D.s.session_id = 'demo-' + D.n; ev('cfs.state', { mode: 'ringout', bus: 3 }); stage('PREFLIGHT'); }],
+    [1.2, () => stage('SNAPSHOT')],
+    [1.8, () => stage('ARM', { rta_source: 'bus.3' })],
+    [2.4, () => { stage('RAISE'); D.raiseT = 2.4; }],
+  ];
+  reset(1);
+  function tick() {
+    const tn = (performance.now() - T0) / 1000, t = tn - cycle0, dt = Math.min(0.2, tn - last);
+    last = tn;
+    if (t > 36) { reset(D.n + 1); cycle0 = tn; return; }
+    while (D.next < script.length && t >= script[D.next][0]) script[D.next++][1]();
+    D.frameNo++;
+    for (const r of D.rings) {                                   // ring dynamics + a simulated detector/notch state machine
+      if (t < r.start || r.phase === 'dead') continue;
+      r.level = Math.min(-4, r.level + (r.growth + 4 * r.depth) * dt);   // loop gain falls with the GEQ cut
+      if (r.level < -85) { r.phase = 'dead'; continue; }
+      const prom = r.level - base[r.band], conf = prom < 8 ? 0 : Math.max(0, Math.min(1, 0.25 + (prom - 12) / 16));
+      const cand = { band: r.band, freq_hz: Math.round(bandHz[r.band]), confidence: +conf.toFixed(2), level_db: +r.level.toFixed(1) };
+      if (r.phase === 'grow') {
+        if (conf > 0 && D.frameNo % 4 === 0) st({ candidate: cand });
+        if (conf >= 0.7) { r.dets++; ev('cfs.candidate', Object.assign({ bus: D.s.bus }, cand)); r.phase = 'hold'; r.t = t; st({ candidate: cand }); stage('HOLD'); }
+      } else if (r.phase === 'hold' && t - r.t > 0.3) {
+        stage('NOTCH'); notchAt(r, r.depth - 3); r.phase = 'notched'; r.t = t;
+      } else if (r.phase === 'notched' && t - r.t > 0.2) {
+        r.phase = 'verify'; r.t = t; r.lv = r.level; stage('VERIFY', { freq_hz: r.geq, depth_db: r.depth });
+      } else if (r.phase === 'verify' && t - r.t > 1.5) {
+        if (r.level <= r.lv - 6) { r.phase = 'resolved'; D.raiseT = t; st({ candidate: null }); stage('RAISE', { verified: true, freq_hz: r.geq }); }
+        else if (r.depth > -9) { r.phase = 'hold'; r.t = t - 0.3; ev('cfs.candidate', Object.assign({ bus: D.s.bus, note: 'still ringing, deepening' }, cand)); }
+        else { stage('ABORT', { reason: 'notch budget/depth exhausted at ' + fmtHz(r.geq) }); r.phase = 'dead'; }
+      }
+    }
+    if (D.s.stage === 'RAISE' && t - D.raiseT >= 1.5) {          // raise bus master +1 dB per dwell until the −6 dB target
+      D.raiseT = t;
+      if (D.s.master_db < -6) st({ master_db: D.s.master_db + 1 });
+      else { stage('DONE'); st({ master_db: D.s.master_db - 3 }); ev('cfs.report', { bus: 3, notches: D.notches.length, master_db: D.s.master_db }); D.done = t; }
+    }
+    if (D.done && t - D.done > 1.5 && D.s.mode !== 'idle') { st({ mode: 'idle', stage: null, candidate: null, session_id: null }); ev('cfs.state', { mode: 'idle' }); }
+    else if (D.frameNo % 20 === 0) st({});
+    const kick = Math.exp(-((t % 0.5) / 0.1)) * 9, sw = 3 * Math.sin(t * 0.9), db = new Array(NB);
+    for (let i = 0; i < NB; i++) {
+      noise[i] = 0.75 * noise[i] + 0.25 * (Math.random() * 7 - 3.5);
+      let v = base[i] + noise[i] + sw * Math.sin(i * 0.21 + t * 0.5) + (bandHz[i] < 160 ? kick : 0);
+      for (const r of D.rings) {
+        if (t < r.start || r.phase === 'dead') continue;
+        const d = Math.abs(i - r.band);
+        if (d <= 2) v = 10 * Math.log10(Math.pow(10, v / 10) + Math.pow(10, (r.level - 12 * d) / 10));
+      }
+      db[i] = Math.max(-128, Math.min(0, Math.round(v * 4) / 4));
+    }
+    handle({ t: 'rta', ts: now(), db });
+  }
+  setInterval(tick, 50);
+}
+
+// ---- boot ---------------------------------------------------------------------------------
+setInterval(() => {
+  $('fpsLbl').textContent = rxCount + ' fps'; rxCount = 0;
+  const d = new Date(); $('clock').textContent = pad(d.getHours(), 2) + ':' + pad(d.getMinutes(), 2) + ':' + pad(d.getSeconds(), 2);
+}, 1000);
+if (window.ResizeObserver) { const ro = new ResizeObserver(schedule); ro.observe($('rta')); ro.observe($('wf')); } else window.addEventListener('resize', schedule);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) schedule(); });
+schedule();
+if (DEMO) { banner('DEMO MODE — synthetic source, no console attached', 'amber'); setWs('demo'); startDemo(); }
+else connect();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,748 @@
+# x32-mcp device descriptor — Behringer X32 / M32 family, OSC over UDP 10023.
+#
+# This file is the ONLY place device knowledge lives (DESIGN.md §7). Every number in here traces to
+# docs/research/*.md (Maillot's C sources + the protocol PDF + a real-console scene file). Where a value
+# is surprising the comment cites the research section. Loaded by src/x32mcp/descriptor.py with
+# yaml.safe_load; YAML merge keys (<<) and anchors are used to share the strip parameter blocks.
+#
+# CONVENTIONS
+#   * Engineering units everywhere: dB, Hz, ms, %, 1-based strip numbers, enum TOKENS (index = OSC int).
+#   * `params.<family>` keys are OSC paths RELATIVE to the family root. Strip families' roots are
+#     `strips.<family>.path` (targets.py agrees); non-strip families' roots are `meta.roots` below.
+#     Template variables: {n} / {id} come from the root, {band}/{send}/{idx} from the nodes `for` ranges.
+#   * Each param spec: osc (f|i|s), exactly one of `scale` (name in `scales`) or `enum` (name in `enums`),
+#     `node` (text format token, vocabulary below), `tier` (0 read-only, 1 mix move, 2 guarded),
+#     optional `clamp: {min, max}` (engineering units) and `inverted_mute: true` (wire 1 = ON = unmuted).
+#   * Node text format tokens (`node:`) — what the desk prints in `/node` replies / `/` writes:
+#       str      double-quoted string ("Kick Drum", "")
+#       int      plain integer (%d); ALSO used for the HPF frequency, which the console prints as an
+#                integer Hz right-aligned in width 3 (scales_params.md §4.3 VERIFIED-CORRECTED) and for
+#                gate/dyn release and attack (integers, width 4 for release)
+#       sint     signed integer (%+d): pan "+0", "-100", "+50"
+#       onoff    OFF / ON  <-> bool
+#       enum     enum token (PEQ, GATE, FX4L, ...)
+#       db1      level text: "-oo" for -inf, else %+.1f with EXACT 0 dB printed "0.0" (scales_params.md
+#                §2.4); right-aligned in a 5-char field on the console. Parsers accept 0.0/+0.0/-0.0/-oo.
+#       db2      signed %+.2f (EQ band gain "+3.25", "-0.50")
+#       sfloat1  signed %+.1f, never -oo (preamp trim "+8.8", headamp gain "+0.0", automix weight)
+#       float1   unsigned %.1f (gate thr "-46.5", range "27.0", dyn thr, Q "2.0" (max prints "10"),
+#                delay time "0.3", solo sourcetrim)
+#       float2   unsigned %.2f (RTA decay "1.00")
+#       sig3     adaptive precision, console style (gate/dyn hold, dyn mgain): %.2f below 10 (0.02, 2.00, 8.00),
+#                %.1f below 100 (79.6, 14.0), %.0f from 100 up (100, 502) — parse as a free-form float
+#       freq     f201[] style: "124.7" below 1 kHz, "1k02" / "11k9" / "20k00" above (k = decimal point,
+#                digits after k are ×100/×10/×1 for 1/2/3 digits, scales_params.md §0)
+#       pct      integer percent (dyn mix "100")
+#       float    free-form float
+#       token    verbatim token, kept as text (FX parameters: display units depend on the effect type)
+#       bits6/bits8/bits9/bits18  "%"-prefixed fixed-width bitmap, MSB first, bit 0 = item 1
+#                (grp/mute %000000, grp/dca %00000001, scene safes %111111110, talk destmap)
+#     Tokens beyond DESIGN.md §9's list (sfloat1, sig3, token, bits*) are research-driven additions.
+#     `hex` from DESIGN.md is not used.
+#   * Field ORDER in `nodes` is exactly the order the desk prints (verbatim lines in scales_params.md
+#     §13 / transport.md §6.3). Token counts are firmware dependent: FW >= 3 appends `panFollow` to odd
+#     sends (transport.md §6.3) — parse positionally, missing trailing fields -> None.
+
+meta:
+  model: X32
+  osc_port: 10023
+  protocol_ref: "Maillot Unofficial X32/M32 OSC Remote Protocol v4.06-09 / v4.09-02 (docs/research)"
+  firmware_tested: "4.x"
+  # OSC address roots of the non-strip param families (params.<family> relpaths are joined to these).
+  # Strip families (ch, auxin, fxrtn, bus, mtx, main, dca) take their root from `strips`.
+  roots:
+    headamp: "/headamp/{n:03d}"      # n = 0..127: 000-031 local XLR, 032-079 AES50-A, 080-127 AES50-B (§12.2)
+    fx: "/fx/{n}"                    # n = 1..8 (single digit, no zero padding)
+    config: "/config"
+    show: "/-show"
+    stat: "/-stat"
+    prefs: "/-prefs"
+    action: "/-action"
+
+# ----------------------------------------------------------------------------------------------------
+# Named scales (scales.Scale). lin: v = lo + f*(hi-lo); log: v = lo*(hi/lo)**f; level = fader taper;
+# `steps` = number of distinct values the desk stores (grid i/(steps-1)). Sources: scales_params.md §1-§2.
+scales:
+  fader:        {kind: level, steps: 1024, unit: dB}   # faders/main/dca: grid i/1023 (§2.3)
+  send:         {kind: level, steps: 161,  unit: dB}   # sends, mlevel, solo/talk/osc level: grid i/160 (§2.3)
+  pan:          {kind: pan, lo: -100, hi: 100, steps: 101}          # §3: f=(p+100)/200
+  trim:         {kind: lin, lo: -18, hi: 18, steps: 145, unit: dB}  # §4.3 linf [-18,18,0.25]
+  headamp_gain: {kind: lin, lo: -12, hi: 60, steps: 145, unit: dB}  # §12.1 linf [-12,60,0.5]
+  eq_gain:      {kind: lin, lo: -15, hi: 15, steps: 121, unit: dB}  # §4.7 linf [-15,15,0.25]
+  geq_gain:     {kind: lin, lo: -15, hi: 15, steps: 61,  unit: dB}  # fx_routing_scenes.md §2.2; 0.5 dB grid inferred (§14)
+  freq:         {kind: log, lo: 20, hi: 20000, steps: 201, unit: Hz}  # §1.2 / §4.7
+  hpf:          {kind: log, lo: 20, hi: 400, steps: 101, unit: Hz}    # §4.3
+  q:            {kind: log, lo: 10, hi: 0.3, steps: 72}               # §4.7 DECREASING: f=0 -> Q 10, f=1 -> Q 0.3
+  gate_thr:     {kind: lin, lo: -80, hi: 0, steps: 161, unit: dB}     # §4.4
+  gate_range:   {kind: lin, lo: 3, hi: 60, steps: 58, unit: dB}       # §4.4
+  dyn_thr:      {kind: lin, lo: -60, hi: 0, steps: 121, unit: dB}     # §4.5
+  ms_attack:    {kind: lin, lo: 0, hi: 120, steps: 121, unit: ms}     # §4.4/§4.5
+  ms_hold:      {kind: log, lo: 0.02, hi: 2000, steps: 101, unit: ms} # §4.4
+  ms_release:   {kind: log, lo: 5, hi: 4000, steps: 101, unit: ms}    # §4.4
+  knee:         {kind: lin, lo: 0, hi: 5, steps: 6}                   # §4.5
+  mgain:        {kind: lin, lo: 0, hi: 24, steps: 49, unit: dB}       # §4.5
+  pct5:         {kind: lin, lo: 0, hi: 100, steps: 21, unit: "%"}     # §4.5 dyn mix, 5 % grid
+  delay_ms:     {kind: lin, lo: 0.3, hi: 500, steps: 4998, unit: ms}  # §4.2 linf [0.3,500,0.1]
+  automix_weight: {kind: lin, lo: -12, hi: 12, steps: 49, unit: dB}   # §4.11
+  solo_trim:    {kind: lin, lo: -18, hi: 18, steps: 73, unit: dB}     # §10 linf [-18,18,0.5]
+  dim_att:      {kind: lin, lo: -40, hi: 0, steps: 41, unit: dB}      # §10 linf [-40,0,1]
+  rta_gain:     {kind: lin, lo: 0, hi: 60, steps: 11, unit: dB}       # meters.md §5.1 linf [0,60,6]
+  rta_decay:    {kind: log, lo: 0.25, hi: 16, steps: 19, unit: s}     # meters.md §5.1 logf [0.25,16,19] (unit presumed s)
+  raw01:        {kind: lin, lo: 0, hi: 1}                             # pass-through 0..1 (FX params, see params.fx)
+  bool:         {kind: bool}
+  int:          {kind: int}
+  str:          {kind: str}
+
+# ----------------------------------------------------------------------------------------------------
+# Enum token lists: index = OSC int. All tokens quoted (YAML 1.1 would read OFF/ON/Y as booleans).
+enums:
+  onoff: ["OFF", "ON"]
+  color: ["OFF", "RD", "GN", "YE", "BL", "MG", "CY", "WH", "OFFi", "RDi", "GNi", "YEi", "BLi", "MGi", "CYi", "WHi"]   # §11.1
+  eq_type: ["LCut", "LShv", "PEQ", "VEQ", "HShv", "HCut"]                                          # ch/auxin/fxrtn/bus (§4.7)
+  eq_type_mtx: ["LCut", "LShv", "PEQ", "VEQ", "HShv", "HCut", "BU6", "BU12", "BS12", "LR12", "BU18", "BU24", "BS24", "LR24"]  # mtx/main (§7)
+  hpslope: ["12", "18", "24"]                                                                       # dB/oct (§4.3)
+  gate_mode: ["EXP2", "EXP3", "EXP4", "GATE", "DUCK"]                                              # §4.4 (emulator typo "EXP" ignored)
+  dyn_mode: ["COMP", "EXP"]
+  dyn_det: ["PEAK", "RMS"]
+  dyn_env: ["LIN", "LOG"]
+  dyn_ratio: ["1.1", "1.3", "1.5", "2.0", "2.5", "3.0", "4.0", "5.0", "7.0", "10", "20", "100"]     # §4.5
+  filter_type: ["LC6", "LC12", "HC6", "HC12", "1.0", "2.0", "3.0", "5.0", "10.0"]                  # gate/dyn sidechain filter (§4.4)
+  pos: ["PRE", "POST"]                                                                              # dyn/pos, insert/pos
+  send_type: ["IN/LC", "<-EQ", "EQ->", "PRE", "POST", "GRP"]                                       # ch/auxin/fxrtn -> bus sends (§4.9)
+  send_type_mtx: ["IN/LC", "<-EQ", "EQ->", "PRE", "POST"]                                          # bus/main -> matrix sends: 0..4 only (§6, §16.17)
+  # /…/config/source and gate/dyn keysrc, int 0..64 (§11.3). Tokens are ours; the desk prints the int.
+  ch_source: ["OFF", "IN01", "IN02", "IN03", "IN04", "IN05", "IN06", "IN07", "IN08", "IN09", "IN10", "IN11", "IN12", "IN13", "IN14", "IN15", "IN16", "IN17", "IN18", "IN19", "IN20", "IN21", "IN22", "IN23", "IN24", "IN25", "IN26", "IN27", "IN28", "IN29", "IN30", "IN31", "IN32", "AUX1", "AUX2", "AUX3", "AUX4", "AUX5", "AUX6", "USBL", "USBR", "FX1L", "FX1R", "FX2L", "FX2R", "FX3L", "FX3R", "FX4L", "FX4R", "BUS01", "BUS02", "BUS03", "BUS04", "BUS05", "BUS06", "BUS07", "BUS08", "BUS09", "BUS10", "BUS11", "BUS12", "BUS13", "BUS14", "BUS15", "BUS16"]
+  # insert points, 23 entries: FX n side L -> 2n-1, R -> 2n; AUX k -> 16+k (fx_routing_scenes.md §3.2)
+  insert_sel: ["OFF", "FX1L", "FX1R", "FX2L", "FX2R", "FX3L", "FX3R", "FX4L", "FX4R", "FX5L", "FX5R", "FX6L", "FX6R", "FX7L", "FX7R", "FX8L", "FX8R", "AUX1", "AUX2", "AUX3", "AUX4", "AUX5", "AUX6"]
+  # /fx/1-4/type, 61 entries (fx_routing_scenes.md §1.2; GEQ2 = 27). The emulator's string array has
+  # swapped pairs — the DOC / scene parser order below is the truth.
+  fx_type_14: ["HALL", "AMBI", "RPLT", "ROOM", "CHAM", "PLAT", "VREV", "VRM", "GATE", "RVRS", "DLY", "3TAP", "4TAP", "CRS", "FLNG", "PHAS", "DIMC", "FILT", "ROTA", "PAN", "SUB", "D/RV", "CR/R", "FL/R", "D/CR", "D/FL", "MODD", "GEQ2", "GEQ", "TEQ2", "TEQ", "DES2", "DES", "P1A", "P1A2", "PQ5", "PQ5S", "WAVD", "LIM", "CMB", "CMB2", "FAC", "FAC1M", "FAC2", "LEC", "LEC2", "ULC", "ULC2", "ENH2", "ENH", "EXC2", "EXC", "IMG", "EDI", "SON", "AMP2", "AMP", "DRV2", "DRV", "PIT2", "PIT"]
+  # /fx/5-8/type, 34 entries (fx_routing_scenes.md §1.3; GEQ2 = 0). Insert-only slots: no /source, no fxrtn.
+  fx_type_58: ["GEQ2", "GEQ", "TEQ2", "TEQ", "DES2", "DES", "P1A", "P1A2", "PQ5", "PQ5S", "WAVD", "LIM", "FAC", "FAC1M", "FAC2", "LEC", "LEC2", "ULC", "ULC2", "ENH2", "ENH", "EXC2", "EXC", "IMG", "EDI", "SON", "AMP2", "AMP", "DRV2", "DRV", "PHAS", "FILT", "PAN", "SUB"]
+  fx_source: ["INS", "MIX1", "MIX2", "MIX3", "MIX4", "MIX5", "MIX6", "MIX7", "MIX8", "MIX9", "MIX10", "MIX11", "MIX12", "MIX13", "MIX14", "MIX15", "MIX16", "M/C"]   # §1.4
+  routswitch: ["REC", "PLAY"]                                                                       # §4.2
+  # /config/routing/IN|PLAY/{1-8,...,25-32}, 0..23 (§4.3)
+  routing_in: ["AN1-8", "AN9-16", "AN17-24", "AN25-32", "A1-8", "A9-16", "A17-24", "A25-32", "A33-40", "A41-48", "B1-8", "B9-16", "B17-24", "B25-32", "B33-40", "B41-48", "CARD1-8", "CARD9-16", "CARD17-24", "CARD25-32", "UIN1-8", "UIN9-16", "UIN17-24", "UIN25-32"]
+  # /config/routing/IN|PLAY/AUX, 0..15 (§4.4; token 0 "AUX1-4" really means the 6 local AUX inputs)
+  routing_in_aux: ["AUX1-4", "AN1-2", "AN1-4", "AN1-6", "A1-2", "A1-4", "A1-6", "B1-2", "B1-4", "B1-6", "CARD1-2", "CARD1-4", "CARD1-6", "UIN1-2", "UIN1-4", "UIN1-6"]
+  # /config/routing/AES50A|AES50B|CARD/<block>, 0..35 (§4.5)
+  routing_aes: ["AN1-8", "AN9-16", "AN17-24", "AN25-32", "A1-8", "A9-16", "A17-24", "A25-32", "A33-40", "A41-48", "B1-8", "B9-16", "B17-24", "B25-32", "B33-40", "B41-48", "CARD1-8", "CARD9-16", "CARD17-24", "CARD25-32", "OUT1-8", "OUT9-16", "P161-8", "P169-16", "AUX1-6/Mon", "AuxIN1-6/TB", "UOUT1-8", "UOUT9-16", "UOUT17-24", "UOUT25-32", "UOUT33-40", "UOUT41-48", "UIN1-8", "UIN9-16", "UIN17-24", "UIN25-32"]
+  # /config/routing/OUT/1-4 and 9-12 (list A) / 5-8 and 13-16 (list B), 0..35 (§4.6)
+  routing_out_a: ["AN1-4", "AN9-12", "AN17-20", "AN25-28", "A1-4", "A9-12", "A17-20", "A25-28", "A33-36", "A41-44", "B1-4", "B9-12", "B17-20", "B25-28", "B33-36", "B41-44", "CARD1-4", "CARD9-12", "CARD17-20", "CARD25-28", "OUT1-4", "OUT9-12", "P161-4", "P169-12", "AUX/CR", "AUX/TB", "UOUT1-4", "UOUT9-12", "UOUT17-20", "UOUT25-28", "UOUT33-36", "UOUT41-44", "UIN1-4", "UIN9-12", "UIN17-20", "UIN25-28"]
+  routing_out_b: ["AN5-8", "AN13-16", "AN21-24", "AN29-32", "A5-8", "A13-16", "A21-24", "A29-32", "A37-40", "A45-48", "B5-8", "B13-16", "B21-24", "B29-32", "B37-40", "B45-48", "CARD5-8", "CARD13-16", "CARD21-24", "CARD29-32", "OUT5-8", "OUT13-16", "P165-8", "P1613-16", "AUX/CR", "AUX/TB", "UOUT5-8", "UOUT13-16", "UOUT21-24", "UOUT29-32", "UOUT37-40", "UOUT45-48", "UIN5-8", "UIN13-16", "UIN21-24", "UIN29-32"]
+  solo_source: ["OFF", "LR", "LR+C", "LRPFL", "LRAFL", "AUX56", "AUX78"]                            # §10
+  pfl_afl: ["PFL", "AFL"]
+  talk_source: ["INT", "EXT"]
+  mono_mode: ["LR+M", "LCR"]
+  automix_group: ["OFF", "X", "Y"]
+  show_control: ["CUES", "SCENES", "SNIPPETS"]                                                       # fx_routing_scenes.md §6.2
+  # /-prefs/rta/source, int 0..73 (meters.md §5.1): 0 none (dynamic/selected), 1 Monitor, 2-33 Ch,
+  # 34-41 Aux, 42-49 FX rtn, 50-65 Bus, 66-71 Mtx, 72 Main LR, 73 Mono. Tokens are ours (desk prints the int).
+  rta_source: ["NONE", "MONITOR", "CH01", "CH02", "CH03", "CH04", "CH05", "CH06", "CH07", "CH08", "CH09", "CH10", "CH11", "CH12", "CH13", "CH14", "CH15", "CH16", "CH17", "CH18", "CH19", "CH20", "CH21", "CH22", "CH23", "CH24", "CH25", "CH26", "CH27", "CH28", "CH29", "CH30", "CH31", "CH32", "AUX1", "AUX2", "AUX3", "AUX4", "AUX5", "AUX6", "AUX7", "AUX8", "FX1L", "FX1R", "FX2L", "FX2R", "FX3L", "FX3R", "FX4L", "FX4R", "BUS01", "BUS02", "BUS03", "BUS04", "BUS05", "BUS06", "BUS07", "BUS08", "BUS09", "BUS10", "BUS11", "BUS12", "BUS13", "BUS14", "BUS15", "BUS16", "MTX1", "MTX2", "MTX3", "MTX4", "MTX5", "MTX6", "MAIN", "MONO"]
+  rta_pos: ["PRE", "POST"]
+  rta_mode: ["BAR", "SPEC"]
+  rta_det: ["RMS", "PEAK"]
+  rta_visibility: ["OFF", "25%", "30%", "35%", "40%", "45%", "50%", "55%", "60%", "65%", "70%", "75%", "80%"]
+  rta_peakhold: ["OFF", "1", "2", "3", "4", "5", "6", "7", "8"]
+
+# ----------------------------------------------------------------------------------------------------
+strips:
+  ch:    {count: 32, path: "/ch/{n:02d}", label: "Ch", sends: 16, eq_bands: 4, preamp: true, gate: true, dyn: true, insert: true}
+  auxin: {count: 8,  path: "/auxin/{n:02d}", label: "Aux In", sends: 16, eq_bands: 4, preamp: true}   # preamp = trim+invert only; no gate/dyn/insert/delay (§5)
+  fxrtn: {count: 8,  path: "/fxrtn/{n:02d}", label: "FX Rtn", sends: 16, eq_bands: 4}                  # no preamp, no config/source (§5)
+  bus:   {count: 16, path: "/bus/{n:02d}", label: "Bus", sends: 6, send_target: mtx, eq_bands: 6, dyn: true, insert: true}
+  mtx:   {count: 6,  path: "/mtx/{n:02d}", label: "Matrix", eq_bands: 6, dyn: true, insert: true}      # mix = on/fader only; preamp = invert only (§7)
+  main:  {ids: [st, m], path: "/main/{id}", label: {st: "Main LR", m: "Main M/C"}, sends: 6, send_target: mtx, eq_bands: 6, dyn: true, insert: true}
+  dca:   {count: 8,  path: "/dca/{n}", label: "DCA"}                                                   # on/fader sit directly under /dca/N (§9)
+
+# ----------------------------------------------------------------------------------------------------
+# Parameter map. Shared blocks are anchored in `ch` and merged into the other families.
+params:
+  ch:
+    <<:
+      - &blk_config                       # name icon color (node BSCO/CHCO order)
+        config/name:  {osc: s, scale: str, node: str, tier: 1}                         # <= 12 chars (§4.1)
+        config/icon:  {osc: i, scale: int, node: int, tier: 1, clamp: {min: 1, max: 74}}
+        config/color: {osc: i, enum: color, node: enum, tier: 1}
+      - &blk_preamp_trim                  # auxin has exactly this pair (§5); ch adds hpf below
+        preamp/trim:   {osc: f, scale: trim, node: sfloat1, tier: 1}                   # digital sources only (§4.3)
+        preamp/invert: {osc: i, scale: bool, node: onoff, tier: 1}
+      - &blk_gate                         # node order: on mode thr range attack hold release keysrc (§4.4)
+        gate/on:      {osc: i, scale: bool, node: onoff, tier: 1}
+        gate/mode:    {osc: i, enum: gate_mode, node: enum, tier: 1}
+        gate/thr:     {osc: f, scale: gate_thr, node: float1, tier: 1}
+        gate/range:   {osc: f, scale: gate_range, node: float1, tier: 1}
+        gate/attack:  {osc: f, scale: ms_attack, node: int, tier: 1}
+        gate/hold:    {osc: f, scale: ms_hold, node: sig3, tier: 1}
+        gate/release: {osc: f, scale: ms_release, node: int, tier: 1}
+        gate/keysrc:  {osc: i, enum: ch_source, node: int, tier: 1}                    # 0 = OFF = self-keyed
+        gate/filter/on:   {osc: i, scale: bool, node: onoff, tier: 1}
+        gate/filter/type: {osc: i, enum: filter_type, node: enum, tier: 1}
+        gate/filter/f:    {osc: f, scale: freq, node: freq, tier: 1}
+      - &blk_dyn_core                     # node order: on mode det env thr ratio knee mgain attack hold release pos [keysrc] mix auto (§4.5)
+        dyn/on:      {osc: i, scale: bool, node: onoff, tier: 1}
+        dyn/mode:    {osc: i, enum: dyn_mode, node: enum, tier: 1}
+        dyn/det:     {osc: i, enum: dyn_det, node: enum, tier: 1}
+        dyn/env:     {osc: i, enum: dyn_env, node: enum, tier: 1}
+        dyn/thr:     {osc: f, scale: dyn_thr, node: float1, tier: 1}
+        dyn/ratio:   {osc: i, enum: dyn_ratio, node: enum, tier: 1}
+        dyn/knee:    {osc: f, scale: knee, node: int, tier: 1}
+        dyn/mgain:   {osc: f, scale: mgain, node: sig3, tier: 1}                       # console prints "8.00" / "14.0"
+        dyn/attack:  {osc: f, scale: ms_attack, node: int, tier: 1}
+        dyn/hold:    {osc: f, scale: ms_hold, node: sig3, tier: 1}
+        dyn/release: {osc: f, scale: ms_release, node: int, tier: 1}
+        dyn/pos:     {osc: i, enum: pos, node: enum, tier: 1}
+        dyn/mix:     {osc: f, scale: pct5, node: pct, tier: 1}
+        dyn/auto:    {osc: i, scale: bool, node: onoff, tier: 1}                       # FW >= 2.10
+      - &blk_dyn_keysrc                   # ch and bus only; mtx/main have no keysrc (§7, §8)
+        dyn/keysrc:  {osc: i, enum: ch_source, node: int, tier: 1}
+      - &blk_dyn_filter                   # node order: on type f
+        dyn/filter/on:   {osc: i, scale: bool, node: onoff, tier: 1}
+        dyn/filter/type: {osc: i, enum: filter_type, node: enum, tier: 1}
+        dyn/filter/f:    {osc: f, scale: freq, node: freq, tier: 1}
+      - &blk_insert                       # node order: on pos sel (§4.6); Tier 2 (guarded "/*/insert/*")
+        insert/on:  {osc: i, scale: bool, node: onoff, tier: 2}
+        insert/pos: {osc: i, enum: pos, node: enum, tier: 2}
+        insert/sel: {osc: i, enum: insert_sel, node: enum, tier: 2}
+      - &blk_eq                           # /eq = on; /eq/{band} = type f g q (§4.7); band count = strips.eq_bands
+        eq/on: {osc: i, scale: bool, node: onoff, tier: 1}
+        "eq/{band}/type": {osc: i, enum: eq_type, node: enum, tier: 1}
+        "eq/{band}/f":    {osc: f, scale: freq, node: freq, tier: 1}
+        "eq/{band}/g":    {osc: f, scale: eq_gain, node: db2, tier: 1, clamp: {min: -15, max: 15}}
+        "eq/{band}/q":    {osc: f, scale: q, node: float1, tier: 1}
+      - &blk_mix_full                     # node order: on fader st pan mono mlevel (§4.8)
+        mix/on:     {osc: i, scale: bool, node: onoff, tier: 1, inverted_mute: true}   # wire 1 = ON = unmuted
+        mix/fader:  {osc: f, scale: fader, node: db1, tier: 1, clamp: {max: 5}}        # policy.ch_fader_max_db
+        mix/st:     {osc: i, scale: bool, node: onoff, tier: 1}                        # assigned to Main L/R
+        mix/pan:    {osc: f, scale: pan, node: sint, tier: 1}
+        mix/mono:   {osc: i, scale: bool, node: onoff, tier: 1}                        # assigned to M/C
+        mix/mlevel: {osc: f, scale: send, node: db1, tier: 1, clamp: {max: 0}}         # M/C send level, 161 grid
+      - &blk_sends                        # odd sends: on level pan type panFollow; even sends: on level (§4.9)
+        "mix/{send:02d}/on":    {osc: i, scale: bool, node: onoff, tier: 1, inverted_mute: true}
+        "mix/{send:02d}/level": {osc: f, scale: send, node: db1, tier: 1, clamp: {max: 0}}   # 161 grid (§2.3)
+        "mix/{send:02d}/pan":   {osc: f, scale: pan, node: sint, tier: 1}                    # odd sends only (stereo pair)
+        "mix/{send:02d}/type":  {osc: i, enum: send_type, node: enum, tier: 1}               # odd sends only
+        # FW >= 4.0; PDF types it enum {OFF,ON} but SetSceneParse.c (real .scn files) reads it with Xp_int
+        # and the emulator prints Sint -> node text "0"/"1" (scales_params.md §4.9, UNCONFIRMED token form)
+        "mix/{send:02d}/panFollow": {osc: i, scale: bool, node: int, tier: 1}
+      - &blk_grp                          # node: dca mute (§4.10). bit0 = DCA1 / mute group 1 (VERIFIED, real scene)
+        grp/dca:  {osc: i, scale: int, node: bits8, tier: 2, clamp: {min: 0, max: 255}}
+        grp/mute: {osc: i, scale: int, node: bits6, tier: 2, clamp: {min: 0, max: 63}}
+    config/source:  {osc: i, enum: ch_source, node: int, tier: 2}                      # Tier 2 (guarded "/*/config/source")
+    delay/on:       {osc: i, scale: bool, node: onoff, tier: 1}
+    delay/time:     {osc: f, scale: delay_ms, node: float1, tier: 1}                   # console "  0.3" (width 5)
+    preamp/hpon:    {osc: i, scale: bool, node: onoff, tier: 1}
+    preamp/hpslope: {osc: i, enum: hpslope, node: enum, tier: 1}
+    preamp/hpf:     {osc: f, scale: hpf, node: int, tier: 1}                           # console: integer Hz, width 3 ("24  79")
+    automix/group:  {osc: i, enum: automix_group, node: enum, tier: 1}                 # ch 01-08 only (§4.11)
+    automix/weight: {osc: f, scale: automix_weight, node: sfloat1, tier: 1}            # ch 01-08 only
+
+  auxin:                                  # config(with source) preamp(trim invert) eq mix sends grp — §5
+    <<: [*blk_config, *blk_preamp_trim, *blk_eq, *blk_mix_full, *blk_sends, *blk_grp]
+    config/source: {osc: i, enum: ch_source, node: int, tier: 2}                       # default 33..40 = Aux1-6, USB L/R
+
+  fxrtn:                                  # config(no source) eq mix sends grp — §5
+    <<: [*blk_config, *blk_eq, *blk_mix_full, *blk_sends, *blk_grp]
+
+  bus:                                    # §6: 6-band eq, dyn incl keysrc, insert, sends 01-06 to matrix
+    <<: [*blk_config, *blk_dyn_core, *blk_dyn_keysrc, *blk_dyn_filter, *blk_insert, *blk_eq, *blk_mix_full, *blk_sends, *blk_grp]
+    mix/fader: {osc: f, scale: fader, node: db1, tier: 1, clamp: {max: 0}}            # policy.bus_fader_max_db (ring-out ceiling)
+    "mix/{send:02d}/type": {osc: i, enum: send_type_mtx, node: enum, tier: 1}          # no GRP on bus->matrix sends
+
+  mtx:                                    # §7: 14-entry eq type enum, dyn without keysrc, mix = on fader only
+    <<: [*blk_config, *blk_dyn_core, *blk_dyn_filter, *blk_insert, *blk_eq, *blk_grp]
+    preamp/invert: {osc: i, scale: bool, node: onoff, tier: 1}
+    "eq/{band}/type": {osc: i, enum: eq_type_mtx, node: enum, tier: 1}                 # crossover types disable bands 2/5
+    mix/on:    {osc: i, scale: bool, node: onoff, tier: 1, inverted_mute: true}
+    mix/fader: {osc: f, scale: fader, node: db1, tier: 1, clamp: {max: 0}}            # output master: same ceiling as buses
+
+  main:                                   # §8: st = on fader pan, m = on fader; all mix/* Tier 2 (guarded)
+    <<: [*blk_config, *blk_dyn_core, *blk_dyn_filter, *blk_insert, *blk_eq, *blk_sends, *blk_grp]
+    "eq/{band}/type": {osc: i, enum: eq_type_mtx, node: enum, tier: 1}
+    mix/on:    {osc: i, scale: bool, node: onoff, tier: 2, inverted_mute: true}
+    mix/fader: {osc: f, scale: fader, node: db1, tier: 2, clamp: {max: 0}}            # policy.main_fader_max_db
+    mix/pan:   {osc: f, scale: pan, node: sint, tier: 2}                               # /main/st only
+    "mix/{send:02d}/on":    {osc: i, scale: bool, node: onoff, tier: 2, inverted_mute: true}
+    "mix/{send:02d}/level": {osc: f, scale: send, node: db1, tier: 2, clamp: {max: 0}}
+    "mix/{send:02d}/pan":   {osc: f, scale: pan, node: sint, tier: 2}
+    "mix/{send:02d}/type":  {osc: i, enum: send_type_mtx, node: enum, tier: 2}
+    "mix/{send:02d}/panFollow": {osc: i, scale: bool, node: int, tier: 2}
+
+  dca:                                    # §9: /dca/N = on fader; /dca/N/config = name icon color
+    <<: [*blk_config]
+    "on":    {osc: i, scale: bool, node: onoff, tier: 1, inverted_mute: true}
+    fader:   {osc: f, scale: fader, node: db1, tier: 1, clamp: {max: 0}}              # group master; 0 dB ceiling (DESIGN silent)
+
+  headamp:                                # §12: /headamp/NNN gain phantom
+    gain:    {osc: f, scale: headamp_gain, node: sfloat1, tier: 2}                     # analog gain affects every mix -> guarded (DESIGN silent)
+    phantom: {osc: i, scale: bool, node: onoff, tier: 2}                               # guarded "/headamp/*/phantom"
+
+  fx:                                     # fx_routing_scenes.md §1. NOTE: /fx/5-8/type uses enum fx_type_58 (GEQ2 = 0);
+                                          # a single `type` param can only carry one enum, so slots 5-8 must be
+                                          # translated by the caller with enums.fx_type_58. Node TEXT is the token
+                                          # for both (every fx_type_58 token is also in fx_type_14), so /node parsing works.
+    type:     {osc: i, enum: fx_type_14, node: enum, tier: 2}
+    source/l: {osc: i, enum: fx_source, node: enum, tier: 2}                            # slots 1-4 only
+    source/r: {osc: i, enum: fx_source, node: enum, tier: 2}                            # slots 1-4 only
+    # par/01..64: OSC type f or i DEPENDING ON THE LOADED EFFECT (Sflookup tables, §1.5); every GEQ/TEQ family
+    # parameter is `f` with scale geq_gain (fx_routing_scenes.md §2.2: f=(dB+15)/30). Declared as raw 0..1 here;
+    # desk.py maps by fx type (geq.gain_scale for GEQ2/GEQ/TEQ2/TEQ). Node text = display units per effect,
+    # always 64 tokens on the real desk (transport.md §6.4 item 11) -> kept verbatim (`token`).
+    par/01: &fxpar {osc: f, scale: raw01, node: token, tier: 1}
+    par/02: *fxpar
+    par/03: *fxpar
+    par/04: *fxpar
+    par/05: *fxpar
+    par/06: *fxpar
+    par/07: *fxpar
+    par/08: *fxpar
+    par/09: *fxpar
+    par/10: *fxpar
+    par/11: *fxpar
+    par/12: *fxpar
+    par/13: *fxpar
+    par/14: *fxpar
+    par/15: *fxpar
+    par/16: *fxpar
+    par/17: *fxpar
+    par/18: *fxpar
+    par/19: *fxpar
+    par/20: *fxpar
+    par/21: *fxpar
+    par/22: *fxpar
+    par/23: *fxpar
+    par/24: *fxpar
+    par/25: *fxpar
+    par/26: *fxpar
+    par/27: *fxpar
+    par/28: *fxpar
+    par/29: *fxpar
+    par/30: *fxpar
+    par/31: *fxpar
+    par/32: *fxpar
+    par/33: *fxpar
+    par/34: *fxpar
+    par/35: *fxpar
+    par/36: *fxpar
+    par/37: *fxpar
+    par/38: *fxpar
+    par/39: *fxpar
+    par/40: *fxpar
+    par/41: *fxpar
+    par/42: *fxpar
+    par/43: *fxpar
+    par/44: *fxpar
+    par/45: *fxpar
+    par/46: *fxpar
+    par/47: *fxpar
+    par/48: *fxpar
+    par/49: *fxpar
+    par/50: *fxpar
+    par/51: *fxpar
+    par/52: *fxpar
+    par/53: *fxpar
+    par/54: *fxpar
+    par/55: *fxpar
+    par/56: *fxpar
+    par/57: *fxpar
+    par/58: *fxpar
+    par/59: *fxpar
+    par/60: *fxpar
+    par/61: *fxpar
+    par/62: *fxpar
+    par/63: *fxpar
+    par/64: *fxpar
+
+  config:                                 # fx_routing_scenes.md §4 (routing), §5 (mute groups), §9 (talk/solo/mono)
+    routing/routswitch: {osc: i, enum: routswitch, node: enum, tier: 2}               # node "/config/routing REC"
+    routing/IN/1-8:     {osc: i, enum: routing_in, node: enum, tier: 2}
+    routing/IN/9-16:    {osc: i, enum: routing_in, node: enum, tier: 2}
+    routing/IN/17-24:   {osc: i, enum: routing_in, node: enum, tier: 2}
+    routing/IN/25-32:   {osc: i, enum: routing_in, node: enum, tier: 2}
+    routing/IN/AUX:     {osc: i, enum: routing_in_aux, node: enum, tier: 2}
+    routing/PLAY/1-8:   {osc: i, enum: routing_in, node: enum, tier: 2}
+    routing/PLAY/9-16:  {osc: i, enum: routing_in, node: enum, tier: 2}
+    routing/PLAY/17-24: {osc: i, enum: routing_in, node: enum, tier: 2}
+    routing/PLAY/25-32: {osc: i, enum: routing_in, node: enum, tier: 2}
+    routing/PLAY/AUX:   {osc: i, enum: routing_in_aux, node: enum, tier: 2}
+    routing/AES50A/1-8:   {osc: i, enum: routing_aes, node: enum, tier: 2}
+    routing/AES50A/9-16:  {osc: i, enum: routing_aes, node: enum, tier: 2}
+    routing/AES50A/17-24: {osc: i, enum: routing_aes, node: enum, tier: 2}
+    routing/AES50A/25-32: {osc: i, enum: routing_aes, node: enum, tier: 2}
+    routing/AES50A/33-40: {osc: i, enum: routing_aes, node: enum, tier: 2}
+    routing/AES50A/41-48: {osc: i, enum: routing_aes, node: enum, tier: 2}
+    routing/AES50B/1-8:   {osc: i, enum: routing_aes, node: enum, tier: 2}
+    routing/AES50B/9-16:  {osc: i, enum: routing_aes, node: enum, tier: 2}
+    routing/AES50B/17-24: {osc: i, enum: routing_aes, node: enum, tier: 2}
+    routing/AES50B/25-32: {osc: i, enum: routing_aes, node: enum, tier: 2}
+    routing/AES50B/33-40: {osc: i, enum: routing_aes, node: enum, tier: 2}
+    routing/AES50B/41-48: {osc: i, enum: routing_aes, node: enum, tier: 2}
+    routing/CARD/1-8:   {osc: i, enum: routing_aes, node: enum, tier: 2}
+    routing/CARD/9-16:  {osc: i, enum: routing_aes, node: enum, tier: 2}
+    routing/CARD/17-24: {osc: i, enum: routing_aes, node: enum, tier: 2}
+    routing/CARD/25-32: {osc: i, enum: routing_aes, node: enum, tier: 2}
+    routing/OUT/1-4:   {osc: i, enum: routing_out_a, node: enum, tier: 2}
+    routing/OUT/5-8:   {osc: i, enum: routing_out_b, node: enum, tier: 2}
+    routing/OUT/9-12:  {osc: i, enum: routing_out_a, node: enum, tier: 2}
+    routing/OUT/13-16: {osc: i, enum: routing_out_b, node: enum, tier: 2}
+    # stereo links (scales_params.md §10; the desk pushes e.g. "/config/buslink/1-2 ,i 0", transport.md §4.2).
+    # Tier 2: linking re-syncs the pair's parameters (DESIGN set_channel_config(link=...) is a guarded tool).
+    chlink/1-2:   &link {osc: i, scale: bool, node: onoff, tier: 2}
+    chlink/3-4:   *link
+    chlink/5-6:   *link
+    chlink/7-8:   *link
+    chlink/9-10:  *link
+    chlink/11-12: *link
+    chlink/13-14: *link
+    chlink/15-16: *link
+    chlink/17-18: *link
+    chlink/19-20: *link
+    chlink/21-22: *link
+    chlink/23-24: *link
+    chlink/25-26: *link
+    chlink/27-28: *link
+    chlink/29-30: *link
+    chlink/31-32: *link
+    auxlink/1-2: *link
+    auxlink/3-4: *link
+    auxlink/5-6: *link
+    auxlink/7-8: *link
+    fxlink/1-2: *link
+    fxlink/3-4: *link
+    fxlink/5-6: *link
+    fxlink/7-8: *link
+    buslink/1-2:   *link
+    buslink/3-4:   *link
+    buslink/5-6:   *link
+    buslink/7-8:   *link
+    buslink/9-10:  *link
+    buslink/11-12: *link
+    buslink/13-14: *link
+    buslink/15-16: *link
+    mtxlink/1-2: *link
+    mtxlink/3-4: *link
+    mtxlink/5-6: *link
+    # what a stereo link shares (§10): head-amp/delay, eq, dyn, fader+mute
+    linkcfg/hadly:   *link
+    linkcfg/eq:      *link
+    linkcfg/dyn:     *link
+    linkcfg/fdrmute: *link
+    # mute groups: 1 = group engaged (its members are muted) — NOT inverted like mix/on (§5.1)
+    mute/1: {osc: i, scale: bool, node: onoff, tier: 2}
+    mute/2: {osc: i, scale: bool, node: onoff, tier: 2}
+    mute/3: {osc: i, scale: bool, node: onoff, tier: 2}
+    mute/4: {osc: i, scale: bool, node: onoff, tier: 2}
+    mute/5: {osc: i, scale: bool, node: onoff, tier: 2}
+    mute/6: {osc: i, scale: bool, node: onoff, tier: 2}
+    # solo / monitor section — read-only in v1 (BRIEF §8). Node order §10 (17 values).
+    solo/level:      {osc: f, scale: send, node: db1, tier: 0}
+    solo/source:     {osc: i, enum: solo_source, node: enum, tier: 0}
+    solo/sourcetrim: {osc: f, scale: solo_trim, node: float1, tier: 0}
+    solo/chmode:     {osc: i, enum: pfl_afl, node: enum, tier: 0}
+    solo/busmode:    {osc: i, enum: pfl_afl, node: enum, tier: 0}
+    solo/dcamode:    {osc: i, enum: pfl_afl, node: enum, tier: 0}
+    solo/exclusive:  {osc: i, scale: bool, node: onoff, tier: 0}
+    solo/followsel:  {osc: i, scale: bool, node: onoff, tier: 0}
+    solo/followsolo: {osc: i, scale: bool, node: onoff, tier: 0}
+    solo/dimatt:     {osc: f, scale: dim_att, node: int, tier: 0}                      # console "-22"
+    solo/dim:        {osc: i, scale: bool, node: onoff, tier: 0}
+    solo/mono:       {osc: i, scale: bool, node: onoff, tier: 0}
+    solo/delay:      {osc: i, scale: bool, node: onoff, tier: 0}
+    solo/delaytime:  {osc: f, scale: delay_ms, node: float1, tier: 0}
+    solo/masterctrl: {osc: i, scale: bool, node: onoff, tier: 0}
+    solo/mute:       {osc: i, scale: bool, node: onoff, tier: 0}
+    solo/dimpfl:     {osc: i, scale: bool, node: onoff, tier: 0}
+    # talkback — read-only in v1. talk/A|B/level is the 161-step level law (§9 VERIFIED-CORRECTED)
+    talk/enable:    {osc: i, scale: bool, node: onoff, tier: 0}
+    talk/source:    {osc: i, enum: talk_source, node: enum, tier: 0}
+    talk/A/level:   {osc: f, scale: send, node: db1, tier: 0}
+    talk/A/dim:     {osc: i, scale: bool, node: onoff, tier: 0}
+    talk/A/latch:   {osc: i, scale: bool, node: onoff, tier: 0}
+    talk/A/destmap: {osc: i, scale: int, node: bits18, tier: 0}                        # b0-15 Mix1-16, b16 L/R, b17 M/C (order UNCONFIRMED)
+    talk/B/level:   {osc: f, scale: send, node: db1, tier: 0}
+    talk/B/dim:     {osc: i, scale: bool, node: onoff, tier: 0}
+    talk/B/latch:   {osc: i, scale: bool, node: onoff, tier: 0}
+    talk/B/destmap: {osc: i, scale: int, node: bits18, tier: 0}
+    mono/mode: {osc: i, enum: mono_mode, node: enum, tier: 0}                           # LR+M / LCR
+    mono/link: {osc: i, scale: bool, node: onoff, tier: 0}
+
+  show:                                   # fx_routing_scenes.md §6. Read-only: recall/save go through -action and /save
+    prepos/current: {osc: i, scale: int, node: int, tier: 0}                            # scene slot 0..99 when show_control = SCENES
+    showfile/show/name:     {osc: s, scale: str, node: str, tier: 0}
+    showfile/show/inputs:   {osc: i, scale: int, node: int, tier: 0}                    # param-safe bitmaps, printed as plain ints
+    showfile/show/mxsends:  {osc: i, scale: int, node: int, tier: 0}
+    showfile/show/mxbuses:  {osc: i, scale: int, node: int, tier: 0}
+    showfile/show/console:  {osc: i, scale: int, node: int, tier: 0}
+    showfile/show/chan16:   {osc: i, scale: int, node: int, tier: 0}
+    showfile/show/chan32:   {osc: i, scale: int, node: int, tier: 0}
+    showfile/show/return:   {osc: i, scale: int, node: int, tier: 0}
+    showfile/show/buses:    {osc: i, scale: int, node: int, tier: 0}
+    showfile/show/lrmtxdca: {osc: i, scale: int, node: int, tier: 0}
+    showfile/show/effects:  {osc: i, scale: int, node: int, tier: 0}
+    "showfile/scene/{idx:03d}/name":    {osc: s, scale: str, node: str, tier: 0}
+    "showfile/scene/{idx:03d}/notes":   {osc: s, scale: str, node: str, tier: 0}
+    "showfile/scene/{idx:03d}/safes":   {osc: i, scale: int, node: bits9, tier: 0}     # 9-bit safes bitmap "%111111110"
+    "showfile/scene/{idx:03d}/hasdata": {osc: i, scale: int, node: int, tier: 0}
+
+  stat:                                   # fx_routing_scenes.md §7.1 / meters.md §5.2 — all read-only leaves
+    selidx:     {osc: i, scale: int, node: int, tier: 0}                                # 0-31 ch, 32-39 aux, 40-47 fxrtn, 48-63 bus, 64-69 mtx, 70 LR, 71 M/C
+    solo:       {osc: i, scale: bool, node: onoff, tier: 0}                             # any solo active
+    talk/A:     {osc: i, scale: bool, node: onoff, tier: 0}
+    talk/B:     {osc: i, scale: bool, node: onoff, tier: 0}
+    rtasource:  {osc: i, scale: int, node: int, tier: 0}                                # 0-72 pre-EQ, +98 post-EQ (rta.stat_param)
+    rtamodeeq:  {osc: i, enum: rta_mode, node: enum, tier: 0}
+    rtamodegeq: {osc: i, enum: rta_mode, node: enum, tier: 0}
+    rtaeqpre:   {osc: i, scale: bool, node: onoff, tier: 0}
+    rtageqpost: {osc: i, scale: bool, node: onoff, tier: 0}
+    geqonfdr:   {osc: i, scale: bool, node: onoff, tier: 0}
+    geqpos:     {osc: i, scale: int, node: int, tier: 0}                                # (fx# << 8) | start band
+    dcaspill:   {osc: i, scale: int, node: int, tier: 0}
+
+  prefs:                                  # meters.md §5.1 (rta), fx_routing_scenes.md §7.2
+    name:         {osc: s, scale: str, node: str, tier: 0}                              # console name (also in /xinfo)
+    show_control: {osc: i, enum: show_control, node: enum, tier: 1}                     # SCENES makes the desk push prepos/current
+    # /node -prefs/rta order: visibility gain autogain source pos mode options det decay peakhold
+    rta/visibility: {osc: i, enum: rta_visibility, node: enum, tier: 1}
+    rta/gain:       {osc: f, scale: rta_gain, node: int, tier: 1}                       # 6 dB steps, printed as int
+    rta/autogain:   {osc: i, scale: bool, node: onoff, tier: 1}
+    rta/source:     {osc: i, enum: rta_source, node: int, tier: 1}                      # desk prints the int
+    rta/pos:        {osc: i, enum: rta_pos, node: enum, tier: 1}
+    rta/mode:       {osc: i, enum: rta_mode, node: enum, tier: 1}
+    rta/options:    {osc: i, scale: int, node: bits6, tier: 1}                          # bit 5 = Solo Priority (clear it)
+    rta/det:        {osc: i, enum: rta_det, node: enum, tier: 1}
+    rta/decay:      {osc: f, scale: rta_decay, node: float2, tier: 1}
+    rta/peakhold:   {osc: i, enum: rta_peakhold, node: enum, tier: 1}
+
+  action:                                 # fx_routing_scenes.md §8 — write-only triggers, Tier 2 (guarded "/-action/*")
+    goscene:   {osc: i, scale: int, node: int, tier: 2, clamp: {min: 0, max: 99}}
+    gocue:     {osc: i, scale: int, node: int, tier: 2, clamp: {min: 0, max: 99}}
+    gosnippet: {osc: i, scale: int, node: int, tier: 2, clamp: {min: 0, max: 99}}
+
+# ----------------------------------------------------------------------------------------------------
+# /node sections for dump/snapshot, in sweep order (= the order a console-saved scene file prints them).
+# Strip sections: path = strips.<family>.path + "/" + section; non-strip sections carry an absolute `path`.
+# `for` expands template vars (inclusive ranges); `fields_even` replaces `fields` when the `for` var is even.
+nodes:
+  # ---- channels (scales_params.md §4, scene1.scn lines 33-64)
+  - {family: ch, section: "config", fields: [config/name, config/icon, config/color, config/source]}
+  - {family: ch, section: "delay", fields: [delay/on, delay/time]}
+  - {family: ch, section: "preamp", fields: [preamp/trim, preamp/invert, preamp/hpon, preamp/hpslope, preamp/hpf]}
+  - {family: ch, section: "gate", fields: [gate/on, gate/mode, gate/thr, gate/range, gate/attack, gate/hold, gate/release, gate/keysrc]}
+  - {family: ch, section: "gate/filter", fields: [gate/filter/on, gate/filter/type, gate/filter/f]}
+  - {family: ch, section: "dyn", fields: [dyn/on, dyn/mode, dyn/det, dyn/env, dyn/thr, dyn/ratio, dyn/knee, dyn/mgain, dyn/attack, dyn/hold, dyn/release, dyn/pos, dyn/keysrc, dyn/mix, dyn/auto]}
+  - {family: ch, section: "dyn/filter", fields: [dyn/filter/on, dyn/filter/type, dyn/filter/f]}
+  - {family: ch, section: "insert", fields: [insert/on, insert/pos, insert/sel]}
+  - {family: ch, section: "eq", fields: [eq/on]}
+  - {family: ch, section: "eq/{band}", for: {band: [1, 4]}, fields: ["eq/{band}/type", "eq/{band}/f", "eq/{band}/g", "eq/{band}/q"]}
+  - {family: ch, section: "mix", fields: [mix/on, mix/fader, mix/st, mix/pan, mix/mono, mix/mlevel]}
+  - {family: ch, section: "mix/{send:02d}", for: {send: [1, 16]},
+     fields: ["mix/{send:02d}/on", "mix/{send:02d}/level", "mix/{send:02d}/pan", "mix/{send:02d}/type", "mix/{send:02d}/panFollow"],
+     fields_even: ["mix/{send:02d}/on", "mix/{send:02d}/level"]}
+  - {family: ch, section: "grp", fields: [grp/dca, grp/mute]}
+  # ---- aux inputs (§5)
+  - {family: auxin, section: "config", fields: [config/name, config/icon, config/color, config/source]}
+  - {family: auxin, section: "preamp", fields: [preamp/trim, preamp/invert]}
+  - {family: auxin, section: "eq", fields: [eq/on]}
+  - {family: auxin, section: "eq/{band}", for: {band: [1, 4]}, fields: ["eq/{band}/type", "eq/{band}/f", "eq/{band}/g", "eq/{band}/q"]}
+  - {family: auxin, section: "mix", fields: [mix/on, mix/fader, mix/st, mix/pan, mix/mono, mix/mlevel]}
+  - {family: auxin, section: "mix/{send:02d}", for: {send: [1, 16]},
+     fields: ["mix/{send:02d}/on", "mix/{send:02d}/level", "mix/{send:02d}/pan", "mix/{send:02d}/type", "mix/{send:02d}/panFollow"],
+     fields_even: ["mix/{send:02d}/on", "mix/{send:02d}/level"]}
+  - {family: auxin, section: "grp", fields: [grp/dca, grp/mute]}
+  # ---- fx returns (§5)
+  - {family: fxrtn, section: "config", fields: [config/name, config/icon, config/color]}
+  - {family: fxrtn, section: "eq", fields: [eq/on]}
+  - {family: fxrtn, section: "eq/{band}", for: {band: [1, 4]}, fields: ["eq/{band}/type", "eq/{band}/f", "eq/{band}/g", "eq/{band}/q"]}
+  - {family: fxrtn, section: "mix", fields: [mix/on, mix/fader, mix/st, mix/pan, mix/mono, mix/mlevel]}
+  - {family: fxrtn, section: "mix/{send:02d}", for: {send: [1, 16]},
+     fields: ["mix/{send:02d}/on", "mix/{send:02d}/level", "mix/{send:02d}/pan", "mix/{send:02d}/type", "mix/{send:02d}/panFollow"],
+     fields_even: ["mix/{send:02d}/on", "mix/{send:02d}/level"]}
+  - {family: fxrtn, section: "grp", fields: [grp/dca, grp/mute]}
+  # ---- mix buses (§6)
+  - {family: bus, section: "config", fields: [config/name, config/icon, config/color]}
+  - {family: bus, section: "dyn", fields: [dyn/on, dyn/mode, dyn/det, dyn/env, dyn/thr, dyn/ratio, dyn/knee, dyn/mgain, dyn/attack, dyn/hold, dyn/release, dyn/pos, dyn/keysrc, dyn/mix, dyn/auto]}
+  - {family: bus, section: "dyn/filter", fields: [dyn/filter/on, dyn/filter/type, dyn/filter/f]}
+  - {family: bus, section: "insert", fields: [insert/on, insert/pos, insert/sel]}
+  - {family: bus, section: "eq", fields: [eq/on]}
+  - {family: bus, section: "eq/{band}", for: {band: [1, 6]}, fields: ["eq/{band}/type", "eq/{band}/f", "eq/{band}/g", "eq/{band}/q"]}
+  - {family: bus, section: "mix", fields: [mix/on, mix/fader, mix/st, mix/pan, mix/mono, mix/mlevel]}
+  - {family: bus, section: "mix/{send:02d}", for: {send: [1, 6]},
+     fields: ["mix/{send:02d}/on", "mix/{send:02d}/level", "mix/{send:02d}/pan", "mix/{send:02d}/type", "mix/{send:02d}/panFollow"],
+     fields_even: ["mix/{send:02d}/on", "mix/{send:02d}/level"]}
+  - {family: bus, section: "grp", fields: [grp/dca, grp/mute]}
+  # ---- matrices (§7): dyn has NO keysrc (14 tokens), mix = on fader
+  - {family: mtx, section: "config", fields: [config/name, config/icon, config/color]}
+  - {family: mtx, section: "preamp", fields: [preamp/invert]}
+  - {family: mtx, section: "dyn", fields: [dyn/on, dyn/mode, dyn/det, dyn/env, dyn/thr, dyn/ratio, dyn/knee, dyn/mgain, dyn/attack, dyn/hold, dyn/release, dyn/pos, dyn/mix, dyn/auto]}
+  - {family: mtx, section: "dyn/filter", fields: [dyn/filter/on, dyn/filter/type, dyn/filter/f]}
+  - {family: mtx, section: "insert", fields: [insert/on, insert/pos, insert/sel]}
+  - {family: mtx, section: "eq", fields: [eq/on]}
+  - {family: mtx, section: "eq/{band}", for: {band: [1, 6]}, fields: ["eq/{band}/type", "eq/{band}/f", "eq/{band}/g", "eq/{band}/q"]}
+  - {family: mtx, section: "mix", fields: [mix/on, mix/fader]}
+  - {family: mtx, section: "grp", fields: [grp/dca, grp/mute]}
+  # ---- main LR / M-C (§8): st mix = on fader pan, m mix = on fader -> absolute paths per id
+  - {family: main, section: "config", fields: [config/name, config/icon, config/color]}
+  - {family: main, section: "dyn", fields: [dyn/on, dyn/mode, dyn/det, dyn/env, dyn/thr, dyn/ratio, dyn/knee, dyn/mgain, dyn/attack, dyn/hold, dyn/release, dyn/pos, dyn/mix, dyn/auto]}
+  - {family: main, section: "dyn/filter", fields: [dyn/filter/on, dyn/filter/type, dyn/filter/f]}
+  - {family: main, section: "insert", fields: [insert/on, insert/pos, insert/sel]}
+  - {family: main, section: "eq", fields: [eq/on]}
+  - {family: main, section: "eq/{band}", for: {band: [1, 6]}, fields: ["eq/{band}/type", "eq/{band}/f", "eq/{band}/g", "eq/{band}/q"]}
+  - {family: main, path: "/main/st/mix", fields: [mix/on, mix/fader, mix/pan]}
+  - {family: main, path: "/main/m/mix", fields: [mix/on, mix/fader]}
+  - {family: main, section: "mix/{send:02d}", for: {send: [1, 6]},
+     fields: ["mix/{send:02d}/on", "mix/{send:02d}/level", "mix/{send:02d}/pan", "mix/{send:02d}/type", "mix/{send:02d}/panFollow"],
+     fields_even: ["mix/{send:02d}/on", "mix/{send:02d}/level"]}
+  - {family: main, section: "grp", fields: [grp/dca, grp/mute]}
+  # ---- DCAs (§9): the strip root itself is the node ("/dca/1 OFF  -8.3")
+  - {family: dca, path: "/dca/{n}", for: {n: [1, 8]}, fields: ["on", fader]}
+  - {family: dca, section: "config", fields: [config/name, config/icon, config/color]}
+  # ---- head amps (§12): 128 lines exactly as a real scene file
+  - {family: headamp, path: "/headamp/{n:03d}", for: {n: [0, 127]}, fields: [gain, phantom]}
+  # ---- FX rack (fx_routing_scenes.md §1.6): "/fx/1 VREV", "/fx/1/source MIX15 MIX15", "/fx/1/par v1 .. v64"
+  - {family: fx, path: "/fx/{n}", for: {n: [1, 8]}, fields: [type]}
+  - {family: fx, path: "/fx/{n}/source", for: {n: [1, 4]}, fields: [source/l, source/r]}
+  - {family: fx, path: "/fx/{n}/par", for: {n: [1, 8]},
+     fields: [par/01, par/02, par/03, par/04, par/05, par/06, par/07, par/08, par/09, par/10, par/11, par/12, par/13, par/14, par/15, par/16,
+              par/17, par/18, par/19, par/20, par/21, par/22, par/23, par/24, par/25, par/26, par/27, par/28, par/29, par/30, par/31, par/32,
+              par/33, par/34, par/35, par/36, par/37, par/38, par/39, par/40, par/41, par/42, par/43, par/44, par/45, par/46, par/47, par/48,
+              par/49, par/50, par/51, par/52, par/53, par/54, par/55, par/56, par/57, par/58, par/59, par/60, par/61, par/62, par/63, par/64]}
+  # ---- console config (fx_routing_scenes.md §4-§5, §9; scene1.scn lines 7-15)
+  - {family: config, path: "/config/routing", fields: [routing/routswitch]}
+  - {family: config, path: "/config/routing/IN", fields: [routing/IN/1-8, routing/IN/9-16, routing/IN/17-24, routing/IN/25-32, routing/IN/AUX]}
+  - {family: config, path: "/config/routing/PLAY", fields: [routing/PLAY/1-8, routing/PLAY/9-16, routing/PLAY/17-24, routing/PLAY/25-32, routing/PLAY/AUX]}
+  - {family: config, path: "/config/routing/AES50A", fields: [routing/AES50A/1-8, routing/AES50A/9-16, routing/AES50A/17-24, routing/AES50A/25-32, routing/AES50A/33-40, routing/AES50A/41-48]}
+  - {family: config, path: "/config/routing/AES50B", fields: [routing/AES50B/1-8, routing/AES50B/9-16, routing/AES50B/17-24, routing/AES50B/25-32, routing/AES50B/33-40, routing/AES50B/41-48]}
+  - {family: config, path: "/config/routing/CARD", fields: [routing/CARD/1-8, routing/CARD/9-16, routing/CARD/17-24, routing/CARD/25-32]}
+  # real-desk order 1-4, 5-8, 9-12, 13-16 (§4.6 VERIFIED-CORRECTED; the emulator prints 1-4, 9-12, 5-8, 13-16)
+  - {family: config, path: "/config/routing/OUT", fields: [routing/OUT/1-4, routing/OUT/5-8, routing/OUT/9-12, routing/OUT/13-16]}
+  - {family: config, path: "/config/chlink", fields: [chlink/1-2, chlink/3-4, chlink/5-6, chlink/7-8, chlink/9-10, chlink/11-12, chlink/13-14, chlink/15-16, chlink/17-18, chlink/19-20, chlink/21-22, chlink/23-24, chlink/25-26, chlink/27-28, chlink/29-30, chlink/31-32]}
+  - {family: config, path: "/config/auxlink", fields: [auxlink/1-2, auxlink/3-4, auxlink/5-6, auxlink/7-8]}
+  - {family: config, path: "/config/fxlink", fields: [fxlink/1-2, fxlink/3-4, fxlink/5-6, fxlink/7-8]}
+  - {family: config, path: "/config/buslink", fields: [buslink/1-2, buslink/3-4, buslink/5-6, buslink/7-8, buslink/9-10, buslink/11-12, buslink/13-14, buslink/15-16]}
+  - {family: config, path: "/config/mtxlink", fields: [mtxlink/1-2, mtxlink/3-4, mtxlink/5-6]}
+  - {family: config, path: "/config/mute", fields: [mute/1, mute/2, mute/3, mute/4, mute/5, mute/6]}
+  - {family: config, path: "/config/linkcfg", fields: [linkcfg/hadly, linkcfg/eq, linkcfg/dyn, linkcfg/fdrmute]}
+  - {family: config, path: "/config/solo", fields: [solo/level, solo/source, solo/sourcetrim, solo/chmode, solo/busmode, solo/dcamode, solo/exclusive, solo/followsel, solo/followsolo, solo/dimatt, solo/dim, solo/mono, solo/delay, solo/delaytime, solo/masterctrl, solo/mute, solo/dimpfl]}
+  - {family: config, path: "/config/talk", fields: [talk/enable, talk/source]}
+  - {family: config, path: "/config/talk/A", fields: [talk/A/level, talk/A/dim, talk/A/latch, talk/A/destmap]}
+  - {family: config, path: "/config/talk/B", fields: [talk/B/level, talk/B/dim, talk/B/latch, talk/B/destmap]}
+  - {family: config, path: "/config/mono", fields: [mono/mode, mono/link]}
+  # ---- show state (excluded from restore). "-show/prepos" is not a node in the emulator and a parent-path reply
+  # is UNCONFIRMED on a real desk; the DOC's node list names the leaf "-show/prepos/current" and the emulator
+  # answers it ("/-show/prepos/current 0", transport.md §6.4 item 12) -> sweep the leaf (DESIGN §7 wrote
+  # "/-show/prepos"; deviation recorded). The show line carries a trailing firmware string ("2.08") after
+  # `effects` — extra tokens are ignored by the positional parser.
+  - {family: show, path: "/-show/prepos/current", fields: [prepos/current]}
+  - {family: show, path: "/-show/showfile/show", fields: [showfile/show/name, showfile/show/inputs, showfile/show/mxsends, showfile/show/mxbuses, showfile/show/console, showfile/show/chan16, showfile/show/chan32, showfile/show/return, showfile/show/buses, showfile/show/lrmtxdca, showfile/show/effects]}
+  - {family: show, path: "/-show/showfile/scene/{idx:03d}", for: {idx: [0, 99]},
+     fields: ["showfile/scene/{idx:03d}/name", "showfile/scene/{idx:03d}/notes", "showfile/scene/{idx:03d}/safes", "showfile/scene/{idx:03d}/hasdata"]}
+  # ---- RTA status (fx_routing_scenes.md §7.1, meters.md §5.2). "-stat/rta" is NOT a node (transport.md §6.4
+  # item 13) and the whole "/node -stat" reply is malformed on FW 4.06 (DOC fn.48) -> the five RTA leaves are
+  # swept as single-parameter nodes (the DOC's node list names every -stat leaf; the emulator answers single
+  # leaves with the enum token / "%d", transport.md §6.2). The node path IS the leaf address here.
+  - {family: stat, path: "/-stat/rtamodeeq", fields: [rtamodeeq]}
+  - {family: stat, path: "/-stat/rtamodegeq", fields: [rtamodegeq]}
+  - {family: stat, path: "/-stat/rtaeqpre", fields: [rtaeqpre]}
+  - {family: stat, path: "/-stat/rtageqpost", fields: [rtageqpost]}
+  - {family: stat, path: "/-stat/rtasource", fields: [rtasource]}
+  # ---- RTA prefs (meters.md §5.1): order visibility gain autogain source pos mode options det decay peakhold
+  - {family: prefs, path: "/-prefs/rta", fields: [rta/visibility, rta/gain, rta/autogain, rta/source, rta/pos, rta/mode, rta/options, rta/det, rta/decay, rta/peakhold]}
+
+# ----------------------------------------------------------------------------------------------------
+# Tier 2 address globs (fnmatch on the concrete address), in addition to per-param `tier: 2`.
+guarded:
+  - "/main/st/mix/*"
+  - "/main/m/mix/*"
+  - "/headamp/*/phantom"
+  - "/config/routing/*"
+  - "/config/mute/*"
+  - "/*/insert/*"
+  - "/fx/*/type"
+  - "/fx/*/source/*"
+  - "/*/config/source"
+  - "/*/grp/*"
+  - "/-action/*"
+  - "/save"
+  - "/load"
+
+policy:
+  ch_fader_max_db: 5
+  bus_fader_max_db: 0        # bus masters (also the ring-out ceiling)
+  main_fader_max_db: 0
+  send_max_db: 0
+  eq_gain_abs_max_db: 15
+  relative_max_db: 6
+  relative_max_db_show_mode: 3
+  ramp_default_ms: 300
+  ramp_step_ms: 20
+  writes_per_second: 50
+  confirm_token_ttl_s: 60
+  read_cache_ttl_s: 2.0
+  show_mode_default: false
+
+# RTA: /meters/15 = 50 LE words = 100 int16 LE, dB = v/256 (-128 floor, 0 = clip) — meters.md §4.2 VERIFIED.
+rta:
+  meter_type: 15
+  bands: 100
+  # band centres, Hz: 10000 * 2 ** ((i - 90) / 10), rounded to 2 decimals (meters.md §4.2, VERIFIED against the DOC table)
+  band_hz: [
+    19.53, 20.93, 22.44, 24.05, 25.77, 27.62, 29.6, 31.73, 34.01, 36.45,
+    39.06, 41.87, 44.87, 48.09, 51.54, 55.24, 59.21, 63.46, 68.01, 72.89,
+    78.12, 83.73, 89.74, 96.18, 103.09, 110.49, 118.42, 126.91, 136.02, 145.79,
+    156.25, 167.46, 179.48, 192.37, 206.17, 220.97, 236.83, 253.83, 272.05, 291.57,
+    312.5, 334.93, 358.97, 384.73, 412.35, 441.94, 473.66, 507.66, 544.09, 583.15,
+    625, 669.86, 717.94, 769.47, 824.69, 883.88, 947.32, 1015.32, 1088.19, 1166.29,
+    1250, 1339.72, 1435.87, 1538.93, 1649.38, 1767.77, 1894.65, 2030.63, 2176.38, 2332.58,
+    2500, 2679.43, 2871.75, 3077.86, 3298.77, 3535.53, 3789.29, 4061.26, 4352.75, 4665.16,
+    5000, 5358.87, 5743.49, 6155.72, 6597.54, 7071.07, 7578.58, 8122.52, 8705.51, 9330.33,
+    10000, 10717.73, 11486.98, 12311.44, 13195.08, 14142.14, 15157.17, 16245.05, 17411.01, 18660.66]
+  source_param: "/-prefs/rta/source"     # enum rta_source: 0 none, 1 Monitor, 2-33 Ch, 34-41 Aux, 42-49 FX, 50-65 Bus, 66-71 Mtx, 72 Main, 73 Mono
+  pos_param: "/-prefs/rta/pos"           # 0 PRE, 1 POST
+  options_param: "/-prefs/rta/options"   # bit 5 = Solo Priority (clear it); bits 0-4 only affect EQ/GEQ overlay views
+  stat_param: "/-stat/rtasource"         # read-back: 0-72 pre-EQ, +98 post-EQ (Bus N post = 146+N-1, Main LR post = 168)
+  frame_period_s: 0.05
+
+geq:
+  fx_types_dual: [GEQ2, TEQ2]   # dual-mono: par 1-31 = side A bands, 32 = master A, 33-63 = side B bands, 64 = master B (fx_routing_scenes.md §2)
+  fx_types_stereo: [GEQ, TEQ]   # par 1-31 bands, 32 master
+  # ISO 1/3-octave centres, par 1 -> 31 ascending (fx_routing_scenes.md §2.3, corroborated by the /-stat/geqpos example)
+  band_hz: [20, 25, 31.5, 40, 50, 63, 80, 100, 125, 160, 200, 250, 315, 400, 500, 630, 800, 1000, 1250, 1600, 2000, 2500, 3150, 4000, 5000, 6300, 8000, 10000, 12500, 16000, 20000]
+  par_a_first: 1
+  par_a_master: 32
+  par_b_first: 33
+  par_b_master: 64
+  gain_scale: geq_gain          # linf -15..+15 dB (0.5 dB grid -> 61 steps)
+  insert_slots_preferred: [5, 6, 7, 8]   # fx 5-8 are insert-only; NOTE fx 5-8 use a DIFFERENT type enum (fx_type_58: GEQ2 = 0) from fx 1-4 (fx_type_14: GEQ2 = 27)
+  insert_sel_enum: insert_sel   # 0 OFF, 1 FX1L, 2 FX1R, … 16 FX8R, 17-22 AUX1-6 (23 entries)
+
+detector:
+  prominence_db: 12
+  neighbour_bins: 3
+  min_level_db: -60
+  persistence_frames: 3
+  growth_min_db_per_s: 6
+  growth_ref_db_per_s: 20
+  monotonic_tolerance_db: 1.0
+  weights: {prominence: 0.3, persistence: 0.2, growth: 0.5}
+  confidence_threshold: 0.7
+  band_tolerance: 1
+  cooldown_s: 1.0
+  notch_step_db: -3
+  notch_max_db: -9
+  notch_budget_default: 6
+  merge_adjacent_bands: 1
+  decay_verify_db: 6         # ring must drop >= this within decay_verify_s after a notch
+  decay_verify_s: 1.5
+  frame_period_s: 0.05
+
+ringout:
+  step_db: 1.0
+  dwell_ms: 1500
+  safety_margin_db: 3
+  abort_backoff_db: 6
+  master_ceiling_db: 0
+  start_warn_db: -10         # warn if bus master starts above this
+
+mics:
+  send_floor_db: -40
+  mute_group_convention: 6
