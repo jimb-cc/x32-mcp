@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+snapshots/*
+!snapshots/.gitkeep
+ringout_reports/*
+!ringout_reports/.gitkeep
+.mcp.local.json
+*.log
