@@ -172,7 +172,8 @@ and monotonicity over 0..1 in 1/1023 steps. `pan`: 0..1 ↔ −100..+100. Also `
 ```yaml
 meta: {model: X32, osc_port: 10023, protocol_ref: "Maillot Unofficial X32 OSC v4.x", firmware_tested: "4.x"}
 scales:            # named scales: {kind, lo, hi, steps, unit} — see scales.Scale
-  fader: {kind: level, unit: dB}
+  fader: {kind: level, steps: 1024, unit: dB}      # faders/main/dca: grid i/1023 (scales_params.md §2.3)
+  send:  {kind: level, steps: 161, unit: dB}       # sends & mlevel: grid i/160
   freq:  {kind: log, lo: 20, hi: 20000, steps: 201, unit: Hz}
   ...
 enums:             # name → ordered token list (index = OSC int)
@@ -243,16 +244,23 @@ policy:
 rta:
   meter_type: 15
   bands: 100
-  band_hz: [...]             # 100 centre frequencies (from research; else 20*2**(i/10))
-  source_param: "/-stat/rta/source" or "/-prefs/rta/source" (per research), source_enum: rta_source
+  band_hz: [...]             # 100 centres: 10000 * 2 ** ((i - 90) / 10)  (meters.md §4.2, VERIFIED)
+  source_param: "/-prefs/rta/source"     # enum rta_source: 0 none, 1 Monitor, 2-33 Ch, 34-41 Aux, 42-49 FX, 50-65 Bus, 66-71 Mtx, 72 Main, 73 Mono
+  pos_param: "/-prefs/rta/pos"           # 0 PRE, 1 POST
+  options_param: "/-prefs/rta/options"   # bit 5 = Solo Priority (clear it)
+  stat_param: "/-stat/rtasource"         # read-back: 0-72 pre-EQ, +98 post-EQ
+  frame_period_s: 0.05
 geq:
-  fx_types_dual: [GEQ2]      # dual-mono GEQ FX types
-  fx_types_stereo: [GEQ, TEQ]
+  fx_types_dual: [GEQ2, TEQ2]   # dual-mono: par 1-31 = side A bands, 32 = master A, 33-63 = side B bands, 64 = master B (fx_routing_scenes.md §2)
+  fx_types_stereo: [GEQ, TEQ]   # par 1-31 bands, 32 master
   band_hz: [20, 25, 31.5, 40, 50, 63, 80, 100, 125, 160, 200, 250, 315, 400, 500, 630, 800, 1000, 1250, 1600, 2000, 2500, 3150, 4000, 5000, 6300, 8000, 10000, 12500, 16000, 20000]
-  par_left_first: 1          # /fx/N/par/{par_left_first + band} — from research
-  par_right_first: 33
-  gain_scale: geq_gain       # lin -15..+15 (per research)
-  insert_slots_preferred: [5, 6, 7, 8]
+  par_a_first: 1
+  par_a_master: 32
+  par_b_first: 33
+  par_b_master: 64
+  gain_scale: geq_gain          # linf -15..+15 dB (0.5 dB grid → 61 steps)
+  insert_slots_preferred: [5, 6, 7, 8]   # fx 5-8 are insert-only; NOTE fx 5-8 use a DIFFERENT type enum (fx_type_58: GEQ2 = 0) from fx 1-4 (fx_type_14: GEQ2 = 27)
+  insert_sel_enum: insert_sel   # 0 OFF, 1 FX1L, 2 FX1R, … 16 FX8R, 17-22 AUX1-6 (23 entries)
 detector:
   prominence_db: 12
   neighbour_bins: 3
@@ -343,6 +351,11 @@ class X32Connection:
     async def get(self, address: str) -> Any                 # request(address) → args[0] (or tuple if >1)
     async def set(self, address: str, *args) -> None         # fire-and-forget write (+ read-cache invalidation + publishes "write" event {address, args})
     async def node(self, path: str) -> str                   # request("/node", path) with reply matched on address "node" AND payload startswith "/"+path+" " (or == "/"+path). Returns the line WITHOUT trailing newline.
+    async def slash(self, line: str, *, timeout: float | None = None) -> None
+        # Node-style WRITE (docs/research/transport.md §6.6, CONFIRMED): send address "/" with one string arg
+        # "<path> <v1> <v2> …" in node-reply text form (engineering units, enum tokens, quoted strings; leading "/" optional;
+        # partial trailing lists allowed). The desk ECHOES the "/" message back — await that echo (reply address "/", FIFO)
+        # as the ack/flow control; raise RequestTimeout otherwise. Used by snapshot restore. Policy is enforced by the caller.
     async def node_many(self, paths: list[str], concurrency: int = 16) -> dict[str, str | None]   # pipelined sweep; None on timeout (never raises)
     async def get_cached(self, address: str) -> Any          # read-through cache with descriptor.policy.read_cache_ttl_s
     def invalidate(self, address: str | None = None) -> None
@@ -399,8 +412,18 @@ class SnapshotStore:
 class Change: address: str; field: str; before: Any; after: Any; label: str   # label = English, e.g. "Ch 5 'Vox' fader −4.2 dB → −1.0 dB"
 def diff_states(a: DeskState, b: DeskState, d: Descriptor, *, scope: str | None = None) -> list[Change]   # scope = target key or family prefix
 def describe_changes(changes: list[Change]) -> str    # bullet list; groups by strip; sends read "Bus 3 send from Ch 2 −20 dB → −17 dB (+3 dB)"
-def restore_plan(target_state: DeskState, live: DeskState, d: Descriptor, *, scope=None) -> list[tuple[str, Any]]   # [(address, raw_osc_value)] for every differing writable param, ordered: config, mix, eq, dyn, gate, sends …; excludes tier-0 read-only
+def restore_plan(target_state: DeskState, live: DeskState, d: Descriptor, *, scope=None) -> list[str]
+    # Node-style write lines (the "/" form, transport.md §6.6) for every SECTION that differs, e.g.
+    # '/ch/01/mix ON -12.0 ON +0 OFF -oo' — rendered with render_node_line from the snapshot's values, so a restore
+    # writes back exactly the text the desk itself produced (bit-faithful). Ordered: config, preamp, mix, sends, eq,
+    # dyn, gate, insert, grp, then bus/main/dca/headamp/fx/config. Excludes -show/-stat/-prefs/-action sections.
 ```
+Parsing tolerance (transport.md §6.3/§9, VERIFIED on a console-saved scene file): token counts are firmware-dependent
+(`/ch/01/mix/01` has 4 tokens on FW 2.x, 5 with `panFollow` on FW ≥ 3) → parse positionally, missing trailing fields
+→ `None`, extra tokens ignored. Numbers have adaptive precision (`0.03`, ` 538`, `8.00`, `-0.0`, `10`) → always parse
+numerics as free-form floats/ints; levels are right-aligned in a 5-char field, HPF is an integer Hz in width 3,
+kHz tokens look like `1k02`/`11k9`/`20k0`. `render_node_line` reproduces the console's padded style (so the fake desk
+looks real) and `parse_node_line` must accept both padded and single-spaced text.
 Engineering-value conventions inside `DeskState.sections`: floats in dB/Hz/ms as floats (`-inf` serialised as
 `"-oo"` string → `to_json` must handle), enums as tokens, on/off as bool, names as str. The
 `inverted_mute` flag is NOT applied here (`mix/on: True` = channel on) — `Desk` applies it.
@@ -460,6 +483,18 @@ class SyntheticRta(FrameSource):
 async def average_frames(src: FrameSource, n: int, *, timeout_s: float) -> MeterFrame | None
 async def set_rta_source(conn, d, target: Target, *, post_eq: bool = True) -> None   # writes the /-stat|-prefs/rta params per research
 ```
+Confirmed facts (docs/research/meters.md — cite it): request `/meters ,si "/meters/N" tf` (tf 1 → 50 ms frames);
+lease is 10 s with no keep-alive → **re-send the identical `/meters` request every 5 s** (`/renew` also works on a
+real desk but Maillot's emulator ignores it, so re-sending is the portable choice). Reply: address `/meters/N`,
+typetag `,b`; blob = big-endian OSC size, then **little-endian int32 word count**, then LE payload words.
+Types 0–14: float32 LE linear amplitude (silence ≈ 1e-5, values may exceed 1.0 up to 8.0). **Type 15 (RTA): 50 words =
+100 × int16 LE, dB = int16/256 (−128.0 floor = "no signal", 0.0 = clip)**; band i centre = `10000·2^((i−90)/10)` Hz
+(band 0 ≈ 19.5 Hz, band 90 = 10 kHz, band 99 ≈ 18.66 kHz). Type 16: 88 × int16/32767 linear + 8 × automix `2^(s/256)`.
+`/meters/15` has no source argument — it streams whatever the console's RTA analyses: `set_rta_source` writes
+`/-prefs/rta/source ,i` (0 none, 1 Monitor, 2–33 Ch01–32, 34–41 Aux, 42–49 FX rtn, **50–65 Bus 1–16**, 66–71 Mtx,
+**72 Main LR, 73 Mono**) and `/-prefs/rta/pos ,i 1` (POST), clears bit 5 (Solo Priority) of `/-prefs/rta/options`,
+then verifies by reading `/-stat/rtasource` (expect `146+N−1` for Bus N post-EQ, 168 for Main LR post).
+
 Tests: blob parsing from a hand-built byte vector (and the verbatim layout in `docs/research/meters.md`),
 including the type-15 packing; `FixtureSource` replay; `SyntheticRta` produces a ring that grows linearly
 in dB and a note that plateaus.
@@ -540,7 +575,7 @@ class Desk:
     # Tier 2 executors (server does the confirmation dance; these just execute)
     async def set_main_level(self, which: str, db: float, *, ramp_ms=None) -> dict ; set_main_mute(which, muted)
     async def recall_scene(self, index: int) -> dict ; save_scene(index, name, notes="") -> dict
-    async def restore(self, snap: Snapshot, *, scope: str | None = None) -> dict   # uses nodes.restore_plan; rate-limited; returns count + duration
+    async def restore(self, snap: Snapshot, *, scope: str | None = None) -> dict   # nodes.restore_plan → conn.slash(line) per section (awaits the echo); rate-limited; returns count + duration + failures
     async def set_source(self, t: Target, source: str) -> dict ; set_phantom(headamp_index|target, on)
     async def set_geq_band(self, fx_slot: int, side: str, band: int, gain_db: float) -> None   # raw GEQ write (used by cfs via a GeqWriter adapter); validated by policy.validate_notch when called from cfs
     async def set_insert(self, t: Target, *, sel: str | None = None, on: bool | None = None, pos: str | None = None)
@@ -638,7 +673,9 @@ class FakeDesk:
 Behaviour: replies to source port; `/info`, `/xinfo` (also answers broadcast), `/status`; get = address no
 args → reply `address, typetag, value`; set = address + arg → store (quantise faders to 1023 steps and
 `steps`-quantise scaled params), echo to xremote subscribers except sender; `/node ,s path` → reply address
-`"node"` `,s` with `render_node_line(...)` + `"\n"`; `/-action/goscene ,i` → sets `/-show/prepos/current`
+`"node"` `,s` with `render_node_line(...)` + `"\n"`; `/ ,s "<path> v1 v2 …"` → parse with `nodes.parse_node_line`
+(leading slash optional, partial trailing lists allowed), store via `to_raw`, echo the whole datagram back to the
+sender, push changed leaves to xremote clients (transport.md §6.6); `/-action/goscene ,i` → sets `/-show/prepos/current`
 and loads stored state if any; `/save ,siss scene idx name notes` → stores a copy; `/-show/showfile/scene/NNN/name`;
 `/meters` → subscribe and stream blobs with the exact real layout (`meters.parse_meter_blob` must decode them);
 `/renew` extends; `/-fake/*` control addresses for tests (`/-fake/ring ,fi hz on` toggles a synthetic ring,
@@ -695,6 +732,20 @@ Resources: `x32://device` (device.yaml text), `x32://snapshot/latest` (JSON), `x
 `x32://patches/{name}`.
 `main()`: configure logging to stderr, build App, `server.run("stdio")`. If `X32_HOST` is set, connect in
 lifespan (errors → logged, server still starts). Dashboard starts in lifespan if enabled (bind failure → warning).
+
+## 19a. Known facts that override earlier assumptions (from docs/research, all VERIFIED)
+
+- Maillot's Windows emulator: port hard-coded 10023, meters are zero-filled, `/renew`/`/batchsubscribe` unimplemented,
+  no scenes. That is why this repo ships its own `fakedesk.py` (which does implement them) — nothing to download.
+- `mcp` 2.2.0: `from mcp.server.mcpserver import MCPServer, Context`; lifespan is entered once; the loop is asyncio
+  under anyio, so `asyncio.create_task` inside the lifespan is fine; `ctx.request_context.lifespan_context` holds the
+  yielded object. `ToolError` exists but we return envelopes instead.
+- Termux: `mcp` needs `pydantic-core` (Rust) — native pure-Python is impossible; document `proot-distro` as the route.
+- `/-action/goscene ,i` (0..99) recalls a scene; `/load ,si scene idx` also works and returns a status; `/save ,siss scene idx name notes`.
+- `/insert/sel` enum is 23 entries (OFF, FX1L … FX8R, AUX1–6). `/fx/N/type` for N=1–4 is the 61-entry list; for N=5–8 a
+  shorter list starting GEQ2=0 — two enums in `device.yaml`.
+- Node reply address is `node` (no slash); `/` (node-style write) is echoed back verbatim; every other reply echoes the
+  request address.
 
 ## 20. Test matrix summary
 
