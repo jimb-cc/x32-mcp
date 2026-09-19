@@ -1,0 +1,29 @@
+# Example patch plan (schema: patches/README.md). Fictional band and venue.
+#
+# channel      1..32, unique
+# name         strip name, <= 12 characters (the desk truncates longer names)
+# color        RD GN YE BL MG CY WH OFF (+ "i" for inverted) or red/green/yellow/blue/magenta/cyan/white/off
+# source       In01..In32, Aux1..6, USBL/USBR, FX1L..FX4R, Bus01..16, OFF  (only written with include_source)
+# mic          true = a live microphone on stage (CFS2 ring-out candidate); false = DI/line; blank = unknown
+# owner        first name of whoever plays/sings into it
+# monitor_bus  1..16, the mix bus that owner listens to (IEM / wedge)
+# notes        free text
+band: The Molecules
+venue: Festival main stage (fictional)
+channels:
+  - {channel: 1,  name: Kick,       color: RD, source: In01, mic: true,  owner: Ray,  monitor_bus: 2, notes: "inside kick, dynamic"}
+  - {channel: 2,  name: Snare Top,  color: RD, source: In02, mic: true,  owner: Ray,  monitor_bus: 2, notes: "SM57"}
+  - {channel: 3,  name: Hats,       color: RD, source: In03, mic: true,  owner: Ray,  monitor_bus: 2, notes: "small-diaphragm condenser"}
+  - {channel: 4,  name: Rack Tom,   color: RD, source: In04, mic: true,  owner: Ray,  monitor_bus: 2, notes: "clip-on dynamic"}
+  - {channel: 5,  name: Floor Tom,  color: RD, source: In05, mic: true,  owner: Ray,  monitor_bus: 2, notes: "clip-on dynamic"}
+  - {channel: 6,  name: OH L,       color: YE, source: In06, mic: true,  owner: Ray,  monitor_bus: 2, notes: "overhead pair, spaced"}
+  - {channel: 7,  name: OH R,       color: YE, source: In07, mic: true,  owner: Ray,  monitor_bus: 2, notes: "overhead pair, spaced"}
+  - {channel: 8,  name: Bass DI,    color: GN, source: In08, mic: false, owner: Dee,  monitor_bus: 3, notes: "DI out of the amp head"}
+  - {channel: 9,  name: Gtr L,      color: BL, source: In09, mic: true,  owner: Mel,  monitor_bus: 4, notes: "cab mic, dynamic, stage left"}
+  - {channel: 10, name: Gtr R,      color: BL, source: In10, mic: true,  owner: Mel,  monitor_bus: 4, notes: "cab mic, ribbon, stage right"}
+  - {channel: 11, name: Keys L,     color: CY, source: In11, mic: false, owner: Kit,  monitor_bus: 5, notes: "stereo DI"}
+  - {channel: 12, name: Keys R,     color: CY, source: In12, mic: false, owner: Kit,  monitor_bus: 5, notes: "stereo DI"}
+  - {channel: 13, name: Vox Lead,   color: MG, source: In13, mic: true,  owner: Tony, monitor_bus: 1, notes: "SM58, centre stage"}
+  - {channel: 14, name: Vox BV 1,   color: WH, source: In14, mic: true,  owner: Jo,   monitor_bus: 6, notes: "stage left, shares bus 6 with Sam"}
+  - {channel: 15, name: Vox BV 2,   color: WH, source: In15, mic: true,  owner: Sam,  monitor_bus: 6, notes: "stage right, shares bus 6 with Jo"}
+  - {channel: 16, name: Talkback,   color: "OFF", source: In16, mic: false, notes: "FOH talkback to the monitor buses; not on stage, keep out of ring-outs"}
