@@ -117,6 +117,10 @@ class DetectorConfig:
     decay_verify_frames: int = 2         # consecutive frames that must show the drop (cfs.py, extension)
     frame_period_s: float = 0.05         # nominal RTA frame period (informational)
     growth_window_frames: int = 60       # bound on the growth window (extension)
+    # Established-feedback override (extension, added after M7): a band this far above its
+    # neighbours for this many frames is emitted even with no growth. 0 disables it.
+    override_prominence_db: float = 25.0
+    override_persistence_frames: int = 6
 
     def __post_init__(self) -> None:
         def need(cond: bool, msg: str) -> None:
@@ -124,6 +128,8 @@ class DetectorConfig:
                 raise ValueError(f"DetectorConfig: {msg}")
 
         need(self.prominence_db > 0, "prominence_db must be > 0")
+        need(self.override_prominence_db >= 0, "override_prominence_db must be >= 0")
+        need(self.override_persistence_frames >= 1, "override_persistence_frames must be >= 1")
         need(self.neighbour_bins >= 1, "neighbour_bins must be >= 1")
         need(self.persistence_frames >= 1, "persistence_frames must be >= 1")
         need(self.growth_ref_db_per_s > 0, "growth_ref_db_per_s must be > 0")
@@ -216,6 +222,7 @@ class Candidate:
     levels: list[float]
     ts_list: list[float]
     confidence: float
+    override: bool = False
     freq_hz: float = 0.0
     level_db: float = -128.0
     prominence_db: float = 0.0
@@ -340,6 +347,24 @@ class FeedbackDetector:
             + cfg.w_persistence * min(1.0, c.frames / cfg.persistence_frames)
             + cfg.w_growth * growth
         )
+        # Established-feedback override. Without growth the score above cannot exceed
+        # w_prominence + w_persistence (0.5 by default), which is below the 0.7 threshold — so a
+        # howl that has already reached its plateau can never be emitted, however loud or however
+        # long it runs. Observed at M7 on the real desk: a 60 dB-prominent 8 kHz ring sat at
+        # confidence 0.50 for 15 s while the operator held it.
+        #
+        # The growth test earns its keep on *modest* peaks, where a sustained instrument note and
+        # an early ring look alike. It has nothing to say about a band this far above its
+        # neighbours: musical content is harmonically spread, so tens of dB of prominence in a
+        # single band is feedback by construction. Past `override_prominence_db`, and given more
+        # persistence than the normal path asks for, emit regardless of growth.
+        if (
+            cfg.override_prominence_db > 0.0
+            and c.prominence_db >= cfg.override_prominence_db
+            and c.frames >= cfg.override_persistence_frames
+        ):
+            c.confidence = max(c.confidence, cfg.confidence_threshold)
+            c.override = True
 
     # -- API -----------------------------------------------------------------------------------
     def feed(self, values_db: Sequence[float], ts: float) -> list[Detection]:

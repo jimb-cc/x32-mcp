@@ -472,3 +472,59 @@ async def test_detector_to_notch_end_to_end(cfg, band_hz, geq_hz):
             await w.set_band_gain(3, n.band, n.depth_db)
     assert w.writes[0] == (3, 22, -3.0)
     assert [g for _, _, g in w.writes][:3] == [-3.0, -6.0, -9.0][: len(w.writes)]
+
+
+# --------------------------------------------------------------------------- M7 regression tests
+
+
+def _plateaued_ring(band_hz, ring_hz, *, prominence_db, frames, floor_db=-85.0, period=0.05):
+    """Frames of an ALREADY-ESTABLISHED ring: loud, steady, no growth whatsoever.
+
+    Every synthetic stream in this file until now modelled a ring *growing* from a quiet
+    background, which is the easy case. On the real desk at M7 the operator let a howl run for
+    15 s; by the time anyone looked at it, it had long since reached its ceiling and sat flat.
+    """
+    idx = min(range(len(band_hz)), key=lambda i: abs(band_hz[i] - ring_hz))
+    out = []
+    for n in range(frames):
+        vals = [floor_db] * len(band_hz)
+        vals[idx] = floor_db + prominence_db          # dead flat, frame after frame
+        out.append((vals, n * period))
+    return idx, out
+
+
+def test_an_established_plateaued_howl_is_caught(cfg, band_hz):
+    """The M7 failure: a 60 dB-prominent ring scored 0.50 forever and was never emitted.
+
+    0.50 is exactly w_prominence + w_persistence, i.e. the ceiling when growth scores 0 — so no
+    amount of loudness or patience could ever reach the 0.7 threshold.
+    """
+    det = FeedbackDetector(cfg, band_hz)
+    idx, frames = _plateaued_ring(band_hz, 8000.0, prominence_db=60.0, frames=40)
+    fired = [d for vals, ts in frames for d in det.feed(vals, ts)]
+    assert fired, "an established 60 dB-prominent ring must be emitted even with zero growth"
+    first = fired[0]
+    assert abs(first.band - idx) <= cfg.band_tolerance
+    assert first.slope_db_per_s == pytest.approx(0.0, abs=0.5), "it really is flat - no growth"
+    assert first.confidence >= cfg.confidence_threshold
+
+
+def test_the_override_needs_real_prominence_not_just_patience(cfg, band_hz):
+    """A modest sustained peak must still be ignored: that is what the growth test is for.
+
+    A held vocal note sits a few dB above its neighbours and plateaus. It must not be notched
+    however long it is held, or the system cuts the singer.
+    """
+    det = FeedbackDetector(cfg, band_hz)
+    # comfortably over the 12 dB qualifying prominence, well under the 25 dB override
+    _, frames = _plateaued_ring(band_hz, 330.0, prominence_db=15.0, frames=120)
+    fired = [d for vals, ts in frames for d in det.feed(vals, ts)]
+    assert not fired, f"a modest plateaued peak must not be notched, got {len(fired)}"
+
+
+def test_override_is_disabled_by_zero(band_hz):
+    """override_prominence_db: 0 restores the pre-M7 behaviour, for anyone who wants it back."""
+    cfg = DetectorConfig(override_prominence_db=0.0)
+    det = FeedbackDetector(cfg, band_hz)
+    _, frames = _plateaued_ring(band_hz, 8000.0, prominence_db=60.0, frames=40)
+    assert not [d for vals, ts in frames for d in det.feed(vals, ts)]

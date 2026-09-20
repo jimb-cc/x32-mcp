@@ -853,6 +853,8 @@ class RtaSourceResult:
     stat_actual: int | None  # what the desk answered (None: no answer)
     verified: bool
     options_cleared: bool  # True when bit 5 (Solo Priority) had to be cleared
+    autogain_cleared: bool = False  # True when the RTA's auto-gain had to be switched off
+    detector_set_peak: bool = False  # True when the RTA detector had to be moved to PEAK
 
 
 async def set_rta_source(
@@ -901,6 +903,26 @@ async def set_rta_source(
         await conn.set(opt_addr, opts & ~SOLO_PRIORITY_BIT)
         cleared = True
 
+    # Auto-gain normalises the whole analyser display, so every band's reported level moves
+    # together whenever the overall level shifts. The detector reads that as monotonic growth,
+    # which is exactly the signature it uses for feedback. At M7 on the real desk this burned the
+    # entire notch budget on room noise before any gain was touched. The detector needs absolute
+    # levels, so auto-gain must be off (meters.md §5.3 documents the pref; the consequence is ours).
+    autogain_cleared = False
+    ag_addr = rta.get("autogain_param", "/-prefs/rta/autogain")
+    ag = await _read(ag_addr)
+    if isinstance(ag, (int, float)) and int(ag) != 0:
+        await conn.set(ag_addr, 0)
+        autogain_cleared = True
+
+    # RMS blunts a narrow tone; feedback is exactly that. PEAK tracks the onset.
+    detector_set_peak = False
+    det_addr = rta.get("det_param", "/-prefs/rta/det")
+    det = await _read(det_addr)
+    if isinstance(det, (int, float)) and int(det) != 1:
+        await conn.set(det_addr, 1)
+        detector_set_peak = True
+
     expected = rta_stat_expected(idx, post_eq)
     actual: int | None = None
     for attempt in range(max(1, verify_attempts)):
@@ -915,4 +937,5 @@ async def set_rta_source(
         log.warning("rta source %s: %s reads %r, expected %d", target.key, stat_addr, actual, expected)
     else:
         log.info("rta source -> %s (%s=%d, %s)", target.label, src_addr, idx, "post-EQ" if post_eq else "pre-EQ")
-    return RtaSourceResult(target, idx, post_eq, expected, actual, verified, cleared)
+    return RtaSourceResult(target, idx, post_eq, expected, actual, verified, cleared,
+                           autogain_cleared, detector_set_peak)

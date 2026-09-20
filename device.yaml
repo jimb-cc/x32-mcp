@@ -759,6 +759,11 @@ rta:
   pos_param: "/-prefs/rta/pos"           # 0 PRE, 1 POST
   options_param: "/-prefs/rta/options"   # bit 5 = Solo Priority (clear it); bits 0-4 only affect EQ/GEQ overlay views
   stat_param: "/-stat/rtasource"         # read-back: 0-72 pre-EQ, +98 post-EQ (Bus N post = 146+N-1, Main LR post = 168)
+  # Both MUST be forced before arming the detector (found at M7, 2026-09-20):
+  # auto-gain normalises the whole display, so every band drifts together when the overall level
+  # moves and the detector reads that as the growth signature of feedback; RMS blunts a narrow tone.
+  autogain_param: "/-prefs/rta/autogain" # 0/1 - the detector needs absolute levels, so force 0
+  det_param: "/-prefs/rta/det"           # 0 RMS, 1 PEAK - force PEAK, feedback is a narrow tone
   frame_period_s: 0.05
 
 geq:
@@ -784,6 +789,13 @@ detector:
   monotonic_tolerance_db: 1.0
   weights: {prominence: 0.3, persistence: 0.2, growth: 0.5}
   confidence_threshold: 0.7
+  # Established-feedback override (added after M7, 2026-09-20). Without growth the weighted score
+  # cannot exceed prominence+persistence = 0.5, below the 0.7 threshold, so a howl that has already
+  # plateaued could never be emitted: a 60 dB-prominent 8 kHz ring sat at 0.50 for 15 s on the real
+  # desk. Musical content is harmonically spread, so this much prominence in one band is feedback by
+  # construction. 0 disables the override.
+  override_prominence_db: 25
+  override_persistence_frames: 6
   band_tolerance: 1
   cooldown_s: 1.0
   notch_step_db: -3
