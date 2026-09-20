@@ -440,7 +440,7 @@ def test_state_from_the_real_cfs_state_and_connection_status(settings: Settings,
     assert dash.fps == 100, "fps clamped to 1..100"
     st = json.loads(dumps(dash.state_message()))
     assert st["mode"] == "ringout" and st["bus"] == "main" and st["session_id"] == "abc"
-    assert st["master_db"] is None, "CfsState spells −∞ as None"
+    assert st["master_db"] is None, "master_db None = not read (distinct from fully down)"
     assert st["rta_source"] == "main.st" and st["candidate"]["confidence"] == 0.71 and st["stage"] == "HOLD"
     assert st["connection"] == {"state": "degraded", "console": "X32-RACK", "rtt_ms": 4.3}
     assert dash.health()["mode"] == "ringout"
@@ -477,3 +477,26 @@ def test_frame_text_and_json_hygiene() -> None:
     hot = MeterFrame(0, 2.0, (float("inf"), float("nan"), 0.1))
     assert json.loads(DashboardServer.frame_text(hot))["db"] == ["+oo", -90.0, -20.0]  # never Infinity/NaN
     assert dumps({"x": float("nan"), "y": float("inf"), "z": {1, }}) == '{"x":null,"y":"+oo","z":[1]}'
+
+
+def test_a_fully_down_master_reaches_the_dashboard_as_minus_oo(settings: Settings, d: Descriptor) -> None:
+    """−∞ must not arrive as null: the page renders null as "—" (unknown) but "-oo" as "−oo".
+
+    cfs._db1 used to collapse −∞ and "not read" into None, so a bus master sitting fully down
+    showed as unknown on the dashboard — the same conflation fixed in desk._db1 at M5.
+    """
+    from x32mcp.cfs import _db1 as cfs_db1
+
+    assert cfs_db1(float("-inf")) == float("-inf"), "−∞ is preserved, not nulled"
+    assert cfs_db1(None) is None, "not-read stays None"
+    assert cfs_db1(-12.34) == -12.3
+
+    provider = SimpleNamespace(state=CfsState(
+        mode=CfsMode.RINGOUT, session_id="s", bus=3, bus_name="Wedge A",
+        master_db=cfs_db1(float("-inf")), budget_left=2, candidate=None, stage="HOLD",
+        started=1700000000.0, rta_source="bus.3",
+    ))
+    dash = DashboardServer(settings, EventBus(), provider, None, band_hz=rta_band_hz(d),
+                           geq_band_hz=d.geq["band_hz"], connection_status=None)
+    st = json.loads(dumps(dash.state_message()))
+    assert st["master_db"] == "-oo", st

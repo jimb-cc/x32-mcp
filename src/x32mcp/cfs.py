@@ -160,9 +160,17 @@ def _jsonable(v: Any) -> Any:
 
 
 def _db1(v: Any) -> float | None:
-    """dB rounded to 0.1; None for −∞ / missing."""
-    if v is None or isinstance(v, bool) or not isinstance(v, (int, float)) or math.isinf(v):
+    """dB rounded to 0.1. −∞ is preserved (``webui.dumps`` renders it ``"-oo"``); ``None`` means
+    *not read*.
+
+    These used to be collapsed together, so a bus master sitting fully down reached the dashboard
+    as ``master_db: null`` and rendered as "—" (unknown) rather than "−oo" — the same conflation
+    that made ``fader_db`` ambiguous in :mod:`desk` (fixed at M5).
+    """
+    if v is None or isinstance(v, bool) or not isinstance(v, (int, float)):
         return None
+    if math.isinf(v):
+        return float(v)
     return round(float(v), 1)
 
 
