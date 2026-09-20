@@ -239,6 +239,11 @@ def _desk() -> Desk:
 # -- envelope helpers ----------------------------------------------------------------------------------
 
 
+def _is_up(db: Any) -> bool:
+    """True when a level is above the bottom stop. ``None`` = not read, ``-inf`` = fully down."""
+    return isinstance(db, (int, float)) and not isinstance(db, bool) and not math.isinf(db)
+
+
 def _jsonable(v: Any) -> Any:
     """Make any result JSON-safe: −∞/+∞ → ``"-oo"``/``"+oo"``, NaN → None, enums → values,
     Targets → keys, Paths → str, dataclasses/objects with ``to_dict`` → dicts, tuples → lists."""
@@ -773,7 +778,9 @@ async def get_channel_sends(ch: int) -> dict[str, Any]:
     t = Target("ch", n)
     sends = await desk.get_sends(t)
     name = await _name(desk, t)
-    live = [s for s in sends if s.get("level_db") is not None]
+    # "up" means above -oo, not merely present: level_db is -inf for a closed send
+    # (it used to be None, which silently doubled as "not read").
+    live = [s for s in sends if _is_up(s.get("level_db"))]
     parts = [
         f"Bus {s['bus']}{' ' + repr(s['bus_name']) if s.get('bus_name') else ''} {_dbs(s['level'])}{' (send off)' if s.get('muted') else ''}"
         for s in live

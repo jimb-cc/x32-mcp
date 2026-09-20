@@ -130,7 +130,7 @@ async def test_read_tools_envelope_and_units(app):
     ch = await srv.get_channel(1)
     assert ch["ok"] and ch["target"] == "ch.1" and ch["label"] == "Ch 1" and ch["name"] == "Ch01"
     assert ch["fader_db"] == 0.0 and ch["fader"] == "0.0" and ch["muted"] is False and ch["source"] == "IN01"
-    assert ch["mono_level_db"] is None and ch["mono_level"] == "-oo"
+    assert ch["mono_level_db"] == "-oo" and ch["mono_level"] == "-oo"
     assert ch["eq"]["bands"][0]["type"] == "PEQ" and ch["comp"]["ratio"] == "3.0" and ch["gate"]["threshold_db"] == -80.0
     assert ch["summary"].startswith("Ch 1 'Ch01': fader 0.0 dB, unmuted, pan C, source IN01")
     json.dumps(ch)
@@ -145,7 +145,7 @@ async def test_read_tools_envelope_and_units(app):
     assert_err(await srv.get_channel(0), "BAD_ARGUMENT")
     sends = await srv.get_channel_sends(1)
     assert sends["ok"] and sends["target"] == "ch.1" and len(sends["sends"]) == 16
-    assert sends["sends"][2]["bus"] == 3 and sends["sends"][2]["level"] == "-oo" and sends["sends"][2]["level_db"] is None
+    assert sends["sends"][2]["bus"] == 3 and sends["sends"][2]["level"] == "-oo" and sends["sends"][2]["level_db"] == "-oo"
     assert sends["summary"] == "Ch 1 'Ch01' sends: none above -oo (16 at -oo)"
     eq = await srv.get_eq("ch.2")
     assert eq["ok"] and eq["on"] is True and len(eq["bands"]) == 4 and eq["target"] == "ch.2"
@@ -202,7 +202,7 @@ async def test_tier1_moves_and_summaries(app, fakedesk):
     clamp = await srv.set_fader("ch.6", 8.0, ramp_ms=0)
     assert clamp["ok"] and clamp["after_db"] == 5.0 and clamp["clamped"]["limit"] == 5.0 and "clamped to the +5.0 dB limit" in clamp["summary"]
     down = await srv.set_fader("ch.7", -90, ramp_ms=0)
-    assert down["ok"] and down["after_db"] is None and down["after"] == "-oo" and down["summary"].endswith("0.0 dB → -oo dB")
+    assert down["ok"] and down["after_db"] == "-oo" and down["after"] == "-oo" and down["summary"].endswith("0.0 dB → -oo dB")
     m = await srv.mute("ch.5")
     assert m["ok"] and m["muted"] is True and m["was_muted"] is False and m["summary"] == "Ch 5 'Vox Tony' muted"
     await settle(app)

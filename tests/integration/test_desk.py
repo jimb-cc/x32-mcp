@@ -16,7 +16,7 @@ from x32mcp.desk import Desk, DeskError
 from x32mcp.events import EventBus
 from x32mcp.nodes import SnapshotStore
 from x32mcp.policy import Policy, PolicyError
-from x32mcp.scales import db_to_fader, quantize
+from x32mcp.scales import NEG_INF_DB, db_to_fader, quantize
 from x32mcp.targets import Target
 
 GRID_1024 = 1.0 / 1023  # one fader step (scales_params.md §2.3)
@@ -56,7 +56,7 @@ async def test_get_channel_fields_and_units(desk):
     assert ch["name"] == "Ch01" and ch["color"] == "RD" and ch["icon"] == 1 and ch["source"] == "IN01"
     assert ch["fader_db"] == 0.0 and ch["fader"] == "0.0" and ch["muted"] is False
     assert ch["pan"] == 0 and ch["lr_assigned"] is True and ch["mono_assigned"] is False
-    assert ch["mono_level_db"] is None and ch["mono_level"] == "-oo"  # -inf is never a float in results
+    assert ch["mono_level_db"] == NEG_INF_DB and ch["mono_level"] == "-oo"  # -inf, never null (server renders "-oo")
     assert ch["preamp"] == {"trim_db": 0.0, "invert": False, "hpf_on": False, "hpf_slope": "24", "hpf_hz": pytest.approx(101.0, abs=1.0)}
     eq = ch["eq"]
     assert eq["on"] is True and [b["band"] for b in eq["bands"]] == [1, 2, 3, 4]
@@ -89,7 +89,7 @@ async def test_get_sends_eq_dynamics_units(desk, conn, descriptor):
     s3, s4 = sends[2], sends[3]
     assert s3["bus"] == 3 and s3["bus_name"] == "Bus03" and s3["to"] == "bus.3"
     assert s3["level_db"] == -12.0 and s3["level"] == "-12.0" and s3["muted"] is False and s3["pan"] == 50 and s3["type"] == "POST"
-    assert s4["muted"] is True and s4["level_db"] is None and s4["level"] == "-oo"
+    assert s4["muted"] is True and s4["level_db"] == NEG_INF_DB and s4["level"] == "-oo"
     assert s4["pan"] == 50 and s4["type"] == "POST"  # even sends share the odd partner's pan/type (scales_params.md §4.9)
     bus_sends = await desk.get_sends("bus.1")
     assert len(bus_sends) == 6 and bus_sends[0]["to"] == "mtx.1" and bus_sends[0]["name"] == "Mtx1"
@@ -193,11 +193,11 @@ async def test_adjust_fader_relative_limit_force_and_clamp(desk, conn, fakedesk,
     with pytest.raises(PolicyError):
         await desk.set_level("ch.3", -20.0, ramp_ms=0)
     res = await desk.set_level("ch.4", -90.0, ramp_ms=0)  # -90 dB is the bottom stop = -oo
-    assert res["after_db"] is None and res["after"] == "-oo"
+    assert res["after_db"] == NEG_INF_DB and res["after"] == "-oo"
     await settle(conn)
     assert fakedesk.get("/ch/04/mix/fader") == 0.0
     res = await desk.set_level("ch.4", -20.0, ramp_ms=0)
-    assert res["before_db"] is None and res["before"] == "-oo" and res["after_db"] == -20.0
+    assert res["before_db"] == NEG_INF_DB and res["before"] == "-oo" and res["after_db"] == -20.0
     # ceiling clamp is applied and reported
     res = await desk.set_level("ch.5", +8.0, ramp_ms=0)
     assert res["after_db"] == 5.0 and res["requested_db"] == 8.0
@@ -240,7 +240,7 @@ async def test_mute_is_inverted_on_the_wire(desk, conn, fakedesk):
 async def test_sends_set_adjust_and_units(desk, conn, fakedesk, descriptor):
     send = descriptor.scale("send")
     res = await desk.set_send("ch.1", 3, -10.0, ramp_ms=0)
-    assert res["send_to"] == 3 and res["kind"] == "send" and res["before_db"] is None and res["after_db"] == -10.0
+    assert res["send_to"] == 3 and res["kind"] == "send" and res["before_db"] == NEG_INF_DB and res["after_db"] == -10.0
     await settle(conn)
     assert fakedesk.get("/ch/01/mix/03/level") == pytest.approx(send.to_raw(-10.0), abs=GRID_161)
     res = await desk.adjust_send("ch.1", 3, +3.0, ramp_ms=0)

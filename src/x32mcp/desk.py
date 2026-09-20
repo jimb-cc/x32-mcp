@@ -118,12 +118,21 @@ class DeskError(Exception):
 # -- value helpers -----------------------------------------------------------------------------
 
 
+_UNSET: Any = object()  # "nothing written yet" in a ramp; None and 0.0 are both real raw values
+
+
 def _db1(v: Any) -> float | None:
-    """dB rounded to 0.1 (half away from zero, like the desk); ``None`` for −∞ or a missing value."""
+    """dB rounded to 0.1 (half away from zero, like the desk).
+
+    −∞ is preserved as ``-inf`` (the server renders it ``"-oo"``, the convention used by
+    snapshots and ``scales.parse_db``); ``None`` means *not read*. Collapsing both to ``None``
+    made "fader fully down" indistinguishable from "unknown" — a real strip at −∞ then reported
+    ``fader_db: null``, which reads as a failed read rather than a closed fader.
+    """
     if v is None or isinstance(v, bool) or not isinstance(v, (int, float)):
         return None
     if math.isinf(v):
-        return None
+        return float(v)
     return float(format_db(float(v)))
 
 
@@ -898,12 +907,30 @@ class Desk:
         return holder["last"], False
 
     async def _run_ramp(self, address: str, steps: Sequence[float], spec: ParamSpec, holder: dict, tool: str, target: Target, guarded: bool) -> None:
+        """Walk ``steps`` on the policy's step clock, writing only when the desk's *quantised*
+        value actually changes.
+
+        A ramp emits one step per 20 ms = 50 writes/s, which is exactly the global write budget,
+        so on real hardware the rate limiter stretched a 12 s ramp to 19.3 s and a ramp crowded
+        out every other write (a CFS² notch included). Most of those writes were no-ops anyway:
+        the fader grid is 1024 values, so a 5 dB move has ~50 distinct raw values however many
+        steps we slice it into. Skipping unchanged raw values keeps the timing honest and the
+        motion identical. The final step is always written so the ramp lands exactly on target.
+        """
         last = len(steps) - 1
+        t0 = time.perf_counter()
+        period = self._policy.ramp_step_s
+        sent: Any = _UNSET
         for i, db in enumerate(steps):
-            await self._write(address, spec.to_raw(db), value=db, tool=tool, target=target, guarded=guarded)
-            holder["last"] = db
+            raw = spec.to_raw(db)
+            if i == last or raw != sent:
+                await self._write(address, raw, value=db, tool=tool, target=target, guarded=guarded)
+                sent = raw
+                holder["last"] = db
             if i < last:
-                await asyncio.sleep(self._policy.ramp_step_s)
+                # Sleep to the step's wall-clock slot rather than a fixed period, so skipped
+                # writes do not make the ramp finish early.
+                await asyncio.sleep(max(0.0, t0 + (i + 1) * period - time.perf_counter()))
 
     async def _move_level(
         self, t: Target, spec: ParamSpec, address: str, before: Any, db: float, *,
