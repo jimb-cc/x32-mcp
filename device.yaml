@@ -787,7 +787,14 @@ detector:
   # -60 dB sat 8 dB BELOW the studio's own 48 Hz rumble (-51.7 dB peak), so room noise qualified
   # as feedback and spent the notch budget before a fader moved. A pub, a field and a studio all
   # differ, so this is a lower bound, not the answer. floor_margin_db 0 disables calibration.
-  min_level_db: -60
+  # Candidates quieter than this are ignored. -60 was measured WRONG on real hardware at M7: the
+  # loudest band in a silent studio was -51.7 dB (48 Hz rumble), so the room's own noise floor
+  # cleared the gate by 8 dB and ordinary rumble qualified as feedback, spending the whole notch
+  # budget before a fader moved. -45 sits above that floor and still leaves ~20 dB of headroom
+  # below the -25 dB howl that was actually missed.
+  # NOTE: this is one room. A noisier venue needs it higher, and calibrating it automatically from
+  # a measured floor at arm time is the proper fix (attempted 2026-09-20, backed out unfinished).
+  min_level_db: -45
   floor_margin_db: 8
   floor_sample_s: 2.0        # time cap
   floor_sample_frames: 40    # enough frames (2 s at 20 fps); whichever comes first
