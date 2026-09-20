@@ -22,6 +22,7 @@ import pytest_asyncio
 from conftest import CONN_OPTS, wait_until
 from x32mcp import server as srv
 from x32mcp.config import Settings
+from x32mcp.descriptor import Descriptor
 from x32mcp.meters import SyntheticRta, rta_band_hz
 from x32mcp.patches import load_patch_plan
 from x32mcp.server import App
@@ -80,7 +81,9 @@ def assert_err(res: dict, code: str) -> None:
 
 def assert_pending(res: dict) -> str:
     assert res["ok"] is False and res["requires_confirmation"] is True, res
-    assert res["confirm_token"] and res["expires_in_s"] == 60 and res["action_summary"], res
+    # TTL comes from device.yaml (policy.confirm_token_ttl_s) so raising it does not break every dance test
+    assert res["confirm_token"] and res["action_summary"], res
+    assert res["expires_in_s"] == Descriptor.load().policy["confirm_token_ttl_s"], res
     assert "Confirmation required" in res["summary"]
     return res["confirm_token"]
 

@@ -676,7 +676,11 @@ policy:
   ramp_default_ms: 300
   ramp_step_ms: 20
   writes_per_second: 50
-  confirm_token_ttl_s: 60
+  # 5 minutes, not 60 s: a confirmation is a CONVERSATIONAL round trip (the model surfaces the
+  # prompt, the operator reads it on a phone at FOH and answers by voice), which ran past 60 s
+  # during M5 on 2026-09-20. Too short a TTL teaches an agent to re-mint tokens, which defeats
+  # the gate entirely. Still single-use and still bound to one action.
+  confirm_token_ttl_s: 300
   read_cache_ttl_s: 2.0
   show_mode_default: false
 

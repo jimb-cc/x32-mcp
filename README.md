@@ -383,12 +383,12 @@ the **confirmation dance**: the first call does nothing on the desk and returns
 ```json
 {"ok": false, "requires_confirmation": true,
  "action_summary": "Recall scene 1 'The Molecules' (currently loaded: 0 'Init'); this replaces every setting on the desk",
- "confirm_token": "kQ7xR2mZ9aE", "expires_in_s": 60,
+ "confirm_token": "kQ7xR2mZ9aE", "expires_in_s": 300,
  "summary": "Confirmation required: … — show this to the user; if they agree, call recall_scene again with the same arguments and this confirm_token."}
 ```
 
 The model shows the `action_summary`, and only after the user agrees calls the **same tool with
-the same arguments** plus the token. Tokens are single-use, expire after 60 s and are bound to
+the same arguments** plus the token. Tokens are single-use, expire after 5 minutes and are bound to
 the action *and* its normalised arguments — a token minted for scene 1 cannot recall scene 2
 (`BAD_TOKEN`), and a stale one is `TOKEN_EXPIRED`. What that looks like in a conversation:
 

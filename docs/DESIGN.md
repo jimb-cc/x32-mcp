@@ -238,7 +238,7 @@ policy:
   ramp_default_ms: 300
   ramp_step_ms: 20
   writes_per_second: 50
-  confirm_token_ttl_s: 60
+  confirm_token_ttl_s: 300   # 5 min: a confirmation is a conversational round trip (M5)
   read_cache_ttl_s: 2.0
   show_mode_default: false
 rta:
@@ -691,7 +691,7 @@ every section parses with zero `missing`, xremote push arrives, meters frames de
 policy → desk → response dict. **Every tool returns a dict** with `ok: bool` and `summary: str`; errors are
 `{"ok": false, "error": {"code": …, "message": …}, "summary": …}` — tools never raise to the client except
 for programming errors. Tier 2 tools accept `confirm_token: str | None = None` and return
-`{"ok": false, "requires_confirmation": true, "action_summary": …, "confirm_token": …, "expires_in_s": 60, "summary": …}`
+`{"ok": false, "requires_confirmation": true, "action_summary": …, "confirm_token": …, "expires_in_s": 300, "summary": …}`
 on the first call.
 
 Tool list (names/signatures fixed):

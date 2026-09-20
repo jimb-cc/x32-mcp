@@ -75,7 +75,7 @@ def test_reads_limits_from_descriptor(pol, d):
     assert pol.main_fader_max_db == 0 and pol.send_max_db == 0
     assert pol.eq_gain_abs_max_db == 15 and pol.relative_max_db == 6 and pol.relative_max_db_show_mode == 3
     assert pol.ramp_default_ms == 300 and pol.ramp_step_ms == 20 and pol.ramp_step_s == 0.02
-    assert pol.writes_per_second == 50 and pol.confirm_token_ttl_s == 60
+    assert pol.writes_per_second == 50 and pol.confirm_token_ttl_s == 300  # 5 min: conversational round trip (M5)
     assert pol.notch_max_db == -9
     assert pol.show_mode is False  # show_mode_default
     assert pol.snapshot_before_write is True
@@ -218,12 +218,12 @@ def test_token_lifecycle_single_use(pol, bus):
     bus.subscribe(lambda e: events.append(e), types={"policy.confirm_required", "policy.confirmed"})
     pend = pol.require_confirmation("Recall scene 7 'Molecules'", {"index": 7})
     assert isinstance(pend, PendingConfirmation)
-    assert pend.requires_confirmation is True and pend.expires_in_s == 60
+    assert pend.requires_confirmation is True and pend.expires_in_s == 300
     assert pend.action_summary == "Recall scene 7 'Molecules'"
     assert len(pend.confirm_token) >= 8
     assert pend.to_dict() == {
         "requires_confirmation": True, "action_summary": "Recall scene 7 'Molecules'",
-        "confirm_token": pend.confirm_token, "expires_in_s": 60,
+        "confirm_token": pend.confirm_token, "expires_in_s": 300,
     }
     assert pol.pending_confirmations == 1
     assert pol.consume_token(pend.confirm_token) == {"index": 7}
@@ -249,9 +249,9 @@ def test_tokens_are_unique_and_wrong_token_rejected(pol):
 
 def test_token_ttl_uses_injected_clock(pol, clock):
     pend = pol.require_confirmation("save", {"index": 3})
-    clock.advance(59.9)
+    clock.advance(299.9)
     other = pol.require_confirmation("save again", {"index": 4})
-    clock.advance(0.2)  # first token is now 60.1 s old, second 0.2 s
+    clock.advance(0.2)  # first token is now 300.1 s old, second 0.2 s
     with pytest.raises(PolicyError) as ei:
         pol.consume_token(pend.confirm_token)
     assert ei.value.code == "TOKEN_EXPIRED"
@@ -265,7 +265,7 @@ def test_expired_tokens_are_swept(pol, clock):
     for i in range(5):
         pol.require_confirmation(f"t{i}", {"i": i})
     assert pol.pending_confirmations == 5
-    clock.advance(61)
+    clock.advance(301)
     assert pol.pending_confirmations == 0
 
 
@@ -304,7 +304,7 @@ def test_guard_rejects_token_for_other_action_or_payload(pol):
 
 def test_guard_token_expiry(pol, clock):
     pend = pol.guard("set_main_fader", "Main LR to -6 dB", {"db": -6.0}, None)
-    clock.advance(60)
+    clock.advance(301)
     with pytest.raises(PolicyError) as ei:
         pol.guard("set_main_fader", "Main LR to -6 dB", {"db": -6.0}, pend.confirm_token)
     assert ei.value.code == "TOKEN_EXPIRED"
