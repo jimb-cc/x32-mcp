@@ -54,7 +54,7 @@ ignore it.
 
 ## 4. Build status — update this table when you stop
 
-Status as of **2026-09-20 19:30 (Europe/London)** — full suite: **930 tests, all passing**. **M5 is COMPLETE (11/11)**. M5 is in progress against the real desk (see §4a).Legend: ✅ done & tests green · 🟡 written,
+Status as of **2026-09-20 21:40 (Europe/London)** — full suite: **934 tests, all passing**. M5 complete; **M7 first live test done** (see §4b). **M5 is COMPLETE (11/11)**. M5 is in progress against the real desk (see §4a).Legend: ✅ done & tests green · 🟡 written,
 tests not green / partial · ⬜ not started.
 
 | Module (DESIGN §) | Status | Notes |
@@ -139,6 +139,54 @@ holds a GEQ2 (CFS² provisioning should reuse it); PC is 192.168.1.231, desk 192
 **This desk uses firmware-4.x user routing** — `/config/routing/IN/*` reads `UIN*` and the real
 patch is `/config/userrout/in/NN` (ch 1 → local XLR 1, ch 2-3 → card/USB, ch 4 → AES50-A 1 =
 head amp 032, where the SM58's +44.5 dB gain sits). Do not assume channel N → head amp N−1.
+
+## 4b. M7 — first live CFS² test, 2026-09-20 (studio, SM58 into Alto tops on Main LR)
+
+**Outcome: CFS² caught real feedback for the first time.** Jim's account: the ring started, a
+notch killed it; he pushed the master higher, the next band up rang, and that was caught too.
+Then the notch budget (4) ran out. He confirmed there was **no genuine feedback below ~4.5 kHz**.
+
+Setup that worked: GEQ2 already in FX slot 5, inserted on Main LR; ch 4 (SM58, head amp 032,
++44.5 dB) the only mic physically connected; music playing quietly through the PA and sub as
+deliberate background noise; master started ~−25 dB.
+
+Four defects found and fixed (commits f43f10c, 56c34a7, 60b86d5, ddcfeb1):
+1. **RTA auto-gain was on** — the console normalises the analyser, so every band drifts together
+   and the detector read that as the growth signature of feedback. 337 detections in 600 s.
+   `set_rta_source` now forces auto-gain off and the detector to PEAK.
+2. **Established feedback was mathematically unreachable** — without growth the score caps at
+   w_prominence + w_persistence = 0.50, below the 0.7 threshold, so a plateaued howl could never
+   be emitted. A 60 dB-prominent 8 kHz ring sat at exactly 0.50 for 15 s. Added a prominence
+   override (≥ 25 dB for ≥ 6 frames emits regardless of growth). **This is what made the
+   successful catch possible** — run 2 ignored the identical situation.
+3. **Candidate gate below the noise floor** — `min_level_db` −60 vs a measured −51.7 dB floor.
+   Raised to −45. NOTE: that floor was Jim's background *music*, not room noise; the number is
+   right for the wrong reason and the frequency window below is the better fix.
+4. **GEQ inserted POST, downstream of the RTA tap** — a −15 dB cut moved the RTA by
+   −0.2/+0.4/+1.2 dB (nothing); the same cut PRE showed −5.9/−6.0/−3.9 dB. Provisioning now uses
+   PRE. Narrower than first claimed: when a notch breaks the loop the ring stops acoustically and
+   the RTA sees it wherever it taps, which is why cuts audibly worked; PRE only restores the
+   ability to *measure* a cut directly.
+
+**Next, and the highest-value change:** a frequency window for the detector (roughly 250 Hz–8 kHz).
+Both wasted notches were at 40 Hz and 80 Hz, where an SM58 into Alto tops physically cannot produce
+feedback, and they cost the budget that the real 5 kHz events needed. No threshold tuning required —
+just refuse to consider bands where feedback cannot occur.
+
+Also outstanding from tonight:
+- **Auto-calibrating the candidate gate** from a floor measured at arm time. Attempted and backed
+  out: it must run *after* the frame source starts (`_open_session` runs before that, and also on
+  `ring_out`'s preflight where frames never start), it needs a cap so a noisy room cannot deafen
+  the detector, and it left a reporting test failing that was not root-caused.
+- **`setup_ringout_eqs` reports a false failure**: it validates immediately after writing, before
+  the desk has applied `insert/on`, so a successful setup returns GEQ_VALIDATION_FAILED. Same
+  read-after-write race as elsewhere; needs a settle before the read-back.
+- **`discover_mics` cannot tell a connected mic from an empty channel.** It reported 7 candidates
+  when only ch 4 had a microphone plugged in — unmuted + routed + physical preamp looks identical
+  either way. Cross-checking candidates against actual meter activity would catch it (an unplugged
+  input reads near-silent, a live mic picks up room noise).
+- Re-test **with music playing** — it turned out to be a much more revealing test than a silent room.
+
 
 ## 5. How the build is driven
 
