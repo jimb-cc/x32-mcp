@@ -126,8 +126,8 @@ async def test_plan_setup_allocates_slot_5_l_r(desk):
     assert plan.buses == [1, 2] and plan.reuse == {} and plan.blockers == [] and plan.needs_tier2 is True and not plan.empty
     assert plan.type_loads == [{"slot": 5, "fx_type": "GEQ2", "current_type": "DES2"}]
     assert plan.inserts == [
-        {"target": "bus.1", "bus": 1, "sel": "FX5L", "on": True, "pos": "POST"},
-        {"target": "bus.2", "bus": 2, "sel": "FX5R", "on": True, "pos": "POST"},
+        {"target": "bus.1", "bus": 1, "sel": "FX5L", "on": True, "pos": "PRE"},
+        {"target": "bus.2", "bus": 2, "sel": "FX5R", "on": True, "pos": "PRE"},
     ]
     assert len(plan.allocations) == 1 and plan.allocations[0].slot == 5 and plan.allocations[0].sides == {"A": 1, "B": 2}
     assert plan.allocations[0].load_type is True
@@ -135,7 +135,7 @@ async def test_plan_setup_allocates_slot_5_l_r(desk):
     # three buses: a second slot for the odd one; 'main' is accepted as a bus spelling
     plan3 = await plan_setup(desk, [1, 2, "main"])
     assert [tl["slot"] for tl in plan3.type_loads] == [5, 6]
-    assert plan3.inserts[2] == {"target": "main.st", "bus": "main", "sel": "FX6L", "on": True, "pos": "POST"}
+    assert plan3.inserts[2] == {"target": "main.st", "bus": "main", "sel": "FX6L", "on": True, "pos": "PRE"}
 
 
 async def test_apply_setup_validates_and_is_idempotent(desk, conn, fakedesk, events):
@@ -147,7 +147,7 @@ async def test_apply_setup_validates_and_is_idempotent(desk, conn, fakedesk, eve
     await settle(conn)
     assert fakedesk.get("/fx/5/type") == 0  # fx_type_58: GEQ2 = 0
     assert fakedesk.value("/bus/01/insert/sel") == "FX5L" and fakedesk.value("/bus/02/insert/sel") == "FX5R"
-    assert fakedesk.get("/bus/01/insert/on") == 1 and fakedesk.value("/bus/02/insert/pos") == "POST"
+    assert fakedesk.get("/bus/01/insert/on") == 1 and fakedesk.value("/bus/02/insert/pos") == "PRE"  # PRE: the RTA taps post-EQ, so a POST insert is invisible to the detector (M7)
     status = await validate_ringout_eqs(desk, [1, 2])
     assert status[1].ok and status[2].ok and status[1].flat and status[2].flat
     assert status[1].insert.fx_slot == 5 and status[1].insert.side == "A" and status[1].insert.fx_type == "GEQ2"
@@ -163,11 +163,11 @@ async def test_apply_setup_validates_and_is_idempotent(desk, conn, fakedesk, eve
     # bus 3 pairs with a new slot (5 is taken by buses 1/2, both sides)
     plan3 = await plan_setup(desk, [1, 3])
     assert plan3.type_loads == [{"slot": 6, "fx_type": "GEQ2", "current_type": "P1A"}]
-    assert plan3.inserts == [{"target": "bus.3", "bus": 3, "sel": "FX6L", "on": True, "pos": "POST"}]
+    assert plan3.inserts == [{"target": "bus.3", "bus": 3, "sel": "FX6L", "on": True, "pos": "PRE"}]
     # a bus already on one side of a dual GEQ lends its free side to a partner
     await desk.set_insert("bus.2", sel="OFF", on=False)
     plan4 = await plan_setup(desk, [1, 4])
-    assert plan4.type_loads == [] and plan4.inserts == [{"target": "bus.4", "bus": 4, "sel": "FX5R", "on": True, "pos": "POST"}]
+    assert plan4.type_loads == [] and plan4.inserts == [{"target": "bus.4", "bus": 4, "sel": "FX5R", "on": True, "pos": "PRE"}]
 
 
 async def test_validate_reports_bypassed_insert_and_preflight_refuses(desk, conn, fakedesk, cfs):

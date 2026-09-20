@@ -289,6 +289,14 @@ def _descriptor(desk: Desk) -> Any:
     return d if d is not None else desk._d  # Desk has no public descriptor accessor yet
 
 
+# The ring-out GEQ must be inserted PRE, not POST. The RTA taps the strip post-EQ, and a POST
+# insert sits downstream of that tap: measured on a real X32 at M7, a -15 dB cut through a POST
+# insert moved the RTA by -0.2/+0.4/+1.2 dB (i.e. not at all), while the same cut PRE showed as
+# -5.9/-6.0/-3.9 dB. With a POST insert the detector is blind to its own notches, so it can never
+# verify decay and drives every ring to the -9 dB maximum whether the cut worked or not.
+_RINGOUT_INSERT_POS = "PRE"
+
+
 def _sel_token(slot: int, side: str) -> str:
     """``(5, "A")`` → ``"FX5L"`` (fx_routing_scenes.md §3.2: L = side A, R = side B)."""
     return f"FX{slot}{'L' if side == 'A' else 'R'}"
@@ -464,7 +472,7 @@ async def plan_setup(desk: Desk, buses: Sequence[int | str | Target]) -> SetupPl
             if (info.fx_slot, other) in used:
                 continue
             used[(info.fx_slot, other)] = t.key
-            plan.inserts.append({"target": t.key, "bus": bus_label(t), "sel": _sel_token(info.fx_slot, other), "on": True, "pos": "POST"})
+            plan.inserts.append({"target": t.key, "bus": bus_label(t), "sel": _sel_token(info.fx_slot, other), "on": True, "pos": _RINGOUT_INSERT_POS})
             plan.allocations.append(SlotAllocation(info.fx_slot, str(info.fx_type), str(info.fx_type), False,
                                                    {info.side or "A": _bus_of_key(info.target), other: bus_label(t)}))
             need.remove(t)
@@ -485,7 +493,7 @@ async def plan_setup(desk: Desk, buses: Sequence[int | str | Target]) -> SetupPl
             plan.type_loads.append({"slot": slot, "fx_type": load_type, "current_type": fx_type})
         for side, t in zip(("A", "B"), pair):
             used[(slot, side)] = t.key
-            plan.inserts.append({"target": t.key, "bus": bus_label(t), "sel": _sel_token(slot, side), "on": True, "pos": "POST"})
+            plan.inserts.append({"target": t.key, "bus": bus_label(t), "sel": _sel_token(slot, side), "on": True, "pos": _RINGOUT_INSERT_POS})
     for t in need:
         plan.blockers.append(f"no free insert-only FX slot ({', '.join(map(str, preferred))}) left for {t.label}")
     plan.needs_tier2 = not plan.empty
