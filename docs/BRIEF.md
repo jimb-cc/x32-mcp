@@ -1,5 +1,11 @@
 # X32 MCP Server — Build Brief (verbatim from Jim, 2026-09-19)
 
+> **This is the original brief, kept unedited as the historical record.** Some decisions have
+> since changed in the light of testing against real hardware — notably the confirmation token
+> TTL (60 s here, now 300 s) and the ±6 dB guard (applied to all moves here, now only to relative
+> ones). Where this document and [`DESIGN.md`](DESIGN.md) or the
+> [README](../README.md) disagree, those are current and this is not.
+
 Project codename: `x32-mcp`. Owner: Jim. Target: Windows PC on the same LAN as a Behringer X32 Rack (+ SD16 stagebox via AES50). Goal: A local MCP server exposing safe, structured control of the X32 over its OSC protocol, designed so the tool surface can later be re-skinned as a Model Hardware Standard (MHS) driver.
 
 ## 1. Context & intent

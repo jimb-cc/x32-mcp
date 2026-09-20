@@ -1,0 +1,119 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1060 500" width="1060" height="500" role="img" aria-label="Feedback is an acoustic loop: a microphone feeds a wedge speaker, whose sound re-enters the microphone. If loop gain exceeds one, a frequency runs away in about a second. CFS2 taps the console's RTA, detects the runaway inside the server in under 100 milliseconds and cuts that band on a graphic EQ. The language model configures and supervises but is never inside the loop.">
+  <defs>
+    <marker id="l1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#b91c1c"/>
+    </marker>
+    <marker id="l2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#1d4ed8"/>
+    </marker>
+  </defs>
+  <style>
+    .t { font-family: "Segoe UI", Inter, system-ui, sans-serif; fill: #1e293b; }
+    .h { font-size: 16px; font-weight: 700; }
+    .d { font-size: 12.5px; fill: #64748b; }
+    .n { font-size: 13px; fill: #475569; }
+    .m { font-family: ui-monospace, Consolas, monospace; font-size: 12px; fill: #475569; }
+    .tag { font-size: 11.5px; font-weight: 700; letter-spacing: .05em; }
+    .box { fill: #fff; stroke: #cbd5e1; stroke-width: 1.5; }
+  </style>
+  <rect width="1060" height="500" rx="14" fill="#f7f8fa"/>
+
+  <text class="t h" x="36" y="38">CFS² — why the model is deliberately not in the loop</text>
+  <text class="t d" x="36" y="60">Acoustic feedback regenerates on every trip round the loop. From first audible ring to painful is roughly a second.</text>
+
+  <!-- the acoustic loop -->
+  <g transform="translate(36,86)">
+    <rect width="600" height="212" rx="10" fill="#fef2f2" stroke="#fca5a5" stroke-width="1.5"/>
+    <text class="t tag" x="18" y="26" fill="#b91c1c">THE ACOUSTIC LOOP — MILLISECONDS</text>
+
+    <!-- mic -->
+    <g transform="translate(46,54)">
+      <ellipse cx="18" cy="104" rx="19" ry="5" fill="#e2e8f0"/>
+      <line x1="18" y1="104" x2="18" y2="34" stroke="#475569" stroke-width="2.5"/>
+      <rect x="10" y="10" width="17" height="30" rx="8.5" fill="#475569"/>
+      <text class="t n" x="-2" y="126">mic</text>
+    </g>
+    <!-- desk -->
+    <g transform="translate(168,96)">
+      <rect class="box" width="118" height="58" rx="7"/>
+      <text class="t n" x="20" y="26">console</text>
+      <text class="t d" x="20" y="44">gain + EQ</text>
+    </g>
+    <!-- wedge -->
+    <g transform="translate(360,92)">
+      <path d="M0 66 L0 20 L86 0 L86 56 Z" fill="#fff" stroke="#cbd5e1" stroke-width="1.5"/>
+      <ellipse cx="44" cy="34" rx="17" ry="15" fill="#e2e8f0" stroke="#94a3b8" stroke-width="1.2"/>
+      <text class="t n" x="28" y="82">wedge</text>
+    </g>
+
+    <g stroke="#b91c1c" stroke-width="2.5" fill="none">
+      <line x1="92" y1="125" x2="162" y2="125" marker-end="url(#l1)"/>
+      <line x1="292" y1="125" x2="354" y2="125" marker-end="url(#l1)"/>
+      <!-- air path back to the mic -->
+      <path d="M404 92 C 404 46, 120 40, 74 92" marker-end="url(#l1)" stroke-dasharray="6 5"/>
+    </g>
+    <text class="t d" x="196" y="64" fill="#b91c1c">sound travels back through the air</text>
+    <text class="t d" x="18" y="196">If the round-trip gain exceeds 1 at any frequency, that frequency runs away — a howl or a ring.</text>
+  </g>
+
+  <!-- timing comparison -->
+  <g transform="translate(672,86)">
+    <rect width="352" height="212" rx="10" fill="#ffffff" stroke="#cbd5e1" stroke-width="1.5"/>
+    <text class="t tag" x="18" y="26" fill="#5b6b7f">WHY IT CANNOT GO THROUGH THE MODEL</text>
+
+    <text class="t n" x="18" y="58">detector, in-process</text>
+    <rect x="18" y="66" width="40" height="14" rx="3" fill="#15803d"/>
+    <text class="t m" x="66" y="78" fill="#15803d">&lt; 100 ms  detect → cut</text>
+
+    <text class="t n" x="18" y="112">a model round trip</text>
+    <rect x="18" y="120" width="300" height="14" rx="3" fill="#b91c1c"/>
+    <text class="t m" x="18" y="152" fill="#b91c1c">seconds — by then it has already howled</text>
+
+    <text class="t d" x="18" y="184">So the loop is closed in Python. The model</text>
+    <text class="t d" x="18" y="200">configures, starts, narrates and stops it.</text>
+  </g>
+
+  <!-- the server's job -->
+  <g transform="translate(36,320)">
+    <rect width="988" height="152" rx="10" fill="#eff6ff" stroke="#93c5fd" stroke-width="1.5"/>
+    <text class="t tag" x="18" y="26" fill="#1d4ed8">WHAT THE SERVER DOES, 20 TIMES A SECOND</text>
+
+    <g transform="translate(18,44)">
+      <rect class="box" width="176" height="70" rx="8"/>
+      <text class="t n" x="14" y="26">1 · listen</text>
+      <text class="t d" x="14" y="46">/meters/15 RTA</text>
+      <text class="t d" x="14" y="62">100 bands, int16 dB</text>
+    </g>
+    <g transform="translate(222,44)">
+      <rect class="box" width="196" height="70" rx="8"/>
+      <text class="t n" x="14" y="26">2 · detect</text>
+      <text class="t d" x="14" y="46">prominence ≥ 12 dB over</text>
+      <text class="t d" x="14" y="62">neighbours · rising · persistent</text>
+    </g>
+    <g transform="translate(446,44)">
+      <rect class="box" width="196" height="70" rx="8"/>
+      <text class="t n" x="14" y="26">3 · distinguish</text>
+      <text class="t d" x="14" y="46">a ring keeps growing;</text>
+      <text class="t d" x="14" y="62">a held note plateaus</text>
+    </g>
+    <g transform="translate(670,44)">
+      <rect class="box" width="150" height="70" rx="8"/>
+      <text class="t n" x="14" y="26">4 · cut</text>
+      <text class="t d" x="14" y="46">−3 dB on the</text>
+      <text class="t d" x="14" y="62">nearest GEQ band</text>
+    </g>
+    <g transform="translate(848,44)">
+      <rect width="122" height="70" rx="8" fill="#1e293b"/>
+      <text class="t n" x="14" y="26" fill="#f8fafc">5 · verify</text>
+      <text class="t d" x="14" y="46" fill="#cbd5e1">did it decay?</text>
+      <text class="t d" x="14" y="62" fill="#cbd5e1">deepen, or stop</text>
+    </g>
+    <g stroke="#1d4ed8" stroke-width="1.8" fill="none">
+      <line x1="196" y1="79" x2="218" y2="79" marker-end="url(#l2)"/>
+      <line x1="420" y1="79" x2="442" y2="79" marker-end="url(#l2)"/>
+      <line x1="644" y1="79" x2="666" y2="79" marker-end="url(#l2)"/>
+      <line x1="822" y1="79" x2="844" y2="79" marker-end="url(#l2)"/>
+    </g>
+    <text class="t d" x="18" y="136">Hard limits in policy.py: cuts only, never boosts · −9 dB max per band · a notch budget per bus · only the bus under test.</text>
+  </g>
+</svg>

@@ -91,7 +91,8 @@ Jim watches the front panel / X32-Edit and confirms. **Hold a state until he con
 window was missed once because he was reading the message that announced it.
 
 Done:
-- **Reads** — full 2101-section `/node` sweep parses in 0.28 s, 0 missing, 0 unparsed fields. This
+- **Reads** — full `/node` sweep parses in 0.28 s, 0 missing, 0 unparsed fields (2101 sections at the
+  time; 2103 now that user routing is declared). This
   retires the FW 4.x node-text risk (the parser was only verified against a FW 2.x scene file).
 - **Meters** — `/meters/15` (100 × int16, dB×256) and `/meters/1` (96 × float32) both stream at
   20 fps and decode; values were all floor/zero because the desk was silent.

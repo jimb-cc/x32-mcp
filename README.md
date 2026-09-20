@@ -1,77 +1,288 @@
+<p align="center">
+  <img src="docs/img/hero.svg" alt="A live sound rig: stage mics feed an SD16 stagebox, which connects over AES50 to an X32 Rack mixer driving the PA. Alongside, a PC runs the x32-mcp server, talking OSC over UDP to the mixer and MCP to Claude." width="100%">
+</p>
+
 # x32-mcp
 
-An MCP server that gives Claude (Desktop or Claude Code) safe, structured control of a
-Behringer X32 / M32 mixer over its OSC protocol. It runs on the Windows PC next to the desk,
-talks UDP to the console (port 10023) and exposes 51 tools that speak engineering units — dB,
-Hz, ms, 1-based channel numbers, enum tokens — behind a safety policy that is enforced in
-code, not by prompting: reads are always allowed, mix moves are clamped and ramped, and anything
-that could take a show down (mains, scene recall/save, routing, restores) needs a single-use
-confirmation token that the user has to agree to first. The desk stays the source of truth;
-X32-Edit and the front panel can be used at the same time.
+An MCP server that lets Claude operate a **live sound mixing console** — safely enough to use at a
+real gig, with the safety rules enforced in code rather than in a prompt.
 
-The first-class feature on top of the mixer control is **CFS²** — the Claude Feedback
-Suppression System: a feedback ring-out assistant that watches the console's own RTA
-(`/meters/15`), detects regenerative feedback inside the server (never through the model,
-< 100 ms detect-to-cut) and notches it out on a dual-mono 31-band GEQ inserted on the monitor
-bus under test. Three levels: `feedback_watch` (you drive the gain), `ring_out` (automatic,
-one bus) and `ring_out_system` (every wedge, then the mains). A read-only dark-theme dashboard
-on the LAN shows the live RTA, a waterfall, the notches and the detector state so the operator
-at FOH can see what it is doing from a tablet. It is a *soundcheck* tool — not a mid-set
-automatic suppressor (see the non-goals).
+It talks to a Behringer X32 Rack over the console's own network protocol, exposes 51 tools that
+speak in decibels and channel numbers rather than raw floats, and refuses to do anything
+dangerous without a human saying yes. On top of that sits **CFS²**, a feedback-suppression
+assistant that closes a real-time control loop *inside the server*, because a language model is
+three orders of magnitude too slow to sit in that loop.
+
+It has been verified against real hardware, which found five defects that testing against a
+simulator never would have. Those are written up in
+[What real hardware taught us](#what-real-hardware-taught-us) — probably the most interesting
+section here if you build agent tooling.
+
+---
 
 ## Contents
 
-- [Architecture](#architecture)
-- [Requirements and install](#requirements-and-install)
-- [Running without the desk: the fake desk](#running-without-the-desk-the-fake-desk)
-- [Hooking it up to Claude](#hooking-it-up-to-claude)
-- [Environment variables](#environment-variables)
-- [Tool reference](#tool-reference)
-- [Safety model](#safety-model)
-- [Snapshots and diffs](#snapshots-and-diffs)
-- [Patch plans](#patch-plans)
-- [CFS² — feedback ring-out](#cfs--feedback-ring-out)
-- [Dashboard](#dashboard)
-- [Termux (deferred)](#termux-deferred)
-- [Development](#development)
-- [Milestones](#milestones)
-- [Operational notes](#operational-notes)
+**Start here if this domain is new to you**
+· [If you don't work in audio](#if-you-dont-work-in-audio-start-here)
+· [Why this is an interesting MCP problem](#why-this-is-an-interesting-mcp-problem)
+· [Architecture](#architecture)
+· [Safety model](#safety-model)
+· [CFS² — the feedback problem](#cfs-feedback)
+· [What real hardware taught us](#what-real-hardware-taught-us)
+
+**Running it**
+· [Requirements and install](#requirements-and-install)
+· [The fake desk](#running-without-the-desk-the-fake-desk)
+· [Hooking it up to Claude](#hooking-it-up-to-claude)
+· [Environment variables](#environment-variables)
+· [Dashboard](#dashboard)
+
+**Reference**
+· [Tool reference](#tool-reference) · [Safety model — reference](#safety-reference)
+· [Snapshots and diffs](#snapshots-and-diffs) · [Patch plans](#patch-plans)
+· [CFS² — operating reference](#cfs-reference)
+· [Development](#development) · [Milestones](#milestones) · [Operational notes](#operational-notes)
+
+**Other documents**
+· [`docs/DESIGN.md`](docs/DESIGN.md) — the binding module contract every module was built against
+· [`docs/BRIEF.md`](docs/BRIEF.md) — the original build brief
+· [`docs/GIG_CHECKLIST.md`](docs/GIG_CHECKLIST.md) — pre-show routine, and the M5/M7 verification protocols
+· [`docs/HANDOVER.md`](docs/HANDOVER.md) — state of the build, for whoever picks it up next
+· [`docs/research/`](docs/research/) — the verified OSC protocol research
+
+---
+
+## If you don't work in audio, start here
+
+Most of this README assumes you know what a mixing console does. Here is the whole domain in a
+few paragraphs.
+
+**What a mixing console is.** Microphones and instruments on stage produce electrical signals.
+A console takes those inputs — 32 of them here — and for each one adjusts the level, shapes the
+tone, and controls the dynamics. It then sums them into several different outputs at once:
+
+- the **main** mix, which is what the audience hears through the PA speakers;
+- several **monitor mixes**, one per performer, fed to wedge speakers on the floor or to in-ear
+  monitors. The drummer and the singer want to hear very different things, so each monitor mix is
+  an independent set of levels drawn from the same 32 inputs.
+
+The signal path for one input is roughly **preamp gain → EQ → dynamics → fader → sent to the
+outputs**. The vocabulary below maps onto that:
+
+| Term | What it means |
+|---|---|
+| **channel** | One input. Channel 4 might be the lead vocal microphone. |
+| **fader** | The level control for a channel or output, in **dB**. Named after the sliders on a traditional desk. |
+| **bus** / **mix** | An output that inputs are summed into. Often a monitor mix for one performer. |
+| **send** | How much of a given channel goes into a given bus. "More kick in Tony's ears" = raise the send from the kick-drum channel to Tony's monitor bus. |
+| **preamp gain** | Analogue amplification applied before anything else. A microphone signal is tiny and needs roughly +45 dB before it is usable. |
+| **mute** | Silence a channel or an output. |
+| **scene** | A saved snapshot of the whole console, recalled between bands. |
+| **RTA** | Real-time analyser — a live spectrum of what the console hears, in 100 frequency bands. |
+| **feedback** | The howl when a microphone hears the speaker it is feeding. Explained [below](#cfs-feedback). |
+| **FOH** | Front of house — where the engineer stands, mixing for the audience. |
+
+**Why decibels matter.** dB is logarithmic: +10 dB is roughly twice as loud, −∞ dB is silence.
+It is also not linear on the wire. The console stores a fader as a float from 0.0 to 1.0, mapped
+to −∞…+10 dB by a four-segment piecewise curve. Every tool here speaks dB, and the raw floats
+never escape the bottom two layers — getting that conversion slightly wrong makes every reported
+level subtly false, so it is unit-tested against the console's own value table.
+
+**The specific console.** The X32 Rack is a rack-mounted 32-channel digital mixer. Unlike a
+traditional desk it has **no physical faders** — it is designed to be driven from software, a
+tablet, or a separate control surface. An **SD16** stagebox sits on stage holding 16 more
+microphone preamps, connected over a single cable (AES50). Every parameter in the console — 491
+of them in our descriptor — is readable and writable over the network.
+
+**Why this is risky.** A mixing console is a real-time, physical, public system:
+
+- Mistakes are **instantly audible** to a room full of people, and are not undoable in any
+  meaningful sense. You can put the fader back, but everyone already heard it.
+- Some mistakes are **physically harmful**. Feedback at full level can damage hearing and destroy
+  speaker drivers. Sending +48 V phantom power into the wrong microphone can wreck it.
+- The operator is **busy**. At a gig the engineer has seconds, not minutes, and is often holding a
+  tablet in one hand.
+
+Irreversible, physical, time-critical, operated under pressure — that combination shapes every
+design decision below.
+
+---
+
+## Why this is an interesting MCP problem
+
+Most MCP servers read and write data. This one drives a physical device where a bad write is heard
+by a hundred people. That changes several things.
+
+**1. The model cannot be trusted with the limits, so the server holds them.** Every safety rule
+lives in `policy.py` and every write passes through it. A jailbroken prompt, a confused model or a
+runaway loop cannot widen a clamp, skip a confirmation or exceed the write budget. The tool
+descriptions *explain* the rules; the server *enforces* them.
+
+**2. Some loops are too fast for a model.** Acoustic feedback regenerates in milliseconds. Asking
+a model what to do about it guarantees you are too late. CFS² therefore runs detect-and-cut as a
+background task, and gives the model the roles it is genuinely good at: deciding whether to start,
+explaining what is happening, and deciding when to stop.
+
+**3. Confirmation has to fit a human conversation.** Guarded actions return a token that a second
+call must present. We first gave those tokens a 60-second life — and during hardware testing one
+expired while the operator was reading the prompt on his phone. The deeper hazard is what that
+invites: *an agent that quietly re-mints an expired token has disabled the gate entirely.* The fix
+was to make the TTL fit the human loop (5 minutes), not to teach the agent to work around it.
+
+**4. Units are an interface, not a detail.** The model sees `-6.0 dB`, `1 kHz`, `Q 4.0`,
+`channel 5`, `muted: true`. It never sees `0.6`, and never sees the inverted on/off convention the
+wire actually uses (`mix/on = 0` means muted). Every ambiguity at that boundary is a chance for the
+model to confidently report something false.
+
+**5. The device is the source of truth.** The engineer is also touching the console — from a
+control surface and the front panel — while the server is running. There is no shadow state beyond
+a two-second read cache, invalidated by the console's own change notifications.
+
+---
 
 ## Architecture
 
-```
-Claude (Desktop / Claude Code)
-        │  MCP (stdio)
-        ▼
-x32-mcp server (Python 3.12, Windows)
-  ├── mcp layer        — official `mcp` Python SDK (2.x), stdio transport      server.py
-  ├── policy layer     — safety tiers, clamps, confirmation gates, rate limit  policy.py
-  ├── desk facade      — typed reads/writes in engineering units               desk.py
-  ├── CFS²             — RTA metering → detector → GEQ notches, reports         meters.py detector.py provision.py cfs.py
-  ├── dashboard        — read-only web page + WebSocket push (port 8032)        webui.py webui/index.html
-  ├── device layer     — X32Connection: one UDP socket, /xremote heartbeat      connection.py osc.py
-  └── descriptor       — device.yaml: scales, parameter map, limits, guards     descriptor.py scales.py nodes.py
-        │  OSC / UDP :10023
-        ▼
-   X32 Rack  ──AES50──  SD16
+<p align="center">
+  <img src="docs/img/architecture.svg" alt="Layered architecture: Claude talks MCP over stdio to the server; the tool layer delegates to a policy layer, a desk facade and a device layer speaking OSC; a device.yaml descriptor feeds every layer, and CFS2 runs as a background task." width="100%">
+</p>
+
+The console speaks **OSC** (Open Sound Control — a simple binary format: an address such as
+`/ch/01/mix/fader`, a type-tag string, and arguments) over **UDP port 10023**. Behringer never
+published the protocol; it was reverse-engineered by Patrick-Gilles Maillot, and this
+implementation is built from his C sources and verified against a real console. The research is in
+[`docs/research/`](docs/research/) — about 4,200 lines, every numeric claim re-derived by a second
+pass and tagged `VERIFIED` or `UNCONFIRMED`.
+
+### Descriptor-driven — the MHS-shaped part
+
+All device knowledge lives in [`device.yaml`](device.yaml), not in Python:
+
+```yaml
+ch:
+  mix/fader:      {osc: f, scale: fader, node: db1,   tier: 1, clamp: {max: 5}}
+  mix/on:         {osc: i, scale: bool,  node: onoff, tier: 1, inverted_mute: true}
+  "eq/{band}/f":  {osc: f, scale: freq,  node: freq,  tier: 1}
 ```
 
-Design decisions that shape everything else:
+Each parameter declares its wire type, its **scale** (how 0.0–1.0 maps to dB, Hz or an enum), how
+the console prints it as text, its **safety tier** and its **clamp**. The Python is a generic OSC
+read/write engine plus a policy enforcer; it has no idea what a channel is.
 
-- **Descriptor-driven.** All device knowledge lives in [`device.yaml`](device.yaml); the Python
-  is a generic OSC read/write engine plus a policy enforcer. The tool surface is shaped so it
-  can later be re-skinned as a Model Hardware Standard driver.
-- **One UDP socket.** The X32 replies to the source port of the request, so one
-  `DatagramProtocol` does all sending and receiving, including pushed `/xremote` updates and
-  meter blobs. Requests are matched to replies by address with a 500 ms timeout and retries;
-  bulk state comes from `/node` lines.
-- **No shadow state.** A 2 s read cache, invalidated by our own writes and by pushed updates;
-  the desk is always right.
-- **stdout is the MCP wire.** Nothing under `src/x32mcp/` prints; logging goes to stderr.
-- **Never hang.** Every network wait has a timeout; every tool runs under a deadline and
-  returns `{"ok": false, "error": {...}}` instead of blocking.
-- Protocol ground truth is Patrick-Gilles Maillot's *Unofficial X32/M32 OSC Remote Protocol*
-  and his C sources, re-derived and verified in [`docs/research/`](docs/research/).
+That separation is deliberate: it mirrors the Model Hardware Standard shape — standardised
+read/write primitives plus a driver descriptor carrying the device's characteristics and safety
+limits. A future MHS driver should be a re-packaging of `device.yaml` and the device layer rather
+than a rewrite. It also makes the safety limits **data you can audit** instead of behaviour buried
+in code.
+
+| Module | Responsibility |
+|---|---|
+| `server.py` | 51 MCP tools. Thin — parse arguments, delegate, format the envelope. |
+| `policy.py` | Tiers, clamps, ramps, confirmation tokens, rate limiting, show mode. |
+| `desk.py` | Typed reads and writes in engineering units. Mute inversion lives here. |
+| `connection.py`, `osc.py` | One UDP socket, heartbeat, request/reply matching, reconnect backoff. |
+| `descriptor.py`, `scales.py` | `device.yaml` loader; value scaling including the fader taper. |
+| `nodes.py` | The console's own text format: parse, render, snapshot, diff. |
+| `meters.py`, `detector.py`, `cfs.py`, `provision.py` | CFS²: metering, detection, the ring-out state machine. |
+| `webui.py` | Read-only dashboard. |
+| `fakedesk.py` | A working console emulator, so the whole suite runs with no hardware. |
+
+---
+
+## Safety model
+
+<p align="center">
+  <img src="docs/img/safety-tiers.svg" alt="Three safety tiers: Tier 0 read always allowed; Tier 1 mix moves clamped, ramped and rate limited; Tier 2 guarded actions requiring a single-use confirmation token. panic() is deliberately Tier 1 so it can never be blocked." width="100%">
+</p>
+
+Beyond the tiers, four mechanisms matter:
+
+- **Ramps, not steps.** A level change interpolates over 300 ms by default — partly so it sounds
+  like a mix move rather than a click, partly so a motorised fader *glides*, which matters when
+  you are filming it.
+- **Snapshot before the first write.** The first Tier-1 or Tier-2 write of a session automatically
+  dumps the entire console to `snapshots/`. That is the undo button, and it costs 0.28 s.
+- **`panic()` is Tier 1 on purpose.** It mutes all 24 outputs and is exempt from the rate limiter
+  and from show mode. The one action that must never be blocked isn't.
+- **Show mode.** For mid-set use: tightens relative moves to ±3 dB and refuses scene recalls and
+  ring-outs outright, token or no token.
+
+---
+
+<a id="cfs-feedback"></a>
+
+## CFS² — the feedback problem
+
+<p align="center">
+  <img src="docs/img/cfs2-loop.svg" alt="Feedback is an acoustic loop from microphone to console to wedge speaker and back through the air. CFS2 detects the runaway inside the server in under 100 milliseconds and cuts that frequency band, because a model round trip takes seconds." width="100%">
+</p>
+
+**The problem.** A microphone feeds a speaker; the speaker's sound reaches the microphone; round it
+goes again. If the round-trip gain exceeds 1 at any frequency, that frequency grows on every lap —
+first a ring, then a howl, in about a second. It is the most common way live sound goes wrong, and
+the standard remedy is to find the offending frequencies and cut them before the show: **ringing
+out**.
+
+**What CFS² does.** It subscribes to the console's RTA (100 bands, 20 frames a second), watches for
+the signature of a runaway — a band far above its neighbours, *persistent*, and *still growing* —
+and cuts that band on a graphic EQ. The growth test is what separates feedback from music: a
+sustained vocal note is loud and persistent but **plateaus**; feedback keeps climbing.
+
+Three levels, each building on the last:
+
+| Tool | Tier | Who drives the gain |
+|---|---|---|
+| `feedback_watch(bus)` | T1 | **You do.** The detector watches and notches. "I'm bringing up David's wedge — catch anything that rings." |
+| `ring_out(bus)` | T2 | **The server does**, in 1 dB steps with a settling pause, notching as it goes, then backing off 3 dB for safety. |
+| `ring_out_system()` | T2 | Every monitor bus in turn, then the mains, with one consolidated report. |
+
+**Hard limits, in `policy.py`:** cuts only and never boosts · −9 dB maximum per band · a notch
+budget per bus · only the bus under test · halt and restore the starting level if the console
+disappears mid-run.
+
+**A deliberate non-goal:** this is a *soundcheck* tool, not a mid-performance suppressor. During a
+show that job belongs to the dedicated hardware in the rack, which reacts faster and fails safe.
+
+---
+
+## What real hardware taught us
+
+Every module was built and tested against `fakedesk.py`, our own console emulator — **930 tests,
+all green, no hardware required**. Then came the manual verification protocol against a real X32
+Rack (firmware 4.13). **It found five defects the emulator could not have surfaced**, which is the
+most transferable lesson here.
+
+**1. Ambiguous nulls.** `fader_db` returned `null` both for "this fader is fully down" and for "we
+could not read it". On the real console two strips were legitimately at −∞, so "is the vocal up?"
+produced `null` — which a model can only report as *unknown*. Fixed by representing −∞ explicitly.
+The same bug then turned up a second time in the CFS² layer.
+
+**2. A rate limiter throttling itself.** Ramps emitted one step per 20 ms, which is exactly the
+50 writes/second budget — no headroom, so the limiter stretched a 12-second ramp to 19.3 s. Worse,
+a ramp saturated the write budget and would have crowded out a CFS² notch. Most of those writes
+were no-ops anyway, because the console's fader grid is coarser than the ramp's steps. Skipping
+unchanged values fixed the timing and freed the budget.
+
+**3. A guard that blocked the main use case.** The ±6 dB "don't slam a level" rule was applied to
+absolute moves as well as relative ones. On real hardware an unused send rests around −84 dB, so
+*every* attempt to raise one was refused as a "+72 dB jump" — meaning "more kick in Tony's ears"
+only worked if kick was already in Tony's ears. The guard now applies to relative moves, where a
+typo actually does the damage.
+
+**4. A confirmation TTL shorter than a conversation.** Described
+[above](#why-this-is-an-interesting-mcp-problem).
+
+**5. A routing assumption that was silently wrong.** Resolving "which physical preamp feeds this
+channel?" assumed the classic routing blocks. This console uses firmware-4.x *user routing*, so
+every channel resolved to *no preamp at all*. That broke phantom power — and would have broken
+CFS² mic discovery, which decides what counts as a live microphone by asking whether a physical
+preamp feeds it. On this console it would have classed the DJ's USB feeds as microphones and rung
+out against them. It was caught only because a snapshot diff showed the operator's own preamp gain
+sitting on a preamp the code insisted did not exist.
+
+None of these were logic errors the tests could have caught, because each one was a wrong belief
+about the world that the emulator faithfully reproduced.
+
+---
 
 ## Requirements and install
 
@@ -241,7 +452,7 @@ Every tool returns a JSON envelope `{"ok": bool, "summary": str, ...}`. Single-o
 are merged into the envelope (`get_channel` → `{ok, summary, target, name, fader_db, muted, ...}`),
 lists sit under a named key (`sends`, `scenes`, `snapshots`, `changes`, `reports`, `mics`,
 `items`, `consoles`). Failures are `{"ok": false, "error": {"code", "message", ...details},
-"summary"}` — tools never raise to the client. Levels are `*_db` floats (`null` for fully down)
+"summary"}` — tools never raise to the client. Levels are `*_db` floats (`"-oo"` when fully down, `null` only when *not read*)
 with a text sibling (`fader`, `before`, `after`: `"-oo"`, `"-6.0"`, `"+2.0"`); −∞ is always
 spelled `"-oo"` in JSON. A *target* is `ch.5`, `bus.3`, `main.st`, `main.m`, `dca.1`, `mtx.2`,
 `auxin.1`, `fxrtn.1` (also `channel 5`, `5`, `aux 3`, `lr`, `mono`) or a strip name
@@ -349,7 +560,9 @@ snapshot-before-first-write) · **T2** guarded (confirmation token, see the safe
 `RELATIVE_TOO_LARGE`, `SHOW_MODE_BLOCKS`, `RATE_LIMITED`, `PREFLIGHT_FAILED` (with
 `preflight`), `BUSY`, `NO_STAGES`, `IO_ERROR`, `INTERNAL`.
 
-## Safety model
+<a id="safety-reference"></a>
+
+## Safety model — reference
 
 Enforced by [`policy.py`](src/x32mcp/policy.py) on every write path; the limits are the
 `policy` block of `device.yaml`.
@@ -456,7 +669,9 @@ free); input sources only with `include_source=true` (Tier 2). `export_patch_pla
 the desk back into the file while keeping the human-only columns. `discover_mics`,
 `feedback_watch` and `ring_out` take `patch_file=` to cross-check the open-mic list.
 
-## CFS² — feedback ring-out
+<a id="cfs-reference"></a>
+
+## CFS² — operating reference
 
 **How it works.** The console's RTA (`/meters/15`: 100 log-spaced bands, 20 Hz–20 kHz, one
 frame every 50 ms, values in dB) is pointed at the bus under test (`/-prefs/rta/source`, post-EQ,
@@ -641,17 +856,27 @@ timeout; policy is code, not prompt.
 
 ## Milestones
 
-| | Milestone | Status |
+| | | Status |
 |---|---|---|
-| M1 | Codec + connection (`/info` round trip, scales taper round-trips) | Built; unit tests + fake desk |
-| M2 | Read surface (all Phase 1 tools, `dump_desk_state`) | Built; full dump of the fake desk in the tests |
-| M3 | Policy + writes (tiers, clamps, ramps, snapshot-before-write, rate limit, panic) | Built; policy unit tests + desk/server integration tests |
-| M4 | Scenes + snapshots (recall/save with confirmation, diff in English, restore, show mode) | Built; tested against the fake desk |
-| M5 | **Real-desk verification** (reads match X32-Edit, ramp glides, mute semantics, guarded prompts, `panic()` < 200 ms, snapshot/restore round trip) | **Pending** — manual protocol in [`docs/GIG_CHECKLIST.md`](docs/GIG_CHECKLIST.md#m5--real-desk-verification-protocol) |
-| M6 | Meters + detector offline (`/meters/15` parsing, RTA tools, detector on synthetic streams, notch state machine) | Built; unit tests + closed-loop CFS² tests on the fake desk |
-| M7 | **CFS² on the real desk** (studio) | **Pending** — manual protocol in [`docs/GIG_CHECKLIST.md`](docs/GIG_CHECKLIST.md) (section "M7 — CFS² studio protocol") |
-| M8 | Dashboard (synthetic then live; waterfall shows a scripted ring before the detector trips) | Built; message-schema and WebSocket tests; the tablet-over-LAN check is part of M5/M7 |
-| M9 | Phase 4 QoL (labels, patch plans, channel config, resources) | Built. Backlog: Termux host, sentry mode, headset talkback |
+| M1 | OSC codec + connection | done |
+| M2 | Read surface, full desk dump | done |
+| M3 | Policy + Tier-1 writes (tiers, clamps, ramps) | done |
+| M4 | Scenes, snapshots, plain-English diffs | done |
+| **M5** | **Real-desk verification** | **done — 11/11, see [What real hardware taught us](#what-real-hardware-taught-us)** |
+| M6 | Meters + detector against synthetic RTA streams | done |
+| M7 | CFS² in the studio, real mic and wedge | outstanding |
+| M8 | Dashboard | done |
+| M9 | Quality of life | mostly done |
+
+M5 was run against an X32 Rack on firmware 4.13: full 2,103-section read in 0.28 s with nothing
+unparsed, ramps verified gliding on a control surface, mute semantics confirmed the right way
+round, guarded tokens 7/7, `panic()` at 0.4 ms with all 24 outputs verified muted, a faithful
+snapshot/restore round trip, and automatic recovery 16.7 s after the network cable was pulled.
+
+Still outstanding: **M7** (CFS² with a real microphone and wedge), scene recall (this console is
+set to CUES rather than SCENES, so that needs flipping first), and a deliberate **power-cycle**
+test — the cable pull proved the connection layer recovers, but not that console *state* survives
+the PSU fault that prompted the requirement.
 
 ## Operational notes
 
