@@ -360,6 +360,59 @@ params:
     routing/IN/17-24:   {osc: i, enum: routing_in, node: enum, tier: 2}
     routing/IN/25-32:   {osc: i, enum: routing_in, node: enum, tier: 2}
     routing/IN/AUX:     {osc: i, enum: routing_in_aux, node: enum, tier: 2}
+    # Firmware-4.x USER routing. When a /config/routing/IN block reads UIN*, the real per-input
+    # patch lives here: one 1-based source number per user input (1..32 local XLR, 33..80 AES50-A,
+    # 81..128 AES50-B, >128 card/USB). Resolving a channel to its head amp needs it, and both
+    # set_phantom and CFS² mic discovery depend on that. Seen on X32RACK-Jim (FW 4.13) at M5:
+    # "/config/userrout/in 1 129 130 33 34 ..." — ch 4 -> 33 -> head amp 032, where its SM58 gain is.
+    userrout/in/01:   {osc: i, scale: int, node: int, tier: 2}
+    userrout/in/02:   {osc: i, scale: int, node: int, tier: 2}
+    userrout/in/03:   {osc: i, scale: int, node: int, tier: 2}
+    userrout/in/04:   {osc: i, scale: int, node: int, tier: 2}
+    userrout/in/05:   {osc: i, scale: int, node: int, tier: 2}
+    userrout/in/06:   {osc: i, scale: int, node: int, tier: 2}
+    userrout/in/07:   {osc: i, scale: int, node: int, tier: 2}
+    userrout/in/08:   {osc: i, scale: int, node: int, tier: 2}
+    userrout/in/09:   {osc: i, scale: int, node: int, tier: 2}
+    userrout/in/10:   {osc: i, scale: int, node: int, tier: 2}
+    userrout/in/11:   {osc: i, scale: int, node: int, tier: 2}
+    userrout/in/12:   {osc: i, scale: int, node: int, tier: 2}
+    userrout/in/13:   {osc: i, scale: int, node: int, tier: 2}
+    userrout/in/14:   {osc: i, scale: int, node: int, tier: 2}
+    userrout/in/15:   {osc: i, scale: int, node: int, tier: 2}
+    userrout/in/16:   {osc: i, scale: int, node: int, tier: 2}
+    userrout/in/17:   {osc: i, scale: int, node: int, tier: 2}
+    userrout/in/18:   {osc: i, scale: int, node: int, tier: 2}
+    userrout/in/19:   {osc: i, scale: int, node: int, tier: 2}
+    userrout/in/20:   {osc: i, scale: int, node: int, tier: 2}
+    userrout/in/21:   {osc: i, scale: int, node: int, tier: 2}
+    userrout/in/22:   {osc: i, scale: int, node: int, tier: 2}
+    userrout/in/23:   {osc: i, scale: int, node: int, tier: 2}
+    userrout/in/24:   {osc: i, scale: int, node: int, tier: 2}
+    userrout/in/25:   {osc: i, scale: int, node: int, tier: 2}
+    userrout/in/26:   {osc: i, scale: int, node: int, tier: 2}
+    userrout/in/27:   {osc: i, scale: int, node: int, tier: 2}
+    userrout/in/28:   {osc: i, scale: int, node: int, tier: 2}
+    userrout/in/29:   {osc: i, scale: int, node: int, tier: 2}
+    userrout/in/30:   {osc: i, scale: int, node: int, tier: 2}
+    userrout/in/31:   {osc: i, scale: int, node: int, tier: 2}
+    userrout/in/32:   {osc: i, scale: int, node: int, tier: 2}
+    userrout/out/01:  {osc: i, scale: int, node: int, tier: 2}
+    userrout/out/02:  {osc: i, scale: int, node: int, tier: 2}
+    userrout/out/03:  {osc: i, scale: int, node: int, tier: 2}
+    userrout/out/04:  {osc: i, scale: int, node: int, tier: 2}
+    userrout/out/05:  {osc: i, scale: int, node: int, tier: 2}
+    userrout/out/06:  {osc: i, scale: int, node: int, tier: 2}
+    userrout/out/07:  {osc: i, scale: int, node: int, tier: 2}
+    userrout/out/08:  {osc: i, scale: int, node: int, tier: 2}
+    userrout/out/09:  {osc: i, scale: int, node: int, tier: 2}
+    userrout/out/10:  {osc: i, scale: int, node: int, tier: 2}
+    userrout/out/11:  {osc: i, scale: int, node: int, tier: 2}
+    userrout/out/12:  {osc: i, scale: int, node: int, tier: 2}
+    userrout/out/13:  {osc: i, scale: int, node: int, tier: 2}
+    userrout/out/14:  {osc: i, scale: int, node: int, tier: 2}
+    userrout/out/15:  {osc: i, scale: int, node: int, tier: 2}
+    userrout/out/16:  {osc: i, scale: int, node: int, tier: 2}
     routing/PLAY/1-8:   {osc: i, enum: routing_in, node: enum, tier: 2}
     routing/PLAY/9-16:  {osc: i, enum: routing_in, node: enum, tier: 2}
     routing/PLAY/17-24: {osc: i, enum: routing_in, node: enum, tier: 2}
@@ -609,6 +662,8 @@ nodes:
   # ---- console config (fx_routing_scenes.md §4-§5, §9; scene1.scn lines 7-15)
   - {family: config, path: "/config/routing", fields: [routing/routswitch]}
   - {family: config, path: "/config/routing/IN", fields: [routing/IN/1-8, routing/IN/9-16, routing/IN/17-24, routing/IN/25-32, routing/IN/AUX]}
+  - {family: config, path: "/config/userrout/in", fields: [userrout/in/01, userrout/in/02, userrout/in/03, userrout/in/04, userrout/in/05, userrout/in/06, userrout/in/07, userrout/in/08, userrout/in/09, userrout/in/10, userrout/in/11, userrout/in/12, userrout/in/13, userrout/in/14, userrout/in/15, userrout/in/16, userrout/in/17, userrout/in/18, userrout/in/19, userrout/in/20, userrout/in/21, userrout/in/22, userrout/in/23, userrout/in/24, userrout/in/25, userrout/in/26, userrout/in/27, userrout/in/28, userrout/in/29, userrout/in/30, userrout/in/31, userrout/in/32]}
+  - {family: config, path: "/config/userrout/out", fields: [userrout/out/01, userrout/out/02, userrout/out/03, userrout/out/04, userrout/out/05, userrout/out/06, userrout/out/07, userrout/out/08, userrout/out/09, userrout/out/10, userrout/out/11, userrout/out/12, userrout/out/13, userrout/out/14, userrout/out/15, userrout/out/16]}
   - {family: config, path: "/config/routing/PLAY", fields: [routing/PLAY/1-8, routing/PLAY/9-16, routing/PLAY/17-24, routing/PLAY/25-32, routing/PLAY/AUX]}
   - {family: config, path: "/config/routing/AES50A", fields: [routing/AES50A/1-8, routing/AES50A/9-16, routing/AES50A/17-24, routing/AES50A/25-32, routing/AES50A/33-40, routing/AES50A/41-48]}
   - {family: config, path: "/config/routing/AES50B", fields: [routing/AES50B/1-8, routing/AES50B/9-16, routing/AES50B/17-24, routing/AES50B/25-32, routing/AES50B/33-40, routing/AES50B/41-48]}

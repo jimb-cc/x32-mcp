@@ -705,3 +705,36 @@ async def test_absolute_moves_are_not_blocked_by_the_relative_guard(fakedesk, co
     with pytest.raises(PolicyError) as ei:
         await d.adjust_level(t, 9.0, ramp_ms=0)
     assert ei.value.code == "RELATIVE_TOO_LARGE"
+
+
+async def test_headamp_resolves_through_firmware_4x_user_routing(fakedesk, conn, descriptor, tmp_path):
+    """A UIN* routing block means the patch lives in /config/userrout/in/NN, not the block enum.
+
+    Found at M5 on a real X32 Rack (FW 4.13): every channel resolved to head amp None because the
+    desk used user routing, which silently broke set_phantom and would have made CFS² mic
+    discovery treat card/USB feeds as microphones.
+    """
+    from x32mcp.desk import Desk
+    from x32mcp.events import EventBus
+    from x32mcp.nodes import SnapshotStore
+    from x32mcp.policy import Policy
+
+    ev = EventBus()
+    d = Desk(descriptor, conn, Policy(descriptor, ev), ev, SnapshotStore(tmp_path))
+
+    fakedesk.set("/config/routing/IN/1-8", descriptor.enum("routing_in").index("UIN1-8"))
+    # ch 1 -> local XLR 1, ch 2 -> card (no preamp), ch 4 -> AES50-A input 1 (head amp 032)
+    for n, patch in ((1, 1), (2, 129), (3, 130), (4, 33)):
+        fakedesk.set(f"/config/userrout/in/{n:02d}", patch)
+    conn.invalidate(); d.invalidate()
+
+    assert await d.headamp_index_for("ch.1") == 0
+    assert await d.headamp_index_for("ch.2") is None, "card/USB has no head amp"
+    assert await d.headamp_index_for("ch.3") is None
+    assert await d.headamp_index_for("ch.4") == 32
+
+    # classic (non-user) routing still resolves the old way
+    fakedesk.set("/config/routing/IN/1-8", descriptor.enum("routing_in").index("AN1-8"))
+    conn.invalidate(); d.invalidate()
+    assert await d.headamp_index_for("ch.1") == 0
+    assert await d.headamp_index_for("ch.4") == 3

@@ -54,7 +54,7 @@ ignore it.
 
 ## 4. Build status — update this table when you stop
 
-Status as of **2026-09-20 17:00 (Europe/London)** — full suite: **928 tests, all passing**. M5 is in progress against the real desk (see §4a).Legend: ✅ done & tests green · 🟡 written,
+Status as of **2026-09-20 19:30 (Europe/London)** — full suite: **930 tests, all passing**. **M5 is COMPLETE (11/11)**. M5 is in progress against the real desk (see §4a).Legend: ✅ done & tests green · 🟡 written,
 tests not green / partial · ⬜ not started.
 
 | Module (DESIGN §) | Status | Notes |
@@ -105,19 +105,39 @@ Done:
 Defects found and fixed here (all committed): `_db1` conflating −∞ with "not read"; ramps
 overrunning and saturating the write budget; the ±6 dB guard applied to absolute moves.
 
+M5 COMPLETE — the remaining checkpoints, all verified live on 2026-09-20:
+- **Guarded ops** — token issued on refusal, single use, made-up token refused, expired after the
+  TTL, and a `set_main_fader` token will not authorise a `restore_snapshot` (7/7). The confirmed
+  main move ran −22.8 → −15.0 dB in 3996 ms against 4000 requested; Tier-1 `set_fader("main.st")`
+  is refused as `GUARDED`.
+- **panic()** — 0.4 ms to put 24 messages on the wire, 24/24 verified muted on the desk and
+  confirmed visually. Input channels are deliberately untouched.
+- **Snapshot / restore** — diff found 6 changes in English, restore wrote 3 sections in 9 ms, and
+  the diff afterwards was clean.
+- **Degraded + auto-reconnect** — DEGRADED 14 s after the cable came out, writes refused in
+  ~520 ms (`NOT_CONNECTED`, no hang), reads timed out in ~500 ms, and it reconnected **by itself**
+  16.7 s later after 4 probes with no `connect()` call.
+
+Defects found by M5 and fixed (each impossible to catch on the fake desk):
+1. `_db1` conflated −∞ with "not read" (`desk.py`, then the same bug again in `cfs.py`).
+2. Ramps overran and saturated the write budget (12 s → 19.3 s).
+3. The ±6 dB guard applied to absolute moves, so a send could never come up from off.
+4. The confirmation TTL (60 s) expired inside a normal conversational round trip → 300 s.
+5. **Firmware-4.x user routing was unresolvable**: every channel returned head amp `None`, which
+   broke `set_phantom` and would have made CFS² mic discovery treat card/USB feeds as microphones.
+
 Still to do (needs Jim at the desk):
-- **Restore `ch.1`** from snapshot `20260920-150008-m5-start` — it still carries pan −50, an EQ
-  notch on band 2, a moved bus-3 send and a raised fader from the Tier-1 checks.
-- Guarded ops: `set_main_fader` prompt → confirm → `BAD_TOKEN` on reuse → `TOKEN_EXPIRED` after 61 s.
-- `show_mode(true)` blocking scene recall; scenes (`save_scene` to an empty slot, `recall_scene`).
-  **Note: this desk's show control is set to CUES, not SCENES** — switch it in Setup before
-  testing scene recall, or the scene pointer indexes the cue list.
-- `panic()` timing (< 200 ms) and unmuting afterwards.
-- `restore_snapshot` round trip; degraded handling via a cable pull.
+- **Scenes** — this desk's show control is set to **CUES**, not SCENES. Flip it in Setup before
+  testing `recall_scene`/`save_scene`, or the scene pointer indexes the cue list.
+- **A deliberate power-cycle test** (not just a cable pull): the PSU fault reboots the desk, so
+  state may not survive. Snapshot first, power-cycle, then `diff_snapshot` to see what it forgot.
+- **M7 (CFS²)** in the studio.
 
 Desk facts worth keeping: 2 scenes stored (0 "Studio Sept 26", 1 "molecules"); FX slot 5 already
-holds a GEQ2 (CFS² provisioning should reuse it); ch 4 "Lead Vox" had preamp gain +0.0 dB, which
-is why an SM58 barely registered; PC is 192.168.1.231, desk 192.168.1.139.
+holds a GEQ2 (CFS² provisioning should reuse it); PC is 192.168.1.231, desk 192.168.1.139.
+**This desk uses firmware-4.x user routing** — `/config/routing/IN/*` reads `UIN*` and the real
+patch is `/config/userrout/in/NN` (ch 1 → local XLR 1, ch 2-3 → card/USB, ch 4 → AES50-A 1 =
+head amp 032, where the SM58's +44.5 dB gain sits). Do not assume channel N → head amp N−1.
 
 ## 5. How the build is driven
 

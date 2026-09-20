@@ -497,10 +497,10 @@ def test_full_sweep_node_count(dev, capsys):
     # 2104 node lines (scales_params.md §13), so DESIGN §7's "< 1500" is not reachable without dropping sections.
     assert per_family["ch"] == 32 * 31 and per_family["headamp"] == 128 and per_family["fx"] == 20
     assert per_family["show"] == 1 + 1 + 100 and per_family["dca"] == 16   # prepos leaf, show line, scene 000-099
-    assert per_family["config"] == 19 and per_family["stat"] == 5 and per_family["prefs"] == 1
+    assert per_family["config"] == 21 and per_family["stat"] == 5 and per_family["prefs"] == 1
     assert per_family["auxin"] == 8 * 25 and per_family["fxrtn"] == 8 * 24 and per_family["bus"] == 16 * 19
     assert per_family["mtx"] == 6 * 14 and per_family["main"] == 38
-    assert total == sum(per_family.values()) == 2101
+    assert total == sum(per_family.values()) == 2103
     assert 2000 <= total <= 2500
     # spot-check a few concrete paths + their concrete fields
     d = dict(paths)

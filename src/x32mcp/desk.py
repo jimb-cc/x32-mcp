@@ -747,12 +747,25 @@ class Desk:
                 return 32 + (r - 4) * 8
             if 10 <= r <= 15:
                 return 80 + (r - 10) * 8
-            return None  # CARD / UIN: no head amp we can name
+            return None  # CARD: no head amp. UIN is resolved separately, below.
 
         if 1 <= src <= 32:
             k = src - 1
             b, off = divmod(k, 8)
             tok = blocks.get(key + ("1-8", "9-16", "17-24", "25-32")[b])
+            # Firmware-4.x USER routing: the block reads UIN1-8/UIN9-16/… and the per-input patch
+            # lives in /config/userrout/in/NN, one 1-based source number per user input:
+            #   1..32 local XLR → head amp 000..031 · 33..80 AES50-A → 032..079
+            #   81..128 AES50-B → 080..127 · >128 card/USB → no preamp
+            # Found at M5 on X32RACK-Jim (FW 4.13), where every channel previously resolved to None:
+            # /config/userrout/in = "1 129 130 33 …", and ch 4's source IN04 → 33 → head amp 032,
+            # which is exactly where that channel's +44.5 dB SM58 gain sits. Channels 2-3 map to
+            # 129/130 (card), so they correctly report no preamp.
+            if isinstance(tok, str) and tok.upper().startswith("UIN"):
+                patch = await self._leaf(f"/config/userrout/in/{src:02d}")
+                if not isinstance(patch, int) or isinstance(patch, bool) or not 1 <= patch <= 128:
+                    return None
+                return patch - 1
             r = in_tokens.index(tok) if tok in in_tokens else -1
             base = block_base(r)
             return None if base is None else base + off
