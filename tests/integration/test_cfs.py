@@ -640,3 +640,59 @@ async def test_ring_out_system_consolidated_report(desk, conn, fakedesk, events,
     with pytest.raises(CfsError) as ei:
         await cfs.ring_out_system({"stages": []})
     assert ei.value.code == "BAD_ARGUMENT"
+
+
+async def test_candidate_gate_is_calibrated_to_the_room_noise_floor(cfs, descriptor):
+    """A fixed min_level_db cannot work across rooms; arm-time calibration must raise it.
+
+    At M7 the configured -60 dB gate sat 8 dB below the studio's own 48 Hz rumble (-51.7 dB),
+    so room noise qualified as a feedback candidate and spent the notch budget before the
+    operator touched a fader.
+    """
+    import dataclasses
+    from x32mcp.meters import MeterFrame
+
+    ROOM_PEAK = -50.0          # louder than the configured -60 gate, as a real room is
+
+    class Room:
+        """Minimal FrameSource: a steady floor whose loudest band sits at ROOM_PEAK."""
+
+        def __init__(self) -> None:
+            self._subs: list = []
+            self._task = None
+
+        def subscribe(self, cb):
+            self._subs.append(cb)
+            return lambda: self._subs.remove(cb)
+
+        async def start(self):
+            async def pump():
+                while True:
+                    vals = [-90.0] * len(descriptor.rta["band_hz"])
+                    vals[5] = ROOM_PEAK
+                    f = MeterFrame(meter_type=15, ts=0.0, values=tuple(vals))
+                    for cb in list(self._subs):
+                        cb(f)
+                    await asyncio.sleep(0.02)
+            self._task = asyncio.create_task(pump())
+
+        async def stop(self):
+            if self._task:
+                self._task.cancel()
+
+    room = Room()
+    await room.start()
+    cfs._frames = room
+    try:
+        cfg = cfs._cfg
+        calibrated = await cfs._calibrate_floor(cfg)
+        margin = float(descriptor.detector["floor_margin_db"])
+        assert cfs._floor_db == pytest.approx(ROOM_PEAK, abs=0.1), "the floor must be measured"
+        assert calibrated.min_level_db == pytest.approx(ROOM_PEAK + margin, abs=0.1)
+        assert calibrated.min_level_db > cfg.min_level_db, "calibration only ever raises the gate"
+
+        # in a very quiet room the configured value stands: calibration is a floor, not an override
+        strict = dataclasses.replace(cfg, min_level_db=-20.0)
+        assert (await cfs._calibrate_floor(strict)).min_level_db == -20.0
+    finally:
+        await room.stop()

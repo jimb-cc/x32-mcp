@@ -73,6 +73,7 @@ Decisions where DESIGN.md is silent:
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 import logging
 import math
@@ -96,6 +97,8 @@ __all__ = ["CfsError", "CfsMode", "CfsState", "STAGES", "ReportStore", "CfsManag
 
 log = logging.getLogger(__name__)
 
+_FLOOR_FIRST_FRAME_S = 0.3  # no RTA frame within this: the source is idle, skip calibration
+
 STAGES: tuple[str, ...] = ("PREFLIGHT", "SNAPSHOT", "ARM", "RAISE", "HOLD", "NOTCH", "VERIFY", "BACKOFF", "DONE", "ABORT")
 
 _RESTORE_RETRY_S = 0.5
@@ -116,6 +119,8 @@ class CfsError(Exception):
         self.code = code
         self.message = message
         self.details: dict[str, Any] = details
+        self._floor_db: float | None = None
+        self._gate_db: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {"code": self.code, "message": self.message}
@@ -816,6 +821,61 @@ class CfsManager:
         self._ids.add(sid)
         return sid
 
+    async def _calibrate_floor(self, cfg: DetectorConfig) -> DetectorConfig:
+        """Raise ``min_level_db`` to sit above the room's measured noise floor.
+
+        A fixed gate cannot work: at M7 the configured -60 dB sat 8 dB *below* the studio's own
+        floor (48 Hz rumble peaking at -51.7 dB), so ordinary room noise qualified as a feedback
+        candidate and spent the notch budget before the operator touched a fader. A pub, a field
+        and a studio all differ, so measure instead of guessing: sample the RTA for
+        ``floor_sample_s`` with the loop quiet, take the loudest band, and gate
+        ``floor_margin_db`` above it. The configured value is a floor for the floor - calibration
+        only ever raises it.
+        """
+        margin = float(self._d.detector.get("floor_margin_db", 0.0) or 0.0)
+        secs = float(self._d.detector.get("floor_sample_s", 0.0) or 0.0)
+        want = int(self._d.detector.get("floor_sample_frames", 40) or 40)
+        if margin <= 0.0 or secs <= 0.0 or self._frames is None:
+            return cfg
+        peaks: list[float] = []
+        done = asyncio.Event()
+
+        def grab(frame: Any) -> None:
+            if frame.values:
+                peaks.append(max(frame.values))
+                if len(peaks) >= want:
+                    done.set()
+
+        first = asyncio.Event()
+        unsub = self._frames.subscribe(lambda f: (grab(f), first.set()) and None)
+        try:
+            # Bail out at once if nothing is streaming: _open_session also runs on the preflight
+            # (pending) call of ring_out, where the frame source is idle, and stalling there for
+            # the whole window delays a call that does no detection at all.
+            try:
+                await asyncio.wait_for(first.wait(), timeout=_FLOOR_FIRST_FRAME_S)
+            except asyncio.TimeoutError:
+                return cfg
+            # Then enough frames, or the time limit — whichever comes first.
+            try:
+                await asyncio.wait_for(done.wait(), timeout=secs)
+            except asyncio.TimeoutError:
+                pass
+        finally:
+            unsub()
+        if not peaks:
+            log.warning("cfs: no RTA frames while calibrating the noise floor; keeping %.1f dB",
+                        cfg.min_level_db)
+            return cfg
+        floor = max(peaks)
+        gate = max(cfg.min_level_db, floor + margin)
+        self._floor_db, self._gate_db = floor, gate
+        if gate > cfg.min_level_db:
+            log.info("cfs: room floor %.1f dB over %d frame(s) -> gating candidates at %.1f dB (was %.1f)",
+                     floor, len(peaks), gate, cfg.min_level_db)
+            return dataclasses.replace(cfg, min_level_db=gate)
+        return cfg
+
     async def _open_session(self, mode: CfsMode, t: Target, pf: Preflight, notch_budget: int | None) -> _Session:
         cfg = self._cfg
         budget = cfg.notch_budget_default if notch_budget is None else int(notch_budget)
@@ -827,6 +887,7 @@ class CfsManager:
         bus_int = 0 if t.family == "main" else int(t.index)
         nc = NotchController(cfg, self._geq_hz, self._policy.validate_notch, budget=budget, existing=existing)
         writer = _DeskGeqWriter(self._desk, self._policy, bus_int, ins.fx_slot, ins.side, existing)
+        cfg = await self._calibrate_floor(cfg)
         det = FeedbackDetector(cfg, self._band_hz)
         start = float(pf.master_db)
         ses = _Session(
