@@ -54,7 +54,7 @@ ignore it.
 
 ## 4. Build status — update this table when you stop
 
-Status as of **2026-09-19 21:17 (Europe/London)** — full suite: **239 tests, all passing**. Legend: ✅ done & tests green · 🟡 written,
+Status as of **2026-09-20 17:00 (Europe/London)** — full suite: **928 tests, all passing**. M5 is in progress against the real desk (see §4a).Legend: ✅ done & tests green · 🟡 written,
 tests not green / partial · ⬜ not started.
 
 | Module (DESIGN §) | Status | Notes |
@@ -82,6 +82,42 @@ tests not green / partial · ⬜ not started.
 
 Run `git log --oneline` and `pytest -q` to refresh this table before relying on it — the build
 workflow may have advanced since this file was written.
+
+## 4a. M5 progress — live against X32RACK-Jim (FW 4.13, OSC V2.07) on 2026-09-20
+
+Driven from the lead session by calling the tool functions directly in Python (no Claude Desktop
+restart needed): build an `App`, set `x32mcp.server.app`, `await app.start()`, `connect("192.168.1.139")`.
+Jim watches the front panel / X32-Edit and confirms. **Hold a state until he confirms** — a 6 s
+window was missed once because he was reading the message that announced it.
+
+Done:
+- **Reads** — full 2101-section `/node` sweep parses in 0.28 s, 0 missing, 0 unparsed fields. This
+  retires the FW 4.x node-text risk (the parser was only verified against a FW 2.x scene file).
+- **Meters** — `/meters/15` (100 × int16, dB×256) and `/meters/1` (96 × float32) both stream at
+  20 fps and decode; values were all floor/zero because the desk was silent.
+- **Ramps glide** — confirmed visually on the front panel (full-travel −∞ → −3 dB over 15 s).
+- **Ramp timing** — 15 s requested, 15.00 s actual after the dedupe fix (was +61% over).
+- **Mute semantics** — wire 0 = muted / 1 = unmuted, our reading agrees, panel agrees.
+- **Clamp** — `set_fader +9` → +5.0 with `clamped` populated.
+- **EQ / pan / label** — band 2 → 990.9 Hz (201-step grid), −3.0 dB, Q 3.9; pan −50; desk truncates
+  names to 12 chars.
+
+Defects found and fixed here (all committed): `_db1` conflating −∞ with "not read"; ramps
+overrunning and saturating the write budget; the ±6 dB guard applied to absolute moves.
+
+Still to do (needs Jim at the desk):
+- **Restore `ch.1`** from snapshot `20260920-150008-m5-start` — it still carries pan −50, an EQ
+  notch on band 2, a moved bus-3 send and a raised fader from the Tier-1 checks.
+- Guarded ops: `set_main_fader` prompt → confirm → `BAD_TOKEN` on reuse → `TOKEN_EXPIRED` after 61 s.
+- `show_mode(true)` blocking scene recall; scenes (`save_scene` to an empty slot, `recall_scene`).
+  **Note: this desk's show control is set to CUES, not SCENES** — switch it in Setup before
+  testing scene recall, or the scene pointer indexes the cue list.
+- `panic()` timing (< 200 ms) and unmuting afterwards.
+- `restore_snapshot` round trip; degraded handling via a cable pull.
+
+Desk facts worth keeping: 2 scenes stored (0 "Studio Sept 26", 1 "molecules"); FX slot 5 already
+holds a GEQ2 (CFS² provisioning should reuse it); ch 4 "Lead Vox" had preamp gain +0.0 dB, which
+is why an SM58 barely registered; PC is 192.168.1.231, desk 192.168.1.139.
 
 ## 5. How the build is driven
 
