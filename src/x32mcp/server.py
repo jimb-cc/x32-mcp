@@ -879,10 +879,11 @@ async def dump_desk_state(sections: list[str] | None = None) -> dict[str, Any]:
 @server.tool()
 @_tool(timeout=None)
 async def set_fader(target: str, db: float, ramp_ms: int = 300, force: bool = False) -> dict[str, Any]:
-    """Move a fader to db (channels/aux/fx-returns/DCAs clamp at +5 dB, buses/matrices at 0 dB;
-    -90 = -oo). Ramped over ramp_ms (0..60000). A move of more than 6 dB (3 dB in show mode)
-    is refused unless force=true — pass force only when the user explicitly asked for it. Tier 1;
-    main LR/mono need set_main_fader."""
+    """Move a fader to an absolute level in dB (channels/aux/fx-returns/DCAs clamp at +5 dB,
+    buses/matrices at 0 dB; -90 = -oo). Ramped over ramp_ms (0..60000). The size of the move is
+    NOT limited here — the destination is bounded by the ceiling above — so bringing a fader up
+    from silence works directly; force is accepted but not needed. Use adjust_fader for relative
+    moves, where the ±6 dB guard applies. Tier 1; main LR/mono need set_main_fader."""
     desk = _desk()
     ms = _int_arg(ramp_ms, "ramp_ms", 0, 60_000)
 
@@ -945,10 +946,10 @@ async def _send_summary(desk: Desk, t: Target, res: dict[str, Any]) -> str:
 @server.tool()
 @_tool(timeout=None)
 async def set_send(ch: str, bus: int, db: float, ramp_ms: int = 300, force: bool = False) -> dict[str, Any]:
-    """Set the send from strip ch (target or name) to db (clamped at 0 dB; -90 = -oo). bus is the
-    destination: a mix bus 1..16 when ch is an input strip (channel/aux/FX return), a matrix 1..6
-    when ch is itself a mix bus or a main. Ramped over ramp_ms (0..60000); 6 dB relative limit
-    unless force (explicit user request only). Tier 1."""
+    """Set channel ch's send to bus (1..16) to an absolute level in dB (-90 = -oo, ceiling 0 dB).
+    Ramped over ramp_ms. The size of the move is NOT limited — a send sitting at -oo can be
+    brought straight up to a working level ("more kick in Tony's ears"); force is accepted but not
+    needed. Use adjust_send for relative moves, where the ±6 dB guard applies. Tier 1."""
     desk = _desk()
     ms = _int_arg(ramp_ms, "ramp_ms", 0, 60_000)
 

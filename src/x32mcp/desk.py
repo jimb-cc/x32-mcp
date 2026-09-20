@@ -9,18 +9,18 @@ tokens — never raw OSC floats.
 
 Decisions where DESIGN.md is silent (or where verified research overrides it):
 
-* **Levels in results.** ``*_db`` fields are floats rounded to 0.1 dB, or ``None`` when the fader
-  is fully down (−∞ is not JSON); a sibling text field (``fader``, ``level``, ``before``, ``after``)
-  always carries the display form (``-oo``, ``-12.3``, ``+2.0``). Frequencies are rounded to
-  0.1 Hz, gains/Q/ms to 0.01.
+* **Levels in results.** ``*_db`` fields are floats rounded to 0.1 dB; a fully-down level is
+  ``-inf`` (the server renders it ``"-oo"``) and ``None`` means *not read* — the two are never
+  conflated. A sibling text field (``fader``, ``level``, ``before``, ``after``) always carries the
+  display form (``-oo``, ``-12.3``, ``+2.0``). Frequencies are rounded to 0.1 Hz, gains/Q/ms to 0.01.
 * **Node cache.** Parsed ``/node`` sections are cached per node path for
   ``policy.read_cache_ttl_s``; a pushed ``/xremote`` update or one of our own writes drops the
   section that owns the address; a scene recall, a restore or ``invalidate()`` drops everything.
   Concurrent misses on one path share a request. ``dump()`` primes the cache from the sweep.
-* **Relative limit.** ``set_level`` applies ``policy.check_relative`` to the *actual* move
-  (after clamping) when both endpoints are finite; a fade-in from −∞ or a fade-out to −∞ is
-  bounded by the ceiling clamp / silence instead of the ±6 dB rule (a send that starts at −∞
-  would otherwise always need ``force``).
+* **Relative limit.** Only ``adjust_level`` applies ``policy.check_relative`` (±6 dB, ±3 in show
+  mode, ``force`` to override) — that is where a typo or a runaway loop does damage. ``set_level``
+  is absolute: it is bounded by the family ceiling and ramped, so a big deliberate move (a send
+  from off to −12 dB) goes through without ``force``.
 * **Ramps** run as a task per address so a newer move on the same address cancels the older one
   (the older call returns ``superseded: True`` with the last level it wrote); the caller awaits
   its own ramp so ``after_db`` is what the desk received. No sleep after the final step.
@@ -943,8 +943,12 @@ class Desk:
         if after <= FADER_FLOOR_DB:
             after = NEG_INF_DB  # −90 dB is the bottom stop = -oo on the desk (scales_params.md §2.3)
         before_db = before if isinstance(before, (int, float)) and not isinstance(before, bool) else None
-        if before_db is not None and math.isfinite(before_db) and math.isfinite(after):
-            self._policy.check_relative(after - before_db, force=force)
+        # No relative guard on an ABSOLUTE move (Jim's call, 2026-09-20, after M5 on the real desk):
+        # the destination is already bounded by the family ceiling above and the move is ramped, so
+        # the ±6 dB rule only blocked moves the operator explicitly asked for. It previously exempted
+        # a start at exactly −∞, which was too narrow to help: a send resting at −84 dB is finite, so
+        # "put kick in Tony's ears at −12 dB" was refused as a +72 dB jump. The guard stays on
+        # adjust_level(), where a runaway or a typo is what it is actually defending against.
         ms = self._policy.ramp_default_ms if ramp_ms is None else _int(ramp_ms, "ramp_ms", 0, 60_000)
         await self.ensure_pre_write_snapshot()
         steps = self._policy.ramp_steps(before_db, after, ms)

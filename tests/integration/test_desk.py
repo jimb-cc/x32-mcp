@@ -189,9 +189,12 @@ async def test_adjust_fader_relative_limit_force_and_clamp(desk, conn, fakedesk,
     assert res["after_db"] == -9.0
     await settle(conn)
     assert fakedesk.value("/ch/03/mix/fader") == pytest.approx(-9.0, abs=0.05)
-    # absolute moves obey the same limit; fades to / from -oo do not (bounded by silence / the ceiling)
-    with pytest.raises(PolicyError):
-        await desk.set_level("ch.3", -20.0, ramp_ms=0)
+    # absolute moves are NOT limited by the ±6 dB rule (Jim's call at M5): the destination is
+    # bounded by the family ceiling and the move is ramped, so a big deliberate move goes through.
+    res = await desk.set_level("ch.3", -20.0, ramp_ms=0)
+    assert res["after_db"] == -20.0 and res["clamped"] is None
+    await settle(conn)
+    assert fakedesk.value("/ch/03/mix/fader") == pytest.approx(-20.0, abs=0.05)
     res = await desk.set_level("ch.4", -90.0, ramp_ms=0)  # -90 dB is the bottom stop = -oo
     assert res["after_db"] == NEG_INF_DB and res["after"] == "-oo"
     await settle(conn)
@@ -247,10 +250,8 @@ async def test_sends_set_adjust_and_units(desk, conn, fakedesk, descriptor):
     assert res["before_db"] == -10.0 and res["after_db"] == -7.0
     await settle(conn)
     assert fakedesk.value("/ch/01/mix/03/level") == pytest.approx(-7.0, abs=0.05)
-    with pytest.raises(PolicyError):  # -7 -> 0 (clamped) is a 7 dB move: refused like any other
-        await desk.set_send("ch.1", 3, +4.0, ramp_ms=0)
-    await desk.adjust_send("ch.1", 3, +3.0, ramp_ms=0)  # -4
-    res = await desk.set_send("ch.1", 3, +4.0, ramp_ms=0)  # sends clamp at 0 dB (a 4 dB move)
+    # -7 -> +4 is a 7 dB move, but set_send is absolute: allowed, and clamped to the 0 dB ceiling.
+    res = await desk.set_send("ch.1", 3, +4.0, ramp_ms=0)
     assert res["after_db"] == 0.0 and res["clamped"]["limit"] == 0.0
     sends = await desk.get_sends("ch.1")
     assert sends[2]["level_db"] == 0.0
@@ -670,3 +671,37 @@ async def test_scene_pointer_minus_one_reports_no_scene_loaded(fakedesk, conn, d
     assert cur["index"] is None, cur
     assert cur["has_data"] is False
     assert "no scene" in (cur.get("note") or "").lower()
+
+
+async def test_absolute_moves_are_not_blocked_by_the_relative_guard(fakedesk, conn, descriptor, tmp_path):
+    """A send resting at -oo must reach a working level without force (Jim's call at M5).
+
+    On the real desk an unused send sits around -84 dB, so the old guard refused
+    set_send(-12) as a "+72 dB jump" — "more kick in Tony's ears" only worked if kick was
+    already in Tony's ears. The guard belongs on adjust_*, where a typo does the damage.
+    """
+    from x32mcp.desk import Desk
+    from x32mcp.events import EventBus
+    from x32mcp.nodes import SnapshotStore
+    from x32mcp.policy import Policy, PolicyError
+
+    ev = EventBus()
+    d = Desk(descriptor, conn, Policy(descriptor, ev), ev, SnapshotStore(tmp_path))
+    t = d._target("ch.1")
+
+    # a send that is effectively off, both exactly -oo and merely very low
+    for start in (NEG_INF_DB, -84.0):
+        await d.set_send(t, 3, start, ramp_ms=0, force=True)
+        await settle(conn)
+        res = await d.set_send(t, 3, -12.0, ramp_ms=0)          # no force
+        assert res["after_db"] == -12.0, f"from {start}: {res}"
+
+    # a fader up from silence, likewise
+    await d.set_level(t, NEG_INF_DB, ramp_ms=0, force=True)
+    await settle(conn)
+    assert (await d.set_level(t, -6.0, ramp_ms=0))["after_db"] == -6.0
+
+    # but the relative tool still guards
+    with pytest.raises(PolicyError) as ei:
+        await d.adjust_level(t, 9.0, ramp_ms=0)
+    assert ei.value.code == "RELATIVE_TOO_LARGE"

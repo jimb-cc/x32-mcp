@@ -132,7 +132,9 @@ Writes (Tier 1)
 - [ ] `set_fader("ch.1", -10)` from −20: the motor fader **glides** over ~300 ms (not a jump);
   `ramp_ms=2000` glides for 2 s; a second move mid-ramp supersedes the first.
 - [ ] `set_fader("ch.1", +8)` → clamped to +5 dB and the summary says so.
-- [ ] `adjust_fader("ch.1", -7)` → `RELATIVE_TOO_LARGE`; with `force=true` it moves.
+- [ ] `adjust_fader("ch.1", -7)` → `RELATIVE_TOO_LARGE`; with `force=true` it moves. ✅ 2026-09-20
+- [ ] `set_fader("ch.1", -30)` from near 0 dB → **allowed** (absolute moves are not size-limited);
+  `set_send("ch.1", 3, -12)` on a send resting at −∞ → allowed. ✅ 2026-09-20
 - [ ] `mute("ch.1")` → the channel's mute LED is **on** (wire `/mix/on 0`); `unmute` → off.
   `get_channel` reports `muted` the right way round both times.
 - [ ] `set_send("ch.1", 1, -6)` → X32-Edit sends page agrees; `adjust_send` ±2 works.

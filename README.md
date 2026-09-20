@@ -273,7 +273,7 @@ snapshot-before-first-write) · **T2** guarded (confirmation token, see the safe
 
 | Tool | Tier | What it does |
 |---|---|---|
-| `set_fader(target, db, ramp_ms=300, force=False)` | T1 | Fader to `db` (channels/aux/FX rtn/DCA cap +5 dB, buses/matrices 0 dB; ≤ −90 = −∞), ramped; > 6 dB (3 in show mode) needs `force` |
+| `set_fader(target, db, ramp_ms=300, force=False)` | T1 | Fader to an absolute `db` (channels/aux/FX rtn/DCA cap +5 dB, buses/matrices 0 dB; ≤ −90 = −∞), ramped. The move size is not limited — the ceiling bounds it — so a fader can come up from silence directly; `force` is accepted but unnecessary |
 | `adjust_fader(target, delta_db, ramp_ms=300, force=False)` | T1 | Relative move ("2 dB down" = −2) with the same clamps and limit |
 | `mute(target)` / `unmute(target)` | T1 | Mute/unmute a channel, bus, matrix, DCA … (mains: `set_main_mute`) |
 | `set_send(ch, bus, db, ramp_ms=300, force=False)` | T1 | Send from an input strip to bus 1..16 (cap 0 dB), ramped |
@@ -359,7 +359,11 @@ Enforced by [`policy.py`](src/x32mcp/policy.py) on every write path; the limits 
 **Tier 1 — mix moves.** Faders, sends, mutes, pan, EQ, dynamics, labels, feedback watch.
 - Clamps (reported, never silently applied): channel/aux/FX-return/DCA faders ≤ +5 dB, bus
   and matrix masters ≤ 0 dB, sends ≤ 0 dB, EQ gain ±15 dB. Anything below −90 dB is −∞.
-- Relative limit: one call may move a level at most ±6 dB (±3 dB in show mode). A larger move
+- Relative limit: **`adjust_fader` / `adjust_send` only** — one call may move a level at most
+  ±6 dB (±3 dB in show mode). The absolute `set_fader` / `set_send` are bounded by the ceiling
+  above and by the ramp instead, so bringing a send up from −∞ to a working level does not need
+  `force` (verified at M5 on the real desk: an unused send rests near −84 dB, and the old
+  behaviour refused it as a "+72 dB jump"). A larger relative move
   is refused with `RELATIVE_TOO_LARGE` unless `force=true`, which the model is instructed to
   pass only when the user explicitly asked for a move of that size. Fades from/to −∞ are
   bounded by the clamp instead.
