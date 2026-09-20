@@ -297,6 +297,37 @@ async def test_meter_frames_decode(conn, fakedesk):
     assert len(b) == 4 + 4 * 4
 
 
+async def test_gain_reduction_words_are_unity_not_levels(conn, fakedesk):
+    """meters.md §3: the GR words carry the linear gain *applied*, 1.0 = no reduction — not
+    levels. §2.2's verbatim desk capture of /meters/6 reads level, 0.99999982, 1.0, level."""
+    fakedesk.set("/ch/02/mix/on", 0)  # muted: its post-fade level must bottom out
+
+    async def frame(mtype: int, *args: int):
+        src = LiveMeters(conn, mtype, extra_args=args)
+        await src.start()
+        try:
+            f = await average_frames(src, 2, timeout_s=2.0)
+        finally:
+            await src.stop()
+        assert f is not None
+        return f.values
+
+    # /meters/1: [0-31] ch levels, [32-63] gate GR, [64-95] dyn GR
+    v = await frame(1)
+    assert len(v) == 96 and v[0] > 0.1
+    assert all(g == pytest.approx(1.0) for g in v[32:]), "GR range must be unity gain, not levels"
+    # /meters/2: [0-24] bus/mtx/main levels, [25-48] their dyn GR
+    v = await frame(2)
+    assert len(v) == 49 and v[0] > 0.1 and v[22] > 0.1
+    assert all(g == pytest.approx(1.0) for g in v[25:])
+    # /meters/6: [0] pre-fade level, [1] gate GR, [2] dyn GR, [3] post-fade level
+    v = await frame(6, 1)  # channel_id 1 = Ch 02, muted above
+    assert len(v) == 4
+    assert v[1] == pytest.approx(1.0) and v[2] == pytest.approx(1.0)
+    assert v[0] > 0.1, "pre-fade level ignores the fader and the mute"
+    assert v[3] < 1e-4, "post-fade level follows the mute (meters.md §6.3: silence, never 0.0)"
+
+
 async def test_meter_lease_renew_unsubscribe(conn, fakedesk):
     fakedesk.meter_lease_s = 0.5
     count = 0
@@ -308,7 +339,12 @@ async def test_meter_lease_renew_unsubscribe(conn, fakedesk):
 
     unsub = conn.on_blob(on_blob)
     try:
-        await conn.send_raw("/meters", "meters/15", 2)  # slash-less spelling, tf 2 -> 100 ms (meters.md §1.2)
+        # meters.md §1.1 (VERIFIED): the console matches the leading-slash form only, and so
+        # do we — the slash-less spelling buys no subscription at all.
+        await conn.send_raw("/meters", "meters/15", 2)
+        await asyncio.sleep(0.25)
+        assert count == 0 and not fakedesk.meters
+        await conn.send_raw("/meters", "/meters/15", 2)  # tf 2 -> 100 ms (meters.md §1.2)
         await wait_until(lambda: count >= 2, what="frames")
         await asyncio.sleep(0.7)
         n = count

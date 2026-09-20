@@ -7,9 +7,9 @@ requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "Jim" }]
 dependencies = [
-    "mcp>=1.2",
+    "mcp>=2.2,<3",  # server.py imports mcp.server.mcpserver: 2.x only (mcp 1.x ships fastmcp)
     "pyyaml>=6.0",
-    "websockets>=13",
+    "websockets>=17,<18",
 ]
 
 [project.scripts]
@@ -35,7 +35,7 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 pythonpath = ["src"]
 timeout = 60
-addopts = "-q"
+addopts = "-ra"
 
 [tool.uv]
 package = true

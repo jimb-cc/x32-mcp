@@ -733,6 +733,7 @@ detector:
   merge_adjacent_bands: 1
   decay_verify_db: 6         # ring must drop >= this within decay_verify_s after a notch
   decay_verify_s: 1.5
+  decay_verify_frames: 2     # consecutive frames that must show the drop (one dip is RTA noise)
   frame_period_s: 0.05
 
 ringout:

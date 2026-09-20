@@ -48,6 +48,9 @@ Decisions where DESIGN is silent or a literal reading is not workable (see tests
   Regenerative feedback in a ring-out grows at a few to ~30 dB/s (``growth_ref_db_per_s`` = 20).
 * Growth needs at least ``persistence_frames`` (>= 2) samples in the window; a 2-sample slope of noisy
   data is meaningless.
+* ``decay_verify_frames`` (extension, default 2) belongs to the VERIFY stage in ``cfs.py``: the notched
+  band must sit ``decay_verify_db`` below its level at the cut on that many *consecutive* frames. One
+  dipping frame out of the ~30 in ``decay_verify_s`` is RTA noise, not a tamed ring.
 
 Only ``logging`` is used for diagnostics (stdout is the MCP transport).
 """
@@ -86,8 +89,9 @@ class DetectorConfig:
     """Detector + notch thresholds; one field per ``device.yaml`` ``detector:`` key.
 
     The yaml ``weights: {prominence, persistence, growth}`` mapping is flattened into
-    ``w_prominence`` / ``w_persistence`` / ``w_growth``. ``growth_max_db_per_s`` and
-    ``growth_window_frames`` are extensions with defaults (see module docstring).
+    ``w_prominence`` / ``w_persistence`` / ``w_growth``. ``growth_max_db_per_s``,
+    ``growth_window_frames`` and ``decay_verify_frames`` are extensions with defaults (see module
+    docstring).
     """
 
     prominence_db: float = 12.0          # dB above the median of the ±neighbour_bins neighbours
@@ -110,6 +114,7 @@ class DetectorConfig:
     merge_adjacent_bands: int = 1        # GEQ bands: a detection this close to a notch deepens it
     decay_verify_db: float = 6.0         # used by cfs.py (VERIFY stage)
     decay_verify_s: float = 1.5          # used by cfs.py
+    decay_verify_frames: int = 2         # consecutive frames that must show the drop (cfs.py, extension)
     frame_period_s: float = 0.05         # nominal RTA frame period (informational)
     growth_window_frames: int = 60       # bound on the growth window (extension)
 
@@ -130,6 +135,7 @@ class DetectorConfig:
         need(self.notch_step_db < 0, "notch_step_db must be negative (cuts only)")
         need(self.notch_max_db <= self.notch_step_db, "notch_max_db must be <= notch_step_db")
         need(self.notch_budget_default >= 0, "notch_budget_default must be >= 0")
+        need(self.decay_verify_frames >= 1, "decay_verify_frames must be >= 1")
         need(self.merge_adjacent_bands >= 0, "merge_adjacent_bands must be >= 0")
         need(self.growth_window_frames >= max(2, self.persistence_frames), "growth_window_frames too small")
 

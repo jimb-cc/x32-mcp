@@ -27,6 +27,7 @@ from x32mcp.connection import (
     RequestTimeout,
     X32Connection,
 )
+from x32mcp.connection import ConnectionError as X32ConnectionError  # shadows the builtin
 from x32mcp.events import EventBus
 from x32mcp.osc import OscError, OscMessage, decode, encode
 
@@ -469,6 +470,7 @@ async def test_reconnect_after_responder_restart_on_same_port(conn, responder):
     # Closing the responder makes every send hit a closed port; on Windows that surfaces as
     # WSAECONNRESET on our socket (ICMP port-unreachable), which must not kill the transport.
     port = responder.port
+    local = conn.local_addr
     responder.close()
     await asyncio.sleep(0.05)
     await wait_for_state(conn, ConnectionState.DEGRADED, timeout=3.0)
@@ -476,18 +478,57 @@ async def test_reconnect_after_responder_restart_on_same_port(conn, responder):
     try:
         await wait_for_state(conn, ConnectionState.CONNECTED, timeout=3.0)
         assert await conn.get("/ch/01/mix/fader") == pytest.approx(0.75)
-        assert conn.local_addr == conn.local_addr  # same socket, same port
+        assert conn.local_addr == local  # same socket, never re-bound
         assert again.sources and {p for _, p in again.sources} == {conn.local_addr[1]}
     finally:
         again.close()
 
 
 async def test_any_datagram_recovers_degraded(conn, responder):
+    # the responder stays silent to every probe, so ONLY the unsolicited push can recover us
     responder.silent = True
     await wait_for_state(conn, ConnectionState.DEGRADED, timeout=3.0)
-    responder.silent = False
+    n = conn.status.reconnect_attempts
+    await wait_until(lambda: conn.status.reconnect_attempts > n, timeout=2.0)
+    assert conn.state is ConnectionState.DEGRADED  # unanswered probes alone do not lift it
     responder.push("/ch/05/mix/on", 0)  # a push from the desk is proof of life
     await wait_for_state(conn, ConnectionState.CONNECTED, timeout=1.0)
+
+
+async def test_connect_resolves_hostname_once(bus, responder):
+    # sendto() would resolve a name synchronously on the event-loop thread for every datagram
+    c = make_conn(bus)
+    info = await c.connect("localhost", responder.port)
+    try:
+        assert info.host == "localhost"  # messages keep the caller's spelling
+        assert c._host == "127.0.0.1"  # the wire only ever sees the resolved address
+        assert await c.get("/ch/01/mix/fader") == pytest.approx(0.75)
+    finally:
+        await c.close()
+
+
+async def test_connect_to_unresolvable_host_names_the_real_problem(bus):
+    c = make_conn(bus)
+    t0 = time.monotonic()
+    with pytest.raises(X32ConnectionError, match="cannot resolve"):
+        await c.connect("x32-does-not-exist.invalid", 10023)  # .invalid never resolves (RFC 2606)
+    assert time.monotonic() - t0 < 6.0  # the lookup has a timeout of its own
+    assert c.state is ConnectionState.DISCONNECTED and c.local_addr is None
+    await c.close()
+
+
+async def test_dead_transport_degrades_and_rebinds(conn, responder):
+    """A socket force-closed under us (proactor _fatal_error, abort(), loop teardown) must
+    degrade and get re-bound — not leave the connection wedged in CONNECTED forever."""
+    old_port = conn.local_addr[1]
+    conn._transport.abort()  # the transport dies; nothing else tells the connection
+    await wait_for_state(conn, ConnectionState.DEGRADED, timeout=2.0)
+    assert not conn.connected and "socket closed" in (conn.status.error or "")
+    await wait_for_state(conn, ConnectionState.CONNECTED, timeout=3.0)
+    assert conn.local_addr is not None and conn.local_addr[1] != old_port  # a fresh socket
+    assert await conn.get("/ch/01/mix/fader") == pytest.approx(0.75)  # and it works again
+    await conn.set("/ch/01/mix/fader", 0.5)
+    await wait_until(lambda: responder.values["/ch/01/mix/fader"] == 0.5)
 
 
 # ---------------------------------------------------------------------------------------

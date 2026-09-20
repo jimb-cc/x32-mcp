@@ -361,7 +361,13 @@ class DashboardServer:
             sender.cancel()
             try:
                 await asyncio.wait_for(sender, timeout=1.0)
-            except (asyncio.CancelledError, asyncio.TimeoutError, Exception):
+            except asyncio.CancelledError:
+                # only the sender's cancellation is ours to absorb: stop(close_connections=True)
+                # cancels this handler, and swallowing that would keep the task alive
+                cur = asyncio.current_task()
+                if cur is not None and cur.cancelling():
+                    raise
+            except (asyncio.TimeoutError, Exception):
                 pass
             log.info("dashboard client %s left (%d online, %d msgs, %d frames dropped)",
                      ws.remote_address, len(self._clients), client.sent, client.frames_dropped)
@@ -431,11 +437,13 @@ class DashboardServer:
 
     @staticmethod
     def frame_text(frame: MeterFrame) -> str:
-        """``{"t":"rta","ts":…,"db":[…]}`` — dB (RTA as-is, linear meters via ``MeterFrame.db``)."""
-        return json.dumps(
-            {"t": "rta", "ts": frame.ts, "db": [round(v, 2) for v in frame.db()]},
-            separators=(",", ":"),
-        )
+        """``{"t":"rta","ts":…,"db":[…]}`` — dB (RTA as-is, linear meters via ``MeterFrame.db``).
+
+        Through :func:`dumps` like every other message: ``lin_to_db`` floors at −90 but does not
+        clamp above, so a ``+inf`` linear sample would otherwise put a bare ``Infinity`` on the
+        wire and ``JSON.parse`` would kill the page's stream from that frame on.
+        """
+        return dumps({"t": "rta", "ts": frame.ts, "db": [round(v, 2) for v in frame.db()]})
 
     # -- state / events ------------------------------------------------------------------------
     def _on_event(self, ev: Event) -> None:

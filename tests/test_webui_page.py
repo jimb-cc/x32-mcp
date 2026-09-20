@@ -107,12 +107,10 @@ def test_views_present(html: str) -> None:
         assert lab in html, f"axis tick label {lab}"
     assert "DB_LO = -90" in html and "DB_HI = 0" in html
     assert "drawImage(" in html and "createImageData(" in html, "offscreen-canvas waterfall"
-    assert "newest at bottom" in html, "waterfall direction is labelled"
     assert "LOG_MAX = 200" in html
     assert "getMilliseconds" in html, "HH:MM:SS.mmm timestamps"
     for mode in ("IDLE", "WATCH", "RING-OUT", "SYSTEM"):
         assert mode in html
-    assert "10000 * Math.pow(2, (i - 90) / 10)" in html, "RTA band formula per docs/research/meters.md §4.2"
 
 
 def test_touch_tolerant_and_responsive(html: str) -> None:

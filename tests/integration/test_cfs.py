@@ -9,6 +9,7 @@ import asyncio
 import dataclasses
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import pytest_asyncio
@@ -17,11 +18,11 @@ from conftest import CONN_OPTS, wait_until
 from x32mcp.cfs import CfsError, CfsManager, CfsMode, ReportStore
 from x32mcp.connection import ConnectionState, X32Connection
 from x32mcp.desk import Desk
-from x32mcp.detector import DetectorConfig
+from x32mcp.detector import Detection, DetectorConfig
 from x32mcp.events import EventBus
 from x32mcp.meters import SyntheticRta, rta_band_hz
 from x32mcp.nodes import SnapshotStore
-from x32mcp.policy import Policy
+from x32mcp.policy import Policy, PolicyError
 from x32mcp.provision import apply_setup, discover_mics, plan_setup, preflight, validate_ringout_eqs
 
 GEQ_BAND_2K5 = 22  # 1-based GEQ band at 2.5 kHz = /fx/N/par/22 (fx_routing_scenes.md §2.3)
@@ -361,7 +362,9 @@ async def test_ring_out_closed_loop(desk, conn, fakedesk, events, cfs, tmp_path)
     md = path.with_suffix(".md").read_text(encoding="utf-8")
     assert "-20.0 dB → -9.0 dB" in md and "Result: DONE" in md
     assert cfs.state.mode is CfsMode.IDLE and cfs.state.stage == "DONE" and cfs.state.bus == 1
-    assert (tmp_path / "snapshots").glob("*ringout-pre-bus-1*") or any("ringout" in p.name for p in (tmp_path / "snapshots").glob("*.json"))
+    # Path.glob() returns a generator (always truthy): the file list must be materialised
+    snaps = sorted(p.name for p in (tmp_path / "snapshots").glob("*.json"))
+    assert list((tmp_path / "snapshots").glob("*ringout-pre-bus-1*.json")), snaps
 
 
 async def test_ring_out_restores_master_on_connection_loss(desk, conn, fakedesk, events, cfs):
@@ -424,6 +427,185 @@ async def test_ring_out_untamable_ring_backs_off(descriptor, desk, policy, event
     assert fakedesk.get("/fx/5/par/22") == pytest.approx(0.2, abs=1e-6)  # -9 dB
     assert fakedesk.value("/bus/01/mix/fader") == pytest.approx(rep["end_master_db"], abs=0.1)
     assert not rta.running
+
+
+async def test_feedback_watch_snapshots_while_arming(desk, conn, fakedesk, policy, cfs, tmp_path):
+    """The pre-write snapshot is paid on the arming path, not by the first cut (BRIEF §5: <100 ms
+    detect→cut). Nothing else on that path writes through the Desk."""
+    await provision(desk, [1])
+    route_mics(desk, fakedesk, 1, [1])
+    fset(desk, fakedesk, "/bus/01/mix/fader", -20.0)
+    policy.snapshot_before_write = True  # as if nothing had been written this session yet
+    before = len(list((tmp_path / "snapshots").glob("*auto-pre-write*.json")))
+    await cfs.feedback_watch(1)
+    assert policy.snapshot_before_write is False
+    assert len(list((tmp_path / "snapshots").glob("*auto-pre-write*.json"))) == before + 1
+    await cfs.stop()
+
+
+async def test_ring_out_refuses_useless_arguments(desk, conn, fakedesk, cfs):
+    """A step the read-back cannot show, a step the relative clamp would refuse, and a target at or
+    below the current master are all refused before anything is written."""
+    await provision(desk, [1])
+    route_mics(desk, fakedesk, 1, [1])
+    fset(desk, fakedesk, "/bus/01/mix/fader", -20.0)
+    for kwargs, frag in ((dict(step_db=0.02), "report grid"), (dict(step_db=10.0), "relative move limit"),
+                         (dict(target_gain_db=-30.0), "already at")):
+        with pytest.raises(CfsError) as ei:
+            await cfs.ring_out(1, dwell_ms=10, **{"target_gain_db": -6.0, **kwargs})
+        assert ei.value.code == "BAD_ARGUMENT", ei.value
+        assert frag in ei.value.message
+    assert cfs.state.mode is CfsMode.IDLE
+    await settle(conn)
+    assert fakedesk.value("/bus/01/mix/fader") == pytest.approx(-20.0, abs=0.1)  # untouched
+
+
+async def test_ring_out_that_never_raises_leaves_the_master_alone(desk, conn, fakedesk, cfs):
+    """A run with no budget cannot raise anything: the safety margin must not be applied to a fader
+    the operator set (it would be a silent, unrequested monitor cut)."""
+    await provision(desk, [1])
+    route_mics(desk, fakedesk, 1, [1])
+    fset(desk, fakedesk, "/bus/01/mix/fader", -20.0)
+    rep = await asyncio.wait_for(cfs.ring_out(1, target_gain_db=-6.0, notch_budget=0, dwell_ms=10), timeout=30)
+    assert rep["final_stage"] == "DONE" and rep["aborted"] is False
+    assert rep["start_master_db"] == rep["max_master_db"] == rep["end_master_db"] == -20.0
+    assert "BACKOFF" not in [s["stage"] for s in rep["stages"]]
+    await settle(conn)
+    assert fakedesk.value("/bus/01/mix/fader") == pytest.approx(-20.0, abs=0.1)
+
+
+async def test_ring_out_policy_refusal_is_not_a_connection_loss(desk, conn, fakedesk, events, cfs, monkeypatch):
+    """A PolicyError while raising is a LOCAL refusal: normal BACKOFF + ABORT, no emergency restore
+    and no connection_lost in the report."""
+    await provision(desk, [1])
+    route_mics(desk, fakedesk, 1, [1])
+    fset(desk, fakedesk, "/bus/01/mix/fader", -20.0)
+    restores: list[dict] = []
+    events.subscribe(lambda ev: restores.append(ev.data), types={"cfs.restore"})
+    real = desk.set_level
+    calls = {"n": 0}
+
+    async def flaky(t, db, **kw):
+        calls["n"] += 1
+        if calls["n"] == 3 and not kw.get("force"):
+            raise PolicyError("RATE_LIMITED", "too many writes per second")
+        return await real(t, db, **kw)
+
+    monkeypatch.setattr(desk, "set_level", flaky)
+    rep = await asyncio.wait_for(cfs.ring_out(1, target_gain_db=-6.0, step_db=1.0, dwell_ms=10), timeout=30)
+    assert rep["connection_lost"] is False and rep["restored"] is None and restores == []
+    assert rep["final_stage"] == "ABORT" and "policy" in rep["abort_reason"] and "RATE_LIMITED" in rep["abort_reason"]
+    assert [s["stage"] for s in rep["stages"]][-2:] == ["BACKOFF", "ABORT"]
+    assert rep["end_master_db"] == pytest.approx(rep["max_master_db"] - 6.0)  # abort_backoff_db
+    await settle(conn)
+    assert fakedesk.value("/bus/01/mix/fader") == pytest.approx(rep["end_master_db"], abs=0.1)
+
+
+async def test_ring_out_unexpected_error_still_backs_off_and_finishes(desk, conn, fakedesk, cfs, reports, monkeypatch):
+    """An exception the loop does not expect (a full snapshot disk, say) must not leave the manager
+    armed with the master raised: back off, save the report, re-raise."""
+    await provision(desk, [1])
+    route_mics(desk, fakedesk, 1, [1])
+    fset(desk, fakedesk, "/bus/01/mix/fader", -20.0)
+    real = desk.set_level
+    calls = {"n": 0}
+
+    async def boom(t, db, **kw):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise OSError(28, "No space left on device")
+        return await real(t, db, **kw)
+
+    monkeypatch.setattr(desk, "set_level", boom)
+    with pytest.raises(OSError):
+        await asyncio.wait_for(cfs.ring_out(1, target_gain_db=-6.0, step_db=1.0, dwell_ms=10), timeout=30)
+    assert cfs.state.mode is CfsMode.IDLE and not cfs.frames.running
+    rep = reports.latest_for_bus(1)
+    assert rep is not None and rep["final_stage"] == "ABORT" and "internal error" in rep["abort_reason"]
+    assert rep["end_master_db"] == pytest.approx(rep["max_master_db"] - 6.0)
+    await settle(conn)
+    assert fakedesk.value("/bus/01/mix/fader") == pytest.approx(rep["end_master_db"], abs=0.1)
+    res = await cfs.feedback_watch(1)  # not wedged in RINGOUT: a new session can arm
+    assert res["session_id"] and cfs.state.mode is CfsMode.WATCH
+    await cfs.stop()
+
+
+async def test_ring_out_backs_off_even_in_show_mode(descriptor, desk, policy, events, reports, conn, fakedesk):
+    """show_mode(True) is Tier 0 and can land mid ring-out; its 3 dB relative clamp must not be able
+    to refuse the 6 dB abort back-off and leave the bus ringing."""
+    await provision(desk, [1])
+    route_mics(desk, fakedesk, 1, [1])
+    fset(desk, fakedesk, "/bus/01/mix/fader", -20.0)
+    cfg = dataclasses.replace(DetectorConfig.from_descriptor(descriptor), decay_verify_s=0.3, cooldown_s=0.3)
+    rta = SyntheticRta(seed=3, period_s=0.05, band_hz=rta_band_hz(descriptor))
+    rta.inject_ring(2400.0, 15.0, start_db=-30.0)  # open loop: our cuts never reach this analyser
+    events.subscribe(lambda ev: setattr(policy, "show_mode", True) if ev.data["stage"] == "RAISE" else None, types={"cfs.stage"})
+    cfs = CfsManager(desk, policy, events, reports, frames=rta, detector_cfg=cfg)
+    try:
+        rep = await asyncio.wait_for(cfs.ring_out(1, target_gain_db=-10.0, dwell_ms=300), timeout=40)
+    finally:
+        await cfs.close()
+        policy.show_mode = False
+    assert rep["final_stage"] == "ABORT" and rep["aborted"] and rep["connection_lost"] is False
+    assert rep["end_master_db"] == pytest.approx(rep["max_master_db"] - 6.0)
+    await settle(conn)
+    assert fakedesk.value("/bus/01/mix/fader") == pytest.approx(rep["end_master_db"], abs=0.1)
+
+
+async def test_verify_needs_a_sustained_drop_not_one_frame(cfs):
+    """VERIFY must see the drop on decay_verify_frames consecutive frames: a single dipping frame is
+    RTA noise, and passing on it resumes raising under an insufficient cut."""
+    assert cfs.detector_cfg.decay_verify_frames >= 2
+    ses = SimpleNamespace(abort_reason=None, frame_event=asyncio.Event(), last_values=None)
+    det = Detection(ts=0.0, band=50, freq_hz=1000.0, level_db=-10.0, prominence_db=15.0,
+                    slope_db_per_s=12.0, frames=3, confidence=0.9)
+    levels = [-20.0, -11.0, -20.0, -20.0]  # drops 10, 1 (noise), 10, 10 — only the last pair counts
+    pushed: list[float] = []
+
+    async def drive() -> None:
+        for lvl in levels:
+            await asyncio.sleep(0.02)
+            vals = [-80.0] * 100
+            vals[det.band] = lvl
+            ses.last_values = tuple(vals)
+            pushed.append(lvl)
+            ses.frame_event.set()
+
+    task = asyncio.create_task(drive())
+    try:
+        ok, drop = await asyncio.wait_for(cfs._verify_decay(ses, det, -10.0), timeout=5.0)
+    finally:
+        task.cancel()
+    assert ok is True and drop == pytest.approx(10.0)
+    assert pushed == levels  # it did not pass on the first (isolated) qualifying frame
+
+
+async def test_system_run_honours_a_stop_between_stages(desk, conn, fakedesk, events, cfs):
+    """stop()/abort()/close() flag a system run that is between stages (no session is armed then);
+    the loop must not raise the next bus."""
+    await provision(desk, [1])
+    route_mics(desk, fakedesk, 1, [1])
+    fset(desk, fakedesk, "/bus/01/mix/fader", -20.0)
+    events.subscribe(lambda ev: cfs._stop_system("stopped by operator") if ev.data.get("mode") == "system" else None,
+                     types={"cfs.state"})
+    rep = await asyncio.wait_for(cfs.ring_out_system({"stages": [{"bus": 1, "target_gain_db": -17.0, "dwell_ms": 10}]}), timeout=30)
+    assert rep["aborted"] and rep["abort_reason"] == "stopped by operator" and rep["stages"] == []
+    assert cfs.state.mode is CfsMode.IDLE
+    await settle(conn)
+    assert fakedesk.value("/bus/01/mix/fader") == pytest.approx(-20.0, abs=0.1)  # nothing was raised
+
+
+async def test_stop_and_abort_reach_a_system_run_between_stages(cfs):
+    cfs._system = {"session_id": "20260101-000000-system", "plan": {"stages": []}, "started": time.time()}
+    try:
+        res = await cfs.stop()
+        assert res["stopped"] is True and res["mode"] == "system" and res["report"] is None
+        assert cfs._system["stopped"] == "stopped by operator"
+        cfs._system["stopped"] = None
+        await cfs.abort("shutdown")
+        assert cfs._system["stopped"] == "shutdown"
+    finally:
+        cfs._system = None
 
 
 async def test_ring_out_system_consolidated_report(desk, conn, fakedesk, events, cfs, reports):

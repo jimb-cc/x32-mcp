@@ -22,10 +22,12 @@ Decisions where DESIGN.md is silent:
 * **Not connected.** Tools that need the desk return ``NOT_CONNECTED`` while the connection is
   DISCONNECTED/CONNECTING; while DEGRADED they try (reads may still work, writes refuse inside
   ``Desk``). ``connection_status`` reports ``ok: false`` with ``NOT_CONNECTED``/``DEGRADED``.
-* **Timeouts.** Every tool runs under ``asyncio.wait_for`` (default 30 s; level moves
-  ``ramp_ms`` + 15 s, dumps/diffs 60 s, restores 30 s + one second per 40 sections, ring-outs
-  a budget computed from steps × dwell + verify time, system runs 400 s per stage) and reports
-  ``TIMEOUT`` instead of hanging. Network waits below that are bounded by the connection.
+* **Timeouts.** Every tool runs under ``asyncio.wait_for`` (default 30 s; level moves the ramp's
+  real step cadence + 15 s — a cut-short ramp reports ``RAMP_ABORTED``, not ``TIMEOUT``, because
+  the desk was answering; dumps/diffs 60 s, restores 30 s + one second per 40 sections, the
+  Tier-2 preflight of a ring-out 60 s, ring-outs a budget computed from steps × dwell + verify
+  time, system runs 400 s per stage) and reports ``TIMEOUT`` instead of hanging. Network waits
+  below that are bounded by the connection.
 * **Tier-2 dance.** ``policy.check_show_mode_allows(action)`` runs *before* ``policy.guard``, so
   show mode refuses scene recall/save and ring-outs even when a token is presented; the token
   payload is the normalised request (e.g. the resolved scene index, the concrete setup plan),
@@ -96,8 +98,10 @@ RESTORE_BASE_TIMEOUT_S = 30.0
 RESTORE_SECTIONS_PER_S = 40.0  # restore runs at <= 50 lines/s (desk.py); leave headroom
 RING_OUT_BASE_TIMEOUT_S = 60.0
 SYSTEM_STAGE_TIMEOUT_S = 400.0
+PREFLIGHT_TIMEOUT_S = 60.0  # the Tier-2 first call (preflight / GEQ validation) never reaches the run's own bound
 FRAME_PERIOD_S = 0.05  # meters.md §1.2: one frame per 50 ms at time factor 1
 MAX_DIFF_CHANGES = 200
+MAX_DUMP_SECTIONS = 200  # the whole desk is ~2100 sections / ~200 KB: far past any tool-result budget
 _MINUS = "−"  # typographic minus for human summaries
 _ARROW = "→"
 
@@ -112,6 +116,7 @@ adjust_fader, mute/unmute, set_send, set_eq_band, set_pan, set_comp, set_gate, l
 apply_patch_plan names/colours, feedback_watch) are clamped (channels +5 dB, buses/main/sends 0 dB, \
 EQ +-15 dB), ramped (default 300 ms) and limited to +-6 dB per call (+-3 dB in show mode); a larger \
 move needs force=true, which you pass ONLY when the user explicitly asked for a move of that size. \
+get_rta(target) is Tier 1 too: pointing the RTA writes the console's RTA prefs (get_rta() alone only reads). \
 The first write of a session automatically snapshots the whole desk (restore_snapshot undoes). \
 Tier 2 (set_main_fader, set_main_mute, recall_scene, save_scene, restore_snapshot, set_channel_config, \
 apply_patch_plan with include_source, setup_ringout_eqs, ring_out, ring_out_system) uses a confirmation \
@@ -185,11 +190,15 @@ class App:
                 log.warning("autoconnect to %s:%d failed: %s", self.settings.x32_host, self.settings.x32_port, e)
 
     async def connect(self, host: str, port: int = 10023) -> Any:
-        """``conn.connect`` bounded by :data:`CONNECT_TIMEOUT_S`; drops the desk cache."""
+        """``conn.connect`` bounded by :data:`CONNECT_TIMEOUT_S`; drops the desk cache and re-arms
+        the snapshot-before-write net — BRIEF §4 ties it to *this* session's desk, and a dump of
+        the console we just left is no undo for the one we just joined."""
         if self.cfs.active:
             await self.cfs.abort("reconnect requested")
         info = await asyncio.wait_for(self.conn.connect(host, int(port)), timeout=CONNECT_TIMEOUT_S)
         self.desk.invalidate()
+        self.policy.snapshot_before_write = True
+        self.desk.pre_write_snapshot = None
         return info
 
     async def close(self) -> None:
@@ -413,11 +422,39 @@ def _level_summary(desk_label: str, res: dict[str, Any], *, kind: str = "fader")
 
 
 def _level_timeout(ramp_ms: Any) -> float:
+    """Wall-clock budget (s) for a ramped move. A ramp is ``ramp_ms / ramp_step_ms`` writes, one
+    per ``ramp_step_ms`` *and* one rate-limiter slot each, so it always takes longer than
+    ``ramp_ms``: on Windows ``asyncio.sleep(0.02)`` rounds up to the ~15.6 ms timer tick (measured
+    ~1.67 × ramp_ms against the fake desk). Budget from the step cadence with headroom, never
+    from ``ramp_ms`` — a budget below the real wall time cancels the ramp mid-move."""
     try:
         ms = max(0.0, float(ramp_ms))
     except (TypeError, ValueError):
         ms = 0.0
-    return ms / 1000.0 + 15.0
+    try:
+        p = _app().policy
+        steps = max(1, round(ms / p.ramp_step_ms))
+        per_step = max(p.ramp_step_s, 1.0 / p.writes_per_second)
+    except DeskError:  # no app yet: same shape with the defaults
+        steps, per_step = max(1, round(ms / 20.0)), 0.02
+    return steps * per_step * 2.5 + 15.0
+
+
+async def _bounded_level(coro: Awaitable[dict[str, Any]], ramp_ms: int, tool: str) -> dict[str, Any]:
+    """One bound around a whole level move — ``resolve`` (which may read every strip family's
+    names), the ramp itself and the name read — not just the ramp. A ramp cut short leaves the
+    fader at an intermediate value while the desk was answering perfectly, so it gets its own
+    code instead of TIMEOUT's "the desk is not answering"."""
+    budget = _level_timeout(ramp_ms)
+    try:
+        return await asyncio.wait_for(coro, timeout=budget)
+    except asyncio.TimeoutError:
+        raise DeskError(
+            "RAMP_ABORTED",
+            f"{tool} was cut short after {budget:.0f} s; the level may sit at an intermediate value "
+            "— read it back (get_strip / get_channel_sends) before moving it again",
+            ramp_ms=int(ramp_ms), timeout_s=round(budget, 1),
+        ) from None
 
 
 def _strip_summary(s: dict[str, Any]) -> str:
@@ -483,7 +520,8 @@ def _applied_text(applied: dict[str, Any]) -> str:
         elif k.endswith("_pct"):
             out.append(f"{k[:-4]} {v} %")
         elif isinstance(v, bool):
-            out.append(f"{k} {'on' if v else 'off'}")
+            state = "on" if v else "off"
+            out.append(state if k == "on" else f"{k} {state}")  # 'on': True is "on", not "on on"
         else:
             out.append(f"{k} {v}")
     return ", ".join(out)
@@ -780,7 +818,12 @@ async def list_scenes() -> dict[str, Any]:
     current = await desk.current_scene()
     with_data = [s for s in scenes if s["has_data"]]
     empty = [s["index"] for s in scenes if not s["has_data"]]
-    summary = f"{len(with_data)} scene(s) stored (current: {current['index']} '{current['name']}'): " + ", ".join(
+    cur_txt = (
+        f"current: {current['index']} '{current['name']}'"
+        if current.get("index") is not None
+        else f"current: {current.get('note') or 'none'}"
+    )
+    summary = f"{len(with_data)} scene(s) stored ({cur_txt}): " + ", ".join(
         f"{s['index']} '{s['name']}'" for s in with_data
     ) + f"; {len(empty)} empty slot(s)"
     return _ok(summary, scenes=with_data, empty_slots=empty, current=current)
@@ -792,22 +835,34 @@ async def get_current_scene() -> dict[str, Any]:
     """The scene the desk currently has loaded: {index, name, has_data}. Tier 0."""
     desk = _desk()
     cur = await desk.current_scene()
+    if cur.get("index") is None:
+        return _ok(cur.get("note") or "No scene is currently loaded.", **cur)
     return _ok(f"Current scene: {cur['index']} '{cur['name']}'" + ("" if cur.get("has_data") else " (empty slot)"), **cur)
 
 
 @server.tool()
 @_tool(timeout=DUMP_TIMEOUT_S)
 async def dump_desk_state(sections: list[str] | None = None) -> dict[str, Any]:
-    """Raw desk state as /node sections in engineering units. The full desk is ~1500 sections (large):
-    pass sections (target keys 'ch.5', families 'bus', or paths '/ch/05') to narrow it. Use
-    snapshot_desk to keep a copy on disk instead. Tier 0."""
+    """Raw desk state as /node sections in engineering units. The whole desk is ~2100 sections
+    (~200 KB), so at most 200 are returned (truncated=true): pass sections (target keys 'ch.5',
+    families 'bus', or paths '/ch/05') to narrow it, or snapshot_desk to keep the whole desk on
+    disk instead. Fields are the desk's own /node names; note mix/on is the wire convention
+    (true = ON = UNMUTED, false = muted) and a per-send mix/NN/on means that send is enabled —
+    get_channel/get_strip report muted instead. Tier 0."""
     desk = _desk()
     state = await desk.dump(sections=sections)
     scope = ", ".join(sections) if sections else "whole desk"
+    shown = dict(list(state.sections.items())[:MAX_DUMP_SECTIONS])
+    truncated = len(state.sections) > len(shown)
+    summary = (
+        f"Dumped {len(state.sections)} section(s) of the {scope}"
+        + (f", {len(state.missing)} missing" if state.missing else "")
+        + (f"; only the first {len(shown)} are returned — pass sections= to narrow it, or use snapshot_desk" if truncated else "")
+    )
     return _ok(
-        f"Dumped {len(state.sections)} section(s) of the {scope}" + (f", {len(state.missing)} missing" if state.missing else ""),
-        created=state.created, console=state.console, scene=state.scene, scope=sections,
-        section_count=len(state.sections), missing=state.missing, sections=state.sections,
+        summary, created=state.created, console=state.console, scene=state.scene, scope=sections,
+        section_count=len(state.sections), returned=len(shown), truncated=truncated,
+        missing=state.missing, sections=shown,
     )
 
 
@@ -822,22 +877,32 @@ async def set_fader(target: str, db: float, ramp_ms: int = 300, force: bool = Fa
     is refused unless force=true — pass force only when the user explicitly asked for it. Tier 1;
     main LR/mono need set_main_fader."""
     desk = _desk()
-    t = await desk.resolve(target)
-    res = await asyncio.wait_for(desk.set_level(t, float(db), ramp_ms=int(ramp_ms), force=bool(force)), timeout=_level_timeout(ramp_ms))
-    name = await _name(desk, t)
-    return _ok(_level_summary(_who(t, name), res), name=name, **res)
+    ms = _int_arg(ramp_ms, "ramp_ms", 0, 60_000)
+
+    async def body() -> dict[str, Any]:
+        t = await desk.resolve(target)
+        res = await desk.set_level(t, float(db), ramp_ms=ms, force=bool(force))
+        name = await _name(desk, t)
+        return _ok(_level_summary(_who(t, name), res), name=name, **res)
+
+    return await _bounded_level(body(), ms, "set_fader")
 
 
 @server.tool()
 @_tool(timeout=None)
 async def adjust_fader(target: str, delta_db: float, ramp_ms: int = 300, force: bool = False) -> dict[str, Any]:
     """Move a fader by delta_db (e.g. -2 = 2 dB down); same clamps and 6 dB/3 dB relative limit as
-    set_fader (force=true only on explicit user request). Tier 1."""
+    set_fader (ramp_ms 0..60000; force=true only on explicit user request). Tier 1."""
     desk = _desk()
-    t = await desk.resolve(target)
-    res = await asyncio.wait_for(desk.adjust_level(t, float(delta_db), ramp_ms=int(ramp_ms), force=bool(force)), timeout=_level_timeout(ramp_ms))
-    name = await _name(desk, t)
-    return _ok(_level_summary(_who(t, name), res), name=name, **res)
+    ms = _int_arg(ramp_ms, "ramp_ms", 0, 60_000)
+
+    async def body() -> dict[str, Any]:
+        t = await desk.resolve(target)
+        res = await desk.adjust_level(t, float(delta_db), ramp_ms=ms, force=bool(force))
+        name = await _name(desk, t)
+        return _ok(_level_summary(_who(t, name), res), name=name, **res)
+
+    return await _bounded_level(body(), ms, "adjust_fader")
 
 
 @server.tool()
@@ -873,23 +938,36 @@ async def _send_summary(desk: Desk, t: Target, res: dict[str, Any]) -> str:
 @server.tool()
 @_tool(timeout=None)
 async def set_send(ch: str, bus: int, db: float, ramp_ms: int = 300, force: bool = False) -> dict[str, Any]:
-    """Set the send from input strip ch (target or name) to bus (1..16) to db (clamped at 0 dB;
-    -90 = -oo); ramped; 6 dB relative limit unless force (explicit user request only). Tier 1."""
+    """Set the send from strip ch (target or name) to db (clamped at 0 dB; -90 = -oo). bus is the
+    destination: a mix bus 1..16 when ch is an input strip (channel/aux/FX return), a matrix 1..6
+    when ch is itself a mix bus or a main. Ramped over ramp_ms (0..60000); 6 dB relative limit
+    unless force (explicit user request only). Tier 1."""
     desk = _desk()
-    t = await desk.resolve(ch)
-    res = await asyncio.wait_for(desk.set_send(t, int(bus), float(db), ramp_ms=int(ramp_ms), force=bool(force)), timeout=_level_timeout(ramp_ms))
-    return _ok(await _send_summary(desk, t, res), **res)
+    ms = _int_arg(ramp_ms, "ramp_ms", 0, 60_000)
+
+    async def body() -> dict[str, Any]:
+        t = await desk.resolve(ch)
+        res = await desk.set_send(t, int(bus), float(db), ramp_ms=ms, force=bool(force))
+        return _ok(await _send_summary(desk, t, res), **res)
+
+    return await _bounded_level(body(), ms, "set_send")
 
 
 @server.tool()
 @_tool(timeout=None)
 async def adjust_send(ch: str, bus: int, delta_db: float, ramp_ms: int = 300, force: bool = False) -> dict[str, Any]:
-    """Change the send from ch to bus by delta_db ("more kick in Tony's ears" = +2); clamps and the
-    6 dB relative limit as set_send. Tier 1."""
+    """Change the send from ch to bus by delta_db ("more kick in Tony's ears" = +2); bus is a mix
+    bus 1..16 from an input strip, a matrix 1..6 from a mix bus or a main. Clamps, ramp_ms
+    (0..60000) and the 6 dB relative limit as set_send. Tier 1."""
     desk = _desk()
-    t = await desk.resolve(ch)
-    res = await asyncio.wait_for(desk.adjust_send(t, int(bus), float(delta_db), ramp_ms=int(ramp_ms), force=bool(force)), timeout=_level_timeout(ramp_ms))
-    return _ok(await _send_summary(desk, t, res), **res)
+    ms = _int_arg(ramp_ms, "ramp_ms", 0, 60_000)
+
+    async def body() -> dict[str, Any]:
+        t = await desk.resolve(ch)
+        res = await desk.adjust_send(t, int(bus), float(delta_db), ramp_ms=ms, force=bool(force))
+        return _ok(await _send_summary(desk, t, res), **res)
+
+    return await _bounded_level(body(), ms, "adjust_send")
 
 
 @server.tool()
@@ -995,19 +1073,24 @@ async def panic() -> dict[str, Any]:
 @_tool(timeout=None)
 async def set_main_fader(which: str = "st", db: float = -90, ramp_ms: int = 300, confirm_token: str | None = None) -> dict[str, Any]:
     """Main LR (which='st') or Main M/C ('m') fader to db (ceiling 0 dB; -90 = -oo), ramped over
-    ramp_ms. TIER 2: the first call returns requires_confirmation + confirm_token; show the
-    action_summary to the user and call again with confirm_token only after they agree."""
+    ramp_ms (0..60000). TIER 2: the first call returns requires_confirmation + confirm_token; show
+    the action_summary to the user and call again with confirm_token only after they agree."""
     desk = _desk()
     w = _main_which(which)
+    ms = _int_arg(ramp_ms, "ramp_ms", 0, 60_000)
     t = Target("main", w)
-    strip = await desk.get_strip(t)
-    payload = {"which": w, "db": float(db), "ramp_ms": int(ramp_ms)}
-    summary = f"Set {t.label} fader from {_dbs(strip.get('fader'))} to {_db_from_float(float(db))} ({int(ramp_ms)} ms ramp)"
-    pending = _confirm("set_main_fader", summary, payload, confirm_token, current=strip.get("fader"))
-    if pending:
-        return pending
-    res = await asyncio.wait_for(desk.set_main_level(w, float(db), ramp_ms=int(ramp_ms)), timeout=_level_timeout(ramp_ms))
-    return _ok(_level_summary(_who(t, strip.get("name")), res), name=strip.get("name"), **res)
+
+    async def body() -> dict[str, Any]:
+        strip = await desk.get_strip(t)
+        payload = {"which": w, "db": float(db), "ramp_ms": ms}
+        summary = f"Set {t.label} fader from {_dbs(strip.get('fader'))} to {_db_from_float(float(db))} ({ms} ms ramp)"
+        pending = _confirm("set_main_fader", summary, payload, confirm_token, current=strip.get("fader"))
+        if pending:
+            return pending
+        res = await desk.set_main_level(w, float(db), ramp_ms=ms)
+        return _ok(_level_summary(_who(t, strip.get("name")), res), name=strip.get("name"), **res)
+
+    return await _bounded_level(body(), ms, "set_main_fader")
 
 
 @server.tool()
@@ -1366,12 +1449,41 @@ async def get_meters(type: str = "channels", duration_ms: int = 500) -> dict[str
     return _ok(summary, type=key, meter_type=mtype, duration_ms=ms, frames=n, items=items)
 
 
+class _RtaPrefsWriter:
+    """``conn`` shim for :func:`~x32mcp.meters.set_rta_source`: reads pass straight through, but
+    every write goes the way :meth:`Desk._write` goes — snapshot-before-write, rate-limiter slot,
+    ``desk.write`` event — because ``/-prefs/rta/source``, ``/-prefs/rta/pos`` and
+    ``/-prefs/rta/options`` are Tier-1 desk parameters (device.yaml), not meter traffic."""
+
+    def __init__(self, app: "App", target: Target) -> None:
+        self._app, self._target = app, target
+
+    async def get(self, address: str) -> Any:
+        return await self._app.conn.get(address)
+
+    async def set(self, address: str, value: Any) -> None:
+        a = self._app
+        tier = a.policy.tier_for(address)
+        if tier >= 2:  # no Tier-2 parameter may be written without the confirmation dance
+            raise DeskError("GUARDED", f"{address} is a guarded (Tier 2) parameter", address=address)
+        await a.desk.ensure_pre_write_snapshot()
+        await a.policy.acquire_write()
+        try:
+            await a.conn.set(address, value)
+        except NotConnected as e:
+            raise DeskError("NOT_CONNECTED", str(e)) from None
+        a.events.publish("desk.write", address=address, value=_jsonable(value), tier=int(tier),
+                         tool="get_rta", target=self._target.key)
+
+
 @server.tool()
 @_tool(timeout=None)
 async def get_rta(target: str | None = None, frames: int = 10) -> dict[str, Any]:
     """The console's 100-band RTA (dB per band, 20 Hz..20 kHz) averaged over frames (1..200, 50 ms
-    each). target points the RTA at a strip first ('bus.3', 'ch.5', 'main.st'); while a CFS2
-    session runs the RTA stays on its bus. Returns band_hz, db and the loudest peaks. Tier 0."""
+    each). Tier 0 without target. Passing target points the RTA at a strip first ('bus.3', 'ch.5',
+    'main.st'), which WRITES the console's RTA prefs (source, pre/post, solo priority) — Tier 1,
+    snapshotted and rate-limited like any mix move; while a CFS2 session runs the RTA stays on its
+    bus. Returns band_hz, db and the loudest peaks."""
     a = _app()
     desk = _desk()
     n = min(max(int(frames), 1), 200)
@@ -1387,7 +1499,7 @@ async def get_rta(target: str | None = None, frames: int = 10) -> dict[str, Any]
     else:
         if target is not None:
             t = await desk.resolve(target)
-            r = await set_rta_source(a.conn, a.descriptor, t)
+            r = await set_rta_source(_RtaPrefsWriter(a, t), a.descriptor, t)
             rta_info = {"source_index": r.source_index, "post_eq": r.post_eq, "verified": r.verified, "stat_actual": r.stat_actual}
         src, own = LiveMeters(a.conn, int(a.descriptor.rta.get("meter_type", 15))), True
         source_key = t.key if t else None
@@ -1479,13 +1591,18 @@ async def setup_ringout_eqs(buses: list[int | str], confirm_token: str | None = 
     res = await _prov.apply_setup(desk, plan)
     geq = {k: v for k, v in res.get("geq", {}).items()}
     ok = bool(res.get("ok", True))
+    if not ok:  # DESIGN §19 knows two ok:false shapes; a failure is the error envelope, not a third
+        reasons = "; ".join(f"{k}: {'; '.join(v.get('reasons', []))}" for k, v in geq.items() if not v.get("ok"))
+        raise DeskError(
+            "GEQ_VALIDATION_FAILED",
+            f"ring-out GEQs on {labels} did not validate after {res.get('changed', 0)} write(s): {reasons}",
+            plan=plan.to_dict(), **{k: v for k, v in res.items() if k not in ("ok", "summary")},
+        )
     summary = (
-        f"Ring-out GEQs on {labels}: {res.get('changed', 0)} write(s)" + (" (already set up)" if not res.get("changed") else "")
-        + ("; all validate" if ok else "; VALIDATION FAILED — " + "; ".join(f"{k}: {'; '.join(v.get('reasons', []))}" for k, v in geq.items() if not v.get("ok")))
+        f"Ring-out GEQs on {labels}: {res.get('changed', 0)} write(s)"
+        + (" (already set up)" if not res.get("changed") else "") + "; all validate"
     )
-    out = _ok(summary, plan=plan.to_dict(), **res)
-    out["ok"] = ok
-    return out
+    return _ok(summary, plan=plan.to_dict(), **res)
 
 
 @server.tool()
@@ -1626,7 +1743,7 @@ async def ring_out(
     dwell = _int_arg(dwell_ms, "dwell_ms", 0, 60_000)
     budget = _int_arg(notch_budget, "notch_budget", 1, 12)
     patch = _load_patch(patch_file)
-    pf = await _prov.preflight(desk, t, patch=patch, reports=a.reports)
+    pf = await asyncio.wait_for(_prov.preflight(desk, t, patch=patch, reports=a.reports), timeout=PREFLIGHT_TIMEOUT_S)
     if not pf.ok:
         raise CfsError("PREFLIGHT_FAILED", f"cannot ring out {t.label}: " + "; ".join(pf.blockers), preflight=pf.to_dict())
     ceiling = min(a.policy.level_ceiling_db(t), float(a.descriptor.ringout.get("master_ceiling_db", 0.0)))
@@ -1667,7 +1784,9 @@ async def ring_out_system(plan: dict[str, Any] | None = None, confirm_token: str
     a.policy.check_show_mode_allows("ring_out_system")
     stages: list[dict[str, Any]]
     if plan is None:
-        status = await _prov.validate_ringout_eqs(desk, list(range(1, 17)) + ["main"], a.reports)
+        status = await asyncio.wait_for(
+            _prov.validate_ringout_eqs(desk, list(range(1, 17)) + ["main"], a.reports), timeout=PREFLIGHT_TIMEOUT_S,
+        )
         stages = [{"bus": k} for k, s in status.items() if s.ok]
         if not stages:
             raise CfsError("NO_STAGES", "nothing to ring out: no bus (or Main LR) has a validated ring-out GEQ; run setup_ringout_eqs first")
@@ -1682,6 +1801,16 @@ async def ring_out_system(plan: dict[str, Any] | None = None, confirm_token: str
                 raise DeskError("BAD_ARGUMENT", f"each stage needs a 'bus', got {st!r}")
             item = dict(st)
             _bus_target(item["bus"])  # validates the spelling early
+            # a stage is not a back door around the single-bus tool's limits (BRIEF §5: 6 notches)
+            if item.get("notch_budget") is not None:
+                item["notch_budget"] = _int_arg(item["notch_budget"], "notch_budget", 1, 12)
+            if item.get("dwell_ms") is not None:
+                item["dwell_ms"] = _int_arg(item["dwell_ms"], "dwell_ms", 0, 60_000)
+            if item.get("step_db") is not None:
+                step = float(item["step_db"])
+                if not 0 < step <= a.policy.relative_limit_db:
+                    raise DeskError("BAD_ARGUMENT", f"step_db must be > 0 and <= {a.policy.relative_limit_db:g}, got {item['step_db']!r}")
+                item["step_db"] = step
             if item.get("patch_file"):
                 item["patch"] = _load_patch(str(item.pop("patch_file")))
             stages.append(item)

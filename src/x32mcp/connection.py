@@ -24,6 +24,12 @@ Decisions where DESIGN.md is silent (§0.11):
 * ``set()`` accepts an optional ``typetags`` keyword (same meaning as :func:`osc.encode`).
 * ``backoff_s`` (reconnect delays, default 1, 2, 4, 8 s, last value repeats) is a constructor
   keyword so tests can shorten it; ``local_addr``/``stats`` are extra read-only properties.
+* ``connect()`` resolves ``host`` to a numeric IPv4 address **once** and every datagram goes
+  to that address: ``sendto`` would otherwise resolve a name synchronously on the event-loop
+  thread for every request, heartbeat and meter renewal. Messages keep the caller's spelling.
+* A transport that dies under us (``abort()``, a fatal proactor error) degrades the connection
+  instead of wedging it: ``connection_lost`` tells the owner, and the reconnect loop re-binds a
+  fresh socket (new ephemeral port) before each probe.
 * Any datagram that decodes while DEGRADED counts as recovery (the desk is evidently alive).
 * Unmatched ``/info``, ``/xinfo``, ``/status``, ``/`` and ``node`` messages (late replies) are
   dropped, never treated as pushed parameter updates.
@@ -64,6 +70,7 @@ _XREMOTE_REQ = encode("/xremote")  # "/xremote~~~~", 12 B, the form every Maillo
 _NODE_REPLY = "node"  # per transport.md §6.2: the /node reply address has no slash
 _NOT_PARAMS = frozenset({"/info", "/xinfo", "/status", "/"})
 _RCVBUF = 1 << 20  # transport.md §10: bulk /node bursts drop datagrams with small buffers
+_RESOLVE_TIMEOUT_S = 5.0  # getaddrinfo budget in connect(); every network wait has one
 _MISSING = object()
 
 UpdateCallback = Callable[[str, tuple], None]
@@ -179,9 +186,15 @@ def _rearm_reader(transport: asyncio.DatagramTransport | None, n_errors: int) ->
 class _Protocol(asyncio.DatagramProtocol):
     """Adapter from the transport to the owner's handlers; never lets an exception reach the loop."""
 
-    def __init__(self, on_datagram: Callable[[bytes, Any], None], on_error: Callable[[Exception], None]) -> None:
+    def __init__(
+        self,
+        on_datagram: Callable[[bytes, Any], None],
+        on_error: Callable[[Exception], None],
+        on_lost: Callable[[Any, Exception | None], None],
+    ) -> None:
         self._on_datagram = on_datagram
         self._on_error = on_error
+        self._on_lost = on_lost
         self.transport: asyncio.DatagramTransport | None = None
 
     def connection_made(self, transport: asyncio.BaseTransport) -> None:
@@ -202,6 +215,10 @@ class _Protocol(asyncio.DatagramProtocol):
     def connection_lost(self, exc: Exception | None) -> None:
         if exc is not None:
             log.debug("datagram transport lost: %r", exc)
+        try:
+            self._on_lost(self.transport, exc)
+        except Exception:
+            log.exception("transport-lost handler failed")
 
 
 # -- connection -------------------------------------------------------------------------
@@ -241,10 +258,13 @@ class X32Connection:
 
         self._state = ConnectionState.DISCONNECTED
         self._console: ConsoleInfo | None = None
-        self._host: str | None = None
+        self._host: str | None = None  # resolved numeric IPv4 address (never a name)
+        self._host_spelling: str | None = None  # what connect() was given, for messages
         self._port = 10023
         self._transport: asyncio.DatagramTransport | None = None
         self._tasks: list[asyncio.Task] = []
+        self._closed = False  # close() ran: the loops must stop instead of re-binding
+        self._wake = asyncio.Event()  # kicks the watchdog out of its sleep when we degrade
 
         self._pending: dict[str, deque[asyncio.Future[OscMessage]]] = defaultdict(deque)
         self._cache: dict[str, tuple[float, Any]] = {}
@@ -266,13 +286,18 @@ class X32Connection:
     # -- lifecycle -----------------------------------------------------------------
 
     async def connect(self, host: str, port: int = 10023) -> ConsoleInfo:
-        """Bind the socket, do the ``/info`` round trip, start heartbeat and watchdog.
+        """Resolve ``host``, bind the socket, do the ``/info`` round trip, start the loops.
 
-        Raises :class:`RequestTimeout` (socket closed again, state DISCONNECTED) when the desk
-        does not answer ``/info`` within ``timeout_s × (retries + 1)``.
+        ``host`` is an IP address or a hostname; it is resolved to IPv4 **once**, here, and
+        every later datagram goes to that numeric address. Raises :class:`ConnectionError`
+        when the name does not resolve or the socket cannot be opened, and
+        :class:`RequestTimeout` (socket closed again, state DISCONNECTED) when the desk does
+        not answer ``/info`` within ``timeout_s × (retries + 1)``.
         """
-        if self._transport is not None:
-            await self.close()
+        if self._transport is not None or self._tasks:
+            await self.close()  # also when the socket died but the loops are still probing
+        self._closed = False
+        self._host_spelling = host
         self._host, self._port = host, int(port)
         self._error = None
         self._reconnect_attempts = 0
@@ -280,21 +305,11 @@ class X32Connection:
         self._rtt_ms = None
         self._set_state(ConnectionState.CONNECTING)
 
-        loop = asyncio.get_running_loop()
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self._host = await self._resolve(host)
+
         try:
-            sock.setblocking(False)
-            try:
-                sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, _RCVBUF)
-            except OSError:
-                pass
-            # One socket, any port: the desk answers to the source port (transport.md §2).
-            sock.bind(("0.0.0.0", 0))
-            self._transport, _ = await loop.create_datagram_endpoint(
-                lambda: _Protocol(self._handle_datagram, self._handle_socket_error), sock=sock
-            )
+            await self._bind_socket()
         except OSError as e:
-            sock.close()
             self._error = f"cannot open UDP socket: {e}"
             self._set_state(ConnectionState.DISCONNECTED)
             raise ConnectionError(self._error) from e
@@ -322,6 +337,7 @@ class X32Connection:
         self._console = ConsoleInfo(
             host=host, port=self._port, name=name, model=model, firmware=firmware, server_version=server_version
         )
+        loop = asyncio.get_running_loop()
         self._tasks = [
             loop.create_task(self._heartbeat_loop(), name="x32-heartbeat"),
             loop.create_task(self._watchdog_loop(), name="x32-watchdog"),
@@ -335,6 +351,8 @@ class X32Connection:
 
     async def close(self) -> None:
         """Stop the tasks, fail pending requests with :class:`NotConnected`, close the socket."""
+        self._closed = True  # tells the loops this is a shutdown, not a socket to re-bind
+        self._wake.set()
         tasks, self._tasks = self._tasks, []
         for t in tasks:
             t.cancel()
@@ -353,6 +371,80 @@ class X32Connection:
         self._fail_pending(NotConnected("connection closed"))
         self._cache.clear()
         self._cache_gen += 1
+
+    async def _resolve(self, host: str) -> str:
+        """``host`` (name or IP) -> a numeric IPv4 address, resolved once.
+
+        ``DatagramTransport.sendto`` hands a non-numeric address straight to
+        ``socket.sendto``, which resolves it *synchronously on the event-loop thread* — once
+        per request, heartbeat and meter renewal. Worse, on the Windows proactor loop the
+        ``gaierror`` from a name that does not resolve arrives at ``error_received`` and is
+        swallowed, so the failure would surface as a misleading ``/info`` timeout.
+        """
+        try:
+            infos = await asyncio.wait_for(
+                asyncio.get_running_loop().getaddrinfo(
+                    host, self._port, family=socket.AF_INET, type=socket.SOCK_DGRAM
+                ),
+                _RESOLVE_TIMEOUT_S,
+            )
+        # gaierror is an OSError; a malformed name ("x32..local") raises UnicodeError from the
+        # IDNA codec instead, and that must not escape connect() raw either.
+        except (OSError, UnicodeError, asyncio.TimeoutError) as e:
+            self._error = f"cannot resolve {host!r}: {e}"
+            self._set_state(ConnectionState.DISCONNECTED)
+            raise ConnectionError(self._error) from e
+        if not infos:
+            self._error = f"cannot resolve {host!r}: no IPv4 address"
+            self._set_state(ConnectionState.DISCONNECTED)
+            raise ConnectionError(self._error)
+        return str(infos[0][4][0])
+
+    async def _bind_socket(self) -> None:
+        """Bind one UDP socket on an ephemeral port and install :class:`_Protocol` on it.
+
+        Raises :class:`OSError`; what a bind failure means is the caller's business (fatal in
+        ``connect()``, "try again next backoff" in the reconnect loop).
+        """
+        loop = asyncio.get_running_loop()
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            sock.setblocking(False)
+            try:
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, _RCVBUF)
+            except OSError:
+                pass
+            # One socket, any port: the desk answers to the source port (transport.md §2).
+            sock.bind(("0.0.0.0", 0))
+            transport, _ = await loop.create_datagram_endpoint(
+                lambda: _Protocol(self._handle_datagram, self._handle_socket_error, self._handle_transport_lost),
+                sock=sock,
+            )
+        except OSError:
+            sock.close()
+            raise
+        self._transport = transport
+
+    async def _ensure_socket(self) -> bool:
+        """True when a usable socket is bound, re-binding one when the old transport was
+        closed under us (``abort()``, a fatal proactor error, the loop shutting it down).
+        False when it cannot be bound right now — the caller retries after its backoff.
+        """
+        if self._closed:
+            return False
+        transport = self._transport
+        if transport is not None and not transport.is_closing():
+            return True
+        if transport is not None:
+            self._transport = None
+            transport.close()
+        try:
+            await self._bind_socket()
+        except OSError as e:
+            log.debug("cannot re-bind UDP socket: %s", e)
+            return False
+        log.info("re-bound UDP socket on local port %s after the old one closed", (self.local_addr or ("?", "?"))[1])
+        return True
 
     # -- status ------------------------------------------------------------------------
 
@@ -379,6 +471,11 @@ class X32Connection:
     @property
     def state(self) -> ConnectionState:
         return self._state
+
+    @property
+    def _where(self) -> str:
+        """``host:port`` for messages, in the spelling the caller used (not the resolved IP)."""
+        return f"{self._host_spelling or self._host}:{self._port}"
 
     @property
     def local_addr(self) -> tuple[str, int] | None:
@@ -589,7 +686,9 @@ class X32Connection:
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
             sock.setblocking(False)
             sock.bind(("0.0.0.0", 0))
-            transport, proto = await loop.create_datagram_endpoint(lambda: _Protocol(on_datagram, on_error), sock=sock)
+            transport, proto = await loop.create_datagram_endpoint(
+                lambda: _Protocol(on_datagram, on_error, lambda _t, _e: None), sock=sock  # short-lived: nothing to rebind
+            )
         except OSError as e:
             sock.close()
             log.warning("discovery: cannot open broadcast socket: %s", e)
@@ -666,7 +765,7 @@ class X32Connection:
             self._rtt_ms = (time.monotonic() - t0) * 1000.0
             return msg
         raise RequestTimeout(
-            f"no reply to {what} from {self._host}:{self._port} after {attempts} attempt(s) ({timeout * attempts:.1f} s)"
+            f"no reply to {what} from {self._where} after {attempts} attempt(s) ({timeout * attempts:.1f} s)"
         )
 
     def _discard(self, key: str, fut: asyncio.Future) -> None:
@@ -740,6 +839,20 @@ class X32Connection:
         log.debug("socket error (ignored): %r", exc)
         _rearm_reader(self._transport, self._consecutive_errors)
 
+    def _handle_transport_lost(self, transport: Any, exc: Exception | None) -> None:
+        """The socket died under us: ``abort()``, a fatal proactor error, or the loop tearing
+        the transport down. Drop it, fail what is in flight and degrade, so the watchdog's
+        reconnect loop re-binds a socket — otherwise ``_send`` would raise
+        :class:`NotConnected` forever while the state still claimed CONNECTED.
+        """
+        if self._closed or transport is not self._transport:
+            return  # close() or a fresh connect() already replaced it
+        self._transport = None
+        self._heartbeat_ok = False
+        self._fail_pending(NotConnected(f"socket closed ({exc!r})" if exc is not None else "socket closed"))
+        if self._state in (ConnectionState.CONNECTING, ConnectionState.CONNECTED):
+            self._degrade(0.0, reason="socket closed under us; re-binding")
+
     # -- internals: state, heartbeat, watchdog ---------------------------------------------
 
     def _set_state(self, state: ConnectionState) -> None:
@@ -753,20 +866,21 @@ class X32Connection:
             error=self._error,
         )
 
-    def _degrade(self, idle_s: float) -> None:
+    def _degrade(self, idle_s: float, *, reason: str | None = None) -> None:
         if self._state is ConnectionState.DEGRADED:
             return
-        self._error = f"desk not responding (no packets for {idle_s:.1f} s)"
+        self._error = reason or f"desk not responding (no packets for {idle_s:.1f} s)"
         self._reconnect_attempts = 0
         self._heartbeat_ok = False
-        log.warning("%s:%d %s — degraded, reconnecting", self._host, self._port, self._error)
+        log.warning("%s %s — degraded, reconnecting", self._where, self._error)
         self._set_state(ConnectionState.DEGRADED)
+        self._wake.set()  # start the reconnect loop now, not after the rest of the watchdog nap
 
     def _recover(self) -> None:
         if self._state is not ConnectionState.DEGRADED:
             return
         self._error = None
-        log.info("%s:%d answering again after %d probe(s)", self._host, self._port, self._reconnect_attempts)
+        log.info("%s answering again after %d probe(s)", self._where, self._reconnect_attempts)
         self._set_state(ConnectionState.CONNECTED)
         try:
             self._send(_XREMOTE_REQ)  # re-register for pushes immediately; the desk may have rebooted
@@ -784,13 +898,24 @@ class X32Connection:
                 self._heartbeat_ok = False
             await asyncio.sleep(self._heartbeat_s)
 
+    async def _sleep_or_wake(self, delay: float) -> None:
+        """Sleep ``delay`` seconds, returning early once :meth:`_degrade` rings the bell."""
+        self._wake.clear()
+        try:
+            await asyncio.wait_for(self._wake.wait(), delay)
+        except asyncio.TimeoutError:
+            pass
+
     async def _watchdog_loop(self) -> None:
-        while True:
+        while not self._closed:
+            if self._state is ConnectionState.DEGRADED:
+                await self._reconnect_loop()  # re-binds the socket too, if it died
+                continue
             now = time.monotonic()
             last = self._last_rx if self._last_rx is not None else now
             due_in = last + self._watchdog_s - now
             if due_in > 0:
-                await asyncio.sleep(due_in)
+                await self._sleep_or_wake(due_in)
                 continue
             # Silence: /xremote is never acked, so probe with /info (transport.md §3.1).
             probe_started = time.monotonic()
@@ -801,23 +926,29 @@ class X32Connection:
                 if self._last_rx is not None and self._last_rx > probe_started:
                     continue  # something else got a reply meanwhile; the desk is alive
             except NotConnected:
-                return
+                if self._closed:
+                    return
+                # A dead transport is a reason to degrade and keep probing, not to give up:
+                # returning here would leave the connection in CONNECTED with nothing
+                # reconnecting it, and no socket would ever be re-created.
             self._degrade(time.monotonic() - last)
             await self._reconnect_loop()
 
     async def _reconnect_loop(self) -> None:
         n = 0
-        while self._state is ConnectionState.DEGRADED:
+        while self._state is ConnectionState.DEGRADED and not self._closed:
             await asyncio.sleep(self._backoff_s[min(n, len(self._backoff_s) - 1)])
-            if self._state is not ConnectionState.DEGRADED:
-                return  # a datagram arrived in the meantime
+            if self._state is not ConnectionState.DEGRADED or self._closed:
+                return  # a datagram arrived in the meantime, or we are shutting down
             n += 1
             self._reconnect_attempts = n
+            if not await self._ensure_socket():
+                continue  # nothing to probe from; try to bind again after the next backoff
             try:
                 await self._request_bytes(_INFO_REQ, "/info", self._timeout_s, 0, what="/info")
             except RequestTimeout:
-                log.debug("reconnect probe %d to %s:%d unanswered", n, self._host, self._port)
+                log.debug("reconnect probe %d to %s unanswered", n, self._where)
                 continue
             except NotConnected:
-                return
+                continue  # the socket died between the check and the send; re-bind next round
             self._recover()

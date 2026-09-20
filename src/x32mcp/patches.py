@@ -84,6 +84,7 @@ COLUMNS: tuple[str, ...] = ("channel", "name", "color", "source", "mic", "owner"
 CH_COUNT = 32
 BUS_COUNT = 16
 NAME_MAX = 12  # scales_params.md §4.1: /ch/NN/config/name is <= 12 characters
+NAME_BAD = '"'  # transport.md §6.3: node text has no escape for a quote; §6.6 the desk's parser stops at it
 
 # Friendly colour names → descriptor tokens (scales_params.md §11.1; "i" suffix = inverted).
 _COLOR_ALIASES: dict[str, str] = {
@@ -368,6 +369,11 @@ def _row_from_mapping(
     if errs:
         problems.extend(f"{label}: {e}" for e in errs)
         return None, channel
+    if NAME_BAD in name:
+        # The desk stores strip names as node text with no escape for a quote (transport.md §6.3)
+        # and its parser reads to the closing one (§6.6), so a quoted name eats the rest of the line.
+        warnings.append(f"{label}: name {name!r} contains a double quote, which the desk cannot store; it becomes {name.replace(NAME_BAD, chr(39))!r}")
+        name = name.replace(NAME_BAD, "'")
     if len(name) > NAME_MAX:
         warnings.append(f"{label}: name {name!r} is longer than {NAME_MAX} characters and will be truncated to {name[:NAME_MAX]!r}")
     return PatchRow(channel=channel, name=name, color=color, source=source, mic=mic, owner=owner, monitor_bus=monitor_bus, notes=notes), channel
@@ -519,7 +525,11 @@ def write_patch_plan(plan: PatchPlan, path: Path | str) -> Path:
     if suffix not in (".yaml", ".yml", ".csv"):
         raise PatchError(f"unsupported patch file type {suffix or '(none)'!r}; use .yaml or .csv", path=p)
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(dumps_patch_plan(plan, suffix), encoding="utf-8")
+    # Atomic like SnapshotStore.save/ReportStore.save: export_patch_plan merges the hand-authored
+    # columns out of this very file, so a half-written rewrite would destroy the only copy.
+    tmp = p.with_name(p.name + ".tmp")
+    tmp.write_text(dumps_patch_plan(plan, suffix), encoding="utf-8")
+    tmp.replace(p)
     return p
 
 

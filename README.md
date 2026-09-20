@@ -267,7 +267,7 @@ snapshot-before-first-write) · **T2** guarded (confirmation token, see the safe
 | `get_dynamics(target)` | T0 | Compressor (and gate on channels) in dB / ms / ratio tokens |
 | `list_scenes()` | T0 | The 100 scene slots: stored scenes, empty slots, the current one |
 | `get_current_scene()` | T0 | `{index, name, has_data}` of the loaded scene |
-| `dump_desk_state(sections=None)` | T0 | Raw `/node` sections in engineering units; narrow with `['ch.5', 'bus', '/ch/05']` (the whole desk is ~2100 sections) |
+| `dump_desk_state(sections=None)` | T0 | Raw `/node` sections in engineering units; narrow with `['ch.5', 'bus', '/ch/05']`. The whole desk is ~2100 sections, so at most 200 come back (`truncated: true`, `section_count` has the real figure) — use `snapshot_desk` for the lot. Fields are the desk's own `/node` names, so `mix/on` is the wire convention (`true` = unmuted) |
 
 ### Phase 2 — Tier 1 mix moves
 
@@ -317,7 +317,7 @@ snapshot-before-first-write) · **T2** guarded (confirmation token, see the safe
 | Tool | Tier | What it does |
 |---|---|---|
 | `get_meters(type="channels", duration_ms=500)` | T0 | Averaged dBFS of `channels`, `buses`, `main`, `auxins`, `fxrtns` or `matrices` |
-| `get_rta(target=None, frames=10)` | T0 | The console's 100-band RTA averaged over `frames`; `target` points the RTA at a strip first (refused while CFS² owns the RTA) |
+| `get_rta(target=None, frames=10)` | T0 / T1 | The console's 100-band RTA averaged over `frames`. Read-only without `target`; with one it first points the RTA at that strip, which writes the `/-prefs/rta/*` parameters (Tier 1: snapshot-before-write, rate limiter, `desk.write` event) and is refused while CFS² owns the RTA |
 | `validate_ringout_eqs(buses)` | T0 | Read-only check that each bus (1..16 or `"main"`) has a usable, unshared, switched-on GEQ insert; step zero of any ring-out |
 | `setup_ringout_eqs(buses, confirm_token=None)` | T2* | Provision dual-mono GEQ2s in free FX insert slots 5–8 (one slot serves two buses) and insert them; idempotent; *T2 only when something must change; refused in show mode |
 | `discover_mics(bus, patch_file=None)` | T0 | Which channels feed the bus and look like live stage mics (unmuted, send ≥ −40 dB, physical preamp), cross-checked with the patch plan and mute group 6; `include` is a suggestion to confirm |
@@ -494,11 +494,15 @@ group 6 = all stage mics**. Disagreements are listed per channel.
 2. `ring_out(bus)` — Tier 2, one confirmation that includes the open-mic list. A state machine
    (`PREFLIGHT → SNAPSHOT → ARM → RAISE → HOLD → NOTCH → VERIFY → … → BACKOFF → DONE`) raises the
    bus master in 1 dB steps with a 1.5 s dwell towards the target (default and hard ceiling
-   0 dB). On a detection it holds, notches, then **verifies** that the band drops ≥ 6 dB within
-   1.5 s (else deepens; if it cannot deepen the run aborts and backs off 6 dB). It stops at the
-   target or when the budget is spent, backs off 3 dB from the highest level reached and writes
-   the report. Nobody may play or sing during the run. A lost connection restores the starting
-   master level with raw retries (every 0.5 s for up to 10 s) and aborts.
+   0 dB). `step_db` must be between 0.1 dB (the fader report grid) and the 6 dB relative move
+   limit, and a target at or below the current master is refused rather than run. On a detection
+   it holds, notches, then **verifies** that the band drops ≥ 6 dB for two consecutive RTA frames
+   within 1.5 s (else deepens; if it cannot deepen the run aborts and backs off 6 dB). It stops at
+   the target or when the budget is spent, backs off 3 dB from the highest level reached — never
+   below where it started, a run that raised nothing leaves the fader alone — and writes the
+   report. Nobody may play or sing during the run. A lost connection restores the starting master
+   level with raw retries (every 0.5 s for up to 10 s) and aborts; every back-off is forced, so
+   even show mode's ±3 dB clamp cannot leave a bus hot.
 3. `ring_out_system(plan)` — Tier 2, **one** confirmation for every wedge bus and then Main LR,
    with a consolidated report. `plan = {"stages": [{"bus": 3, "target_gain_db": -6, "mics": [1, 2]}, …, {"bus": "main"}]}`;
    without a plan every bus whose GEQ validates is rung out with defaults.

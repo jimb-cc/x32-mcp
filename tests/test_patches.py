@@ -303,6 +303,33 @@ def test_long_name_is_a_warning_not_an_error(descriptor):
     assert plan.warnings == ["row 1 (channel 1): name 'Lead Vocal Tony SM58' is longer than 12 characters and will be truncated to 'Lead Vocal T'"]
 
 
+def test_double_quote_in_a_name_is_replaced_and_warned(descriptor):
+    """transport.md §6.3: node text has no escape for a quote, and the desk's parser (§6.6) reads
+    to the closing one — a quoted name would eat the rest of the config line on the desk."""
+    plan = build_patch_plan([{"channel": 1, "name": 'Vox "T"'}], descriptor=descriptor)
+    assert plan.rows[0].name == "Vox 'T'"
+    assert plan.warnings and "double quote" in plan.warnings[0]
+    assert '"' not in dumps_patch_plan(plan, "csv").splitlines()[1]
+
+
+def test_write_patch_plan_is_atomic(tmp_path, descriptor, monkeypatch):
+    """A failed export must not destroy the operator's only copy of the hand-authored columns."""
+    import x32mcp.patches as patches
+
+    p = tmp_path / "band.yaml"
+    plan = build_patch_plan([{"channel": 1, "name": "Kick", "owner": "Ray", "notes": "beta 91"}], descriptor=descriptor)
+    write_patch_plan(plan, p)
+    before = p.read_text(encoding="utf-8")
+    monkeypatch.setattr(patches, "dumps_patch_plan", lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("disk full")))
+    with pytest.raises(RuntimeError):
+        write_patch_plan(build_patch_plan([{"channel": 2, "name": "Snare"}], descriptor=descriptor), p)
+    assert p.read_text(encoding="utf-8") == before  # untouched
+    monkeypatch.undo()
+    write_patch_plan(build_patch_plan([{"channel": 2, "name": "Snare"}], descriptor=descriptor), p)
+    assert load_patch_plan(p, descriptor=descriptor).rows[0].name == "Snare"
+    assert not list(tmp_path.glob("*.tmp"))
+
+
 def test_build_from_rows_and_numeric_name(descriptor):
     plan = build_patch_plan([PatchRow(2, "B"), {"channel": " ch 1 ", "name": 808, "mic": "x"}], band=" Band ", descriptor=descriptor)
     assert [(r.channel, r.name) for r in plan.rows] == [(1, "808"), (2, "B")] and plan.band == "Band"

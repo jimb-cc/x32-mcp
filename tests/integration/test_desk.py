@@ -10,7 +10,8 @@ import time
 import pytest
 import pytest_asyncio
 
-from conftest import wait_until
+from conftest import wait_for_state, wait_until
+from x32mcp.connection import ConnectionState
 from x32mcp.desk import Desk, DeskError
 from x32mcp.events import EventBus
 from x32mcp.nodes import SnapshotStore
@@ -120,6 +121,34 @@ async def test_cache_is_invalidated_by_pushes_and_own_writes(desk, conn, fakedes
     assert "/ch/07/config" not in desk._cache
     desk.invalidate()
     assert desk.stats["cached_sections"] == 0
+
+
+async def test_a_cancelled_reader_does_not_cancel_the_other_waiters(desk, conn, monkeypatch):
+    """Concurrent reads of one path share a single request. When the caller that created it is
+    cancelled (its tool timed out), the others must get a reportable error, not a CancelledError
+    that escapes the tool wrapper into the MCP task group."""
+    real = conn.node_many
+    started = asyncio.Event()
+
+    async def slow(paths, concurrency=16):
+        started.set()
+        await asyncio.sleep(0.5)
+        return await real(paths, concurrency)
+
+    monkeypatch.setattr(conn, "node_many", slow)
+    a = asyncio.create_task(desk._read_sections(["/ch/01/config"]))
+    await asyncio.wait_for(started.wait(), 2.0)
+    b = asyncio.create_task(desk._read_sections(["/ch/01/config"]))
+    await asyncio.sleep(0.05)
+    a.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await a
+    with pytest.raises(DeskError) as ei:
+        await asyncio.wait_for(b, timeout=2.0)
+    assert ei.value.code == "TIMEOUT" and b.cancelled() is False
+    monkeypatch.undo()
+    vals = await desk._read_sections(["/ch/01/config"])  # and the path is readable again
+    assert vals["/ch/01/config"]["config/name"] == "Ch01"
 
 
 # ---------------------------------------------------------------------------------------- faders
@@ -315,6 +344,13 @@ async def test_label_and_resolve(desk, conn, fakedesk):
     assert res["truncated"] is True and res["applied"]["name"] == "A name that "
     with pytest.raises(DeskError):
         await desk.label("ch.6", color="PINK")
+    # transport.md §6.3/§6.6: node text has no escape for a double quote and the desk's parser
+    # stops at the closing one, so it never reaches the wire.
+    res = await desk.label("ch.8", name='Vox "T"')
+    assert res["quote_replaced"] is True and res["applied"]["name"] == "Vox 'T'"
+    await settle(conn)
+    assert fakedesk.value("/ch/08/config/name") == "Vox 'T'"
+    assert '"' not in await conn.node("/ch/08/config") or (await conn.node("/ch/08/config")).count('"') == 2
 
 
 # ---------------------------------------------------------------------------------------- panic
@@ -330,6 +366,47 @@ async def test_panic_mutes_24_outputs_fast(desk, conn, fakedesk, policy):
         assert fakedesk.get(f"{t.osc_prefix}/mix/on") == 0, key
     assert fakedesk.get("/ch/01/mix/on") == 1  # inputs are left alone
     assert policy.snapshot_before_write is True  # no dump on the panic path
+    assert res["failed"] == []
+
+
+async def test_panic_still_mutes_while_degraded(desk, conn, fakedesk):
+    """BRIEF §9: the PSU cuts out mid-show. conn.set refuses while DEGRADED, so panic falls back to
+    a raw fire-and-forget datagram and reports delivered='unconfirmed' — it never gives up early."""
+    fakedesk.silent = True
+    await wait_for_state(conn, ConnectionState.DEGRADED, timeout=8.0)
+    fakedesk.silent = False  # the desk is alive again; we are still DEGRADED until it answers
+    res = await asyncio.wait_for(desk.panic(), timeout=5.0)
+    assert res["count"] == 24 and res["delivered"] == "unconfirmed" and res["elapsed_ms"] < 200
+    assert res["failed"] == []
+    await wait_until(  # fire-and-forget: wait for the last of the 24 datagrams, not just the first
+        lambda: all(fakedesk.get(a) == 0 for a in ("/main/st/mix/on", "/bus/16/mix/on", "/mtx/06/mix/on")),
+        what="panic datagrams applied",
+    )
+    assert fakedesk.get("/ch/01/mix/on") == 1  # inputs are left alone
+
+
+async def test_panic_keeps_going_when_a_send_fails(desk, conn, fakedesk, monkeypatch):
+    """One unreachable address must not cost the other 23 outputs (BRIEF §4: never blocked)."""
+    from x32mcp.connection import NotConnected
+
+    real_set = conn.set
+    bad = {"/bus/01/mix/on", "/mtx/06/mix/on"}
+
+    async def flaky(address, *args, **kw):
+        if address in bad:
+            raise NotConnected("socket went away mid-panic")
+        await real_set(address, *args, **kw)
+
+    async def no_raw(address, *args, **kw):
+        raise NotConnected("no socket")
+
+    monkeypatch.setattr(conn, "set", flaky)
+    monkeypatch.setattr(conn, "send_raw", no_raw)
+    res = await desk.panic()
+    assert res["count"] == 22 and sorted(res["failed"]) == ["bus.1", "mtx.6"]
+    assert "mtx.6" not in res["muted"] and "main.st" in res["muted"]
+    await settle(conn)
+    assert fakedesk.get("/main/st/mix/on") == 0 and fakedesk.get("/bus/16/mix/on") == 0
 
 
 # ---------------------------------------------------------------------------------------- snapshots
@@ -391,10 +468,11 @@ async def test_list_scenes_current_scene_recall_and_save(desk, conn, fakedesk, p
     assert scenes[0] == {"index": 0, "name": "Init", "notes": "", "has_data": True}
     assert scenes[1]["name"] == "The Molecules" and scenes[1]["has_data"] is True
     assert scenes[3]["name"] == "Empty" and scenes[3]["has_data"] is False and scenes[50]["has_data"] is False
-    assert await desk.current_scene() == {"index": 0, "name": "Init", "has_data": True}
+    assert await desk.current_scene() == {"index": 0, "name": "Init", "has_data": True, "show_control": "SCENES"}
     assert (await desk.get_channel(5))["name"] == "Ch05"
     res = await desk.recall_scene(1)
-    assert res == {"index": 1, "name": "The Molecules", "has_data": True, "verified": True, "previous_index": 0}
+    assert res == {"index": 1, "name": "The Molecules", "has_data": True, "verified": True,
+                   "previous_index": 0, "show_control": "SCENES"}
     assert await conn.get("/-show/prepos/current") == 1
     assert (await desk.get_channel(5))["name"] == "Vox Tony"  # cache dropped by the recall
     assert (await desk.current_scene())["index"] == 1
@@ -421,6 +499,25 @@ async def test_list_scenes_current_scene_recall_and_save(desk, conn, fakedesk, p
         await desk.recall_scene(100)
 
 
+async def test_scene_pointer_is_not_trusted_unless_show_control_is_scenes(desk, conn, fakedesk):
+    """fx_routing_scenes.md §6.2: /-show/prepos/current indexes the CUES/SCENES/SNIPPETS list that
+    /-prefs/show_control selects, so it is only a scene slot while that preference says SCENES."""
+    fakedesk.set_value("/-prefs/show_control", "CUES")
+    desk.invalidate()
+    cur = await desk.current_scene()
+    assert cur["index"] is None and cur["name"] == "" and cur["show_control"] == "CUES"
+    assert "CUES" in cur["note"]
+    t0 = time.perf_counter()
+    res = await desk.recall_scene(1)  # the recall still goes out; only the verification is impossible
+    assert res["verified"] is None and res["show_control"] == "CUES" and "note" in res
+    assert (time.perf_counter() - t0) < 1.0  # no 2 s poll of a pointer that means something else
+    await settle(conn)
+    assert fakedesk.value("/ch/05/config/name") == "Vox Tony"  # the desk really did load scene 1
+    fakedesk.set_value("/-prefs/show_control", "SCENES")
+    desk.invalidate()
+    assert (await desk.current_scene())["index"] == 1  # back to a real scene index
+
+
 # ---------------------------------------------------------------------------------------- guarded executors
 
 
@@ -431,6 +528,10 @@ async def test_tier1_refuses_guarded_and_tier2_executors_work(desk, conn, fakede
     with pytest.raises(DeskError) as ei:
         await desk.set_mute("main.st", True)
     assert ei.value.code == "GUARDED"
+    assert "set_main_mute" in str(ei.value) and "Main LR" in str(ei.value)  # name the tool, not the OSC address
+    with pytest.raises(DeskError) as ei:
+        await desk.set_mute("main.m", True)
+    assert "Main M/C mute is a guarded (Tier 2) parameter; use set_main_mute" in str(ei.value)
     with pytest.raises(DeskError) as ei:
         await desk.set_send("main.st", 1, -3.0)
     assert ei.value.code == "GUARDED"
@@ -548,3 +649,24 @@ async def test_events_and_dump(desk, conn, events, policy):
     state = await desk.dump()
     assert state.missing == [] and state.get("/ch/01/mix/fader") == float("-inf")
     assert desk.stats["cached_sections"] >= len(state.sections) - 5
+
+
+async def test_scene_pointer_minus_one_reports_no_scene_loaded(fakedesk, conn, descriptor, tmp_path):
+    """A real X32 Rack (FW 4.13) freshly powered up reports /-show/prepos/current = -1.
+
+    Reporting that verbatim reads as scene number -1 to both the operator and the model, so
+    current_scene() must say plainly that nothing is loaded.
+    """
+    from x32mcp.desk import Desk
+    from x32mcp.events import EventBus
+    from x32mcp.nodes import SnapshotStore
+    from x32mcp.policy import Policy
+
+    ev = EventBus()
+    d = Desk(descriptor, conn, Policy(descriptor, ev), ev, SnapshotStore(tmp_path))
+    fakedesk.set("/-show/prepos/current", -1)
+    conn.invalidate()
+    cur = await d.current_scene()
+    assert cur["index"] is None, cur
+    assert cur["has_data"] is False
+    assert "no scene" in (cur.get("note") or "").lower()

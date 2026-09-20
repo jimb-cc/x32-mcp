@@ -19,6 +19,7 @@ from typing import Any
 import pytest
 from websockets.asyncio.client import connect
 
+from x32mcp.cfs import CfsMode, CfsState
 from x32mcp.config import Settings
 from x32mcp.connection import ConnectionState, ConnectionStatus, ConsoleInfo
 from x32mcp.descriptor import Descriptor
@@ -209,6 +210,37 @@ async def test_event_forwarded_and_frames_events_skipped(rig) -> None:
         assert m == {"t": "event", "ts": ev.ts, "type": "cfs.stage", "data": {"stage": "RAISE", "bus": 3, "master_db": -11.0}}
 
 
+async def test_ring_visible_in_pushed_frames_before_the_notch(rig, d) -> None:
+    """BRIEF §7 M8: "the waterfall shows a scripted ring as a streak before the detector trips".
+
+    The drawing is the page's job; what the server owes it is the ring — rising, in the right
+    band, on the wire — and the notch message after it.
+    """
+    bands = rta_band_hz(d)
+    band = bands.index(min(bands, key=lambda h: abs(h - 2400.0)))
+    async with client(rig.dash) as ws:
+        await collect(ws, {"rta", "notches"})
+        rig.rta.inject_ring(2400.0, 15.0, start_db=-45.0)
+        levels: list[float] = []
+        while len(levels) < 24:
+            m = await recv_json(ws, timeout=5.0)
+            if m["t"] == "rta":
+                levels.append(m["db"][band])
+        # the streak is on the wire, and rising: compare the ends in means, the generator
+        # puts ±3 dB of noise and ±2 dB of wobble on every single frame
+        head, tail = sum(levels[:5]) / 5, sum(levels[-5:]) / 5
+        assert tail > head + 6.0, levels
+        assert all(-128.0 <= v <= 0.0 for v in levels)
+        # ... and only then does the detector's notch reach the page
+        rig.cfs.state["notches"] = [{"bus": 3, "band": 22, "freq_hz": 2500.0, "depth_db": -3.0,
+                                     "session_id": "s-1", "ts": 1.0}]
+        rig.cfs.state["budget_left"] = 3
+        rig.events.publish("cfs.notch", bus=3, band=22, freq_hz=2500.0, depth_db=-3.0, session_id="s-1")
+        got = await collect(ws, {"notches"})
+        assert got["notches"][-1]["items"][0]["freq_hz"] == 2500.0
+        rig.rta.stop_ring(2400.0)
+
+
 async def test_notches_on_notch_event(rig) -> None:
     @dataclass
     class Notch:  # shaped like detector.Notch (+ an extra field the page ignores)
@@ -332,6 +364,52 @@ async def test_stop_closes_connected_clients(settings: Settings, d: Descriptor) 
     await ws.close()
 
 
+async def test_handler_propagates_its_own_cancellation(settings: Settings, d: Descriptor) -> None:
+    """``stop()`` closes the server with ``close_connections=True``, which cancels the handler
+    tasks — including one already in its ``finally``, waiting for a slow-to-die sender. Absorbing
+    *that* CancelledError (rather than only the sender's) makes the task report a normal result
+    and the cancellation never takes effect.
+    """
+    dash = DashboardServer(settings, EventBus(), None, None, band_hz=rta_band_hz(d), geq_band_hz=d.geq["band_hz"])
+
+    class FakeWs:
+        """A client whose connection drops while its third message is still going out."""
+
+        remote_address = ("127.0.0.1", 1234)
+
+        def __init__(self) -> None:
+            self.sent: list[str] = []
+            self.closed = asyncio.Event()
+
+        async def send(self, text: str) -> None:
+            self.sent.append(text)
+            if len(self.sent) < 3:
+                return
+            try:
+                await asyncio.sleep(3600)
+            except asyncio.CancelledError:
+                await asyncio.shield(asyncio.sleep(0.4))  # the send takes a moment to unwind
+                raise
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self) -> str:
+            while len(self.sent) < 3:
+                await asyncio.sleep(0.01)
+            self.closed.set()
+            raise StopAsyncIteration  # the browser went away
+
+    ws = FakeWs()
+    task = asyncio.create_task(dash._handler(ws))
+    await asyncio.wait_for(ws.closed.wait(), timeout=5.0)
+    await asyncio.sleep(0.05)  # the handler is now parked in its finally, awaiting the sender
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert task.cancelled() and not dash._clients
+
+
 # -- message shapes (no network) --------------------------------------------------------------
 
 
@@ -346,38 +424,46 @@ def test_state_without_provider_or_connection(settings: Settings, d: Descriptor)
     assert h["fps"] == 20 and len(h["band_hz"]) == 100 and len(h["geq_band_hz"]) == 31
 
 
-def test_state_from_dataclass_provider_and_real_connection_status(settings: Settings, d: Descriptor) -> None:
-    class Mode(str, Enum):
-        RINGOUT = "ringout"
-
-    @dataclass
-    class State:  # CfsState-shaped
-        mode: Mode
-        session_id: str | None
-        bus: int | str
-        bus_name: str
-        master_db: float
-        budget_left: int
-        candidate: dict | None
-        notches: list
-        stage: str | None
-        rta_source: Target | None
-
+def test_state_from_the_real_cfs_state_and_connection_status(settings: Settings, d: Descriptor) -> None:
+    """The real :class:`~x32mcp.cfs.CfsState`, so a rename or retype of its fields breaks here."""
     status = ConnectionStatus(
         state=ConnectionState.DEGRADED, console=ConsoleInfo("10.0.0.5", 10023, "X32-RACK", "X32RACK", "4.06", "V2.07"),
         last_rx_age_s=9.0, heartbeat_ok=False, pending_requests=1, rtt_ms=4.26, reconnect_attempts=2, error="silent",
     )
-    provider = SimpleNamespace(state=State(Mode.RINGOUT, "abc", "main", "Main LR", float("-inf"), 0,
-                                           {"band": 69, "freq_hz": 2332.6, "confidence": 0.71, "level_db": -20.0},
-                                           [], "HOLD", Target("main", "st")))
+    provider = SimpleNamespace(state=CfsState(
+        mode=CfsMode.RINGOUT, session_id="abc", bus="main", bus_name="Main LR", master_db=None, budget_left=0,
+        candidate={"band": 69, "freq_hz": 2332.6, "confidence": 0.71, "level_db": -20.0},
+        stage="HOLD", started=1700000000.0, rta_source="main.st",
+    ))
     dash = DashboardServer(settings, EventBus(), provider, None, band_hz=rta_band_hz(d), geq_band_hz=d.geq["band_hz"],
                            connection_status=lambda: status, fps=500)
     assert dash.fps == 100, "fps clamped to 1..100"
     st = json.loads(dumps(dash.state_message()))
-    assert st["mode"] == "ringout" and st["bus"] == "main" and st["master_db"] == "-oo"
-    assert st["rta_source"] == "main.st" and st["candidate"]["confidence"] == 0.71
+    assert st["mode"] == "ringout" and st["bus"] == "main" and st["session_id"] == "abc"
+    assert st["master_db"] is None, "CfsState spells −∞ as None"
+    assert st["rta_source"] == "main.st" and st["candidate"]["confidence"] == 0.71 and st["stage"] == "HOLD"
     assert st["connection"] == {"state": "degraded", "console": "X32-RACK", "rtt_ms": 4.3}
     assert dash.health()["mode"] == "ringout"
+    assert dash.notches_message() == {"t": "notches", "items": []}
+
+
+def test_state_from_a_duck_typed_provider(settings: Settings, d: Descriptor) -> None:
+    """Any object (or dataclass) with a ``state`` works — the dashboard never imports cfs."""
+    class Mode(str, Enum):
+        WATCH = "CfsMode.watch"
+
+    @dataclass
+    class State:
+        mode: Mode
+        bus: int
+        master_db: float
+        rta_source: Target
+
+    provider = SimpleNamespace(state=State(Mode.WATCH, 3, float("-inf"), Target("bus", 3)))
+    dash = DashboardServer(settings, EventBus(), provider, None, band_hz=rta_band_hz(d), geq_band_hz=d.geq["band_hz"])
+    st = json.loads(dumps(dash.state_message()))
+    assert st["mode"] == "watch" and st["bus"] == 3 and st["master_db"] == "-oo" and st["rta_source"] == "bus.3"
+    assert st["session_id"] is None and st["candidate"] is None
 
 
 def test_frame_text_and_json_hygiene() -> None:
@@ -387,4 +473,7 @@ def test_frame_text_and_json_hygiene() -> None:
     assert m["db"][:3] == [-128.0, -31.76, -0.0]
     lin = MeterFrame(0, 1.0, (1.0, 0.1, 0.0))
     assert json.loads(DashboardServer.frame_text(lin))["db"] == [0.0, -20.0, -90.0], "linear meters → dB"
+    # lin_to_db floors at −90 but does not clamp above: a bare Infinity would break JSON.parse
+    hot = MeterFrame(0, 2.0, (float("inf"), float("nan"), 0.1))
+    assert json.loads(DashboardServer.frame_text(hot))["db"] == ["+oo", -90.0, -20.0]  # never Infinity/NaN
     assert dumps({"x": float("nan"), "y": float("inf"), "z": {1, }}) == '{"x":null,"y":"+oo","z":[1]}'

@@ -21,17 +21,35 @@ Decisions where DESIGN.md is silent:
   ``Desk.set_level`` — policy clamps, snapshot-before-write and the rate limiter all apply —
   never above ``min(policy ceiling, ringout.master_ceiling_db, target_gain_db)``. A detection
   during the dwell → HOLD → NOTCH (controller + writer) → VERIFY: the notched RTA band
-  (±``band_tolerance``) must drop ≥ ``decay_verify_db`` below its level at the notch within
-  ``decay_verify_s``; else the same notch is deepened and verified again; when it cannot deepen
-  (−9 dB reached or budget spent) the session ABORTs and backs the master off
+  (±``band_tolerance``) must drop ≥ ``decay_verify_db`` below its level at the notch, on
+  ``decay_verify_frames`` *consecutive* frames, within ``decay_verify_s`` (a single dipping
+  frame is noise, not a tamed ring); else the same notch is deepened and verified again; when it
+  cannot deepen (−9 dB reached or budget spent) the session ABORTs and backs the master off
   ``abort_backoff_db``. Re-detections of the notched band that queued up during VERIFY are
   dropped (they pre-date the cut). DONE backs off ``safety_margin_db`` from the highest level
-  reached. ``stop()``/``abort()`` during a ring-out take the abort path (back off, report).
+  reached — but only when the machine actually raised the master: a run that never raised (target
+  already reached, zero budget) leaves the fader exactly where the operator left it.
+  ``stop()``/``abort()`` during a ring-out take the abort path (back off, report).
+* **Ring-out arguments**: ``step_db`` must be ≥ 0.1 dB (the 0.1 dB fader report grid: a smaller
+  step reads back unchanged and looks like a clamp) and ≤ ``policy.relative_limit_db`` (a bigger
+  one is refused by the relative clamp on the first raise); a ``target_gain_db`` at or below the
+  current master is refused (``BAD_ARGUMENT``) rather than silently backing the fader off.
+  Every *lowering* master write (back-off, restore) is ``force``d: dropping a level is always
+  safe and the run already carried its Tier-2 confirmation, so the relative clamp (±3 dB in show
+  mode) must not be able to leave a bus hot.
+* **Refusals while raising**: a ``PolicyError`` (rate limit, relative clamp) is a *local* refusal
+  — it aborts the run through the normal BACKOFF path. Only a transport failure
+  (``NOT_CONNECTED``/timeout, :class:`~x32mcp.connection.ConnectionError`) counts as a lost
+  connection and takes the emergency restore path. Any other exception out of the loop still
+  backs the master off and finishes the session (nothing may leave the manager armed).
 * **Connection loss** (``connection.state`` = degraded, or a write/read failure while raising):
   the starting master is restored with *raw* fire-and-forget ``conn.send_raw`` writes every
   0.5 s, each followed by a read-back, until the desk confirms it or 10 s pass (this bypasses
   policy and the rate limiter like ``panic()`` — it is the emergency path), then ABORT. A
   watch session simply stops with the reason recorded.
+* **Arming** takes the session's pre-write snapshot (``Desk.ensure_pre_write_snapshot``) up front:
+  nothing else on the arming path writes through the Desk, so without it the *first* notch would
+  pay for the full desk dump — BRIEF §5 budgets < 100 ms detect→cut.
 * **Watch mode** notches on every detection (a ringing band is re-emitted once per
   ``cooldown_s`` by the detector, which is how a cut deepens) with no VERIFY stage — the human
   drives the gain.
@@ -86,6 +104,8 @@ _RESTORE_READ_TIMEOUT_S = 1.0
 _STOP_WAIT_S = 30.0
 _MAX_DETECTIONS_IN_REPORT = 200
 _FADER_GRID = 1.0 / 1023  # one fader step (scales_params.md §2.3)
+_REPORT_GRID_DB = 0.05  # half the 0.1 dB grid Desk reports levels on (desk.py ``_db1``)
+_MIN_STEP_DB = 0.1  # a smaller ring-out step cannot be seen in the read-back at all
 
 
 class CfsError(Exception):
@@ -553,9 +573,14 @@ class CfsManager:
 
     async def stop(self) -> dict[str, Any]:
         """Disarm. A watch session is closed and its report saved; a running ring-out is told to
-        abort (back-off, report) and awaited. Returns ``{stopped, mode, report, path}``."""
+        abort (back-off, report) and awaited; a system run stops after the current stage.
+        Returns ``{stopped, mode, report, path}``."""
+        self._stop_system("stopped by operator")
         ses = self._ses
         if ses is None:
+            if self._system is not None:  # between stages: no session is armed, the run still is
+                return {"stopped": True, "mode": CfsMode.SYSTEM.value, "session_id": self._system["session_id"],
+                        "report": None, "path": None, "summary": "system ring-out stopping: no further bus will be raised"}
             return {"stopped": False, "mode": self.mode.value, "report": None, "path": None, "summary": "nothing to stop"}
         if ses.mode is CfsMode.WATCH:
             async with self._lock:
@@ -574,9 +599,17 @@ class CfsManager:
         return {"stopped": True, "mode": ses.mode.value, "session_id": ses.session_id, "report": ses.report,
                 "path": str(ses.report_path) if ses.report_path else None}
 
+    def _stop_system(self, reason: str) -> None:
+        """Flag a running ``ring_out_system`` so it stops before the next stage (it may be between
+        stages, with no session armed, when the operator asks)."""
+        if self._system is not None and not self._system.get("stopped"):
+            self._system["stopped"] = str(reason) or "stopped by operator"
+
     async def abort(self, reason: str) -> None:
         """Abort the running session: a ring-out backs the master off ``abort_backoff_db`` and
-        finishes with ABORT (the awaiting ``ring_out`` call returns its report); a watch stops."""
+        finishes with ABORT (the awaiting ``ring_out`` call returns its report); a watch stops.
+        A system run stops after the current stage."""
+        self._stop_system(reason)
         ses = self._ses
         if ses is None:
             return
@@ -609,6 +642,11 @@ class CfsManager:
         step = float(ro.get("step_db", 1.0)) if step_db is None else float(step_db)
         if not step > 0:
             raise CfsError("BAD_ARGUMENT", f"step_db must be > 0, got {step_db!r}")
+        if step < _MIN_STEP_DB:  # a finer step vanishes in the 0.1 dB read-back and reads as a clamp
+            raise CfsError("BAD_ARGUMENT", f"step_db must be >= {_MIN_STEP_DB:g} dB (the fader report grid), got {step_db!r}")
+        if step > self._policy.relative_limit_db:  # else the first raise is refused by the relative clamp
+            raise CfsError("BAD_ARGUMENT", f"step_db {step:g} exceeds the {self._policy.relative_limit_db:g} dB "
+                                           "single-call relative move limit")
         dwell = int(ro.get("dwell_ms", 1500)) if dwell_ms is None else int(dwell_ms)
         if dwell < 0:
             raise CfsError("BAD_ARGUMENT", f"dwell_ms must be >= 0, got {dwell_ms!r}")
@@ -620,11 +658,20 @@ class CfsManager:
                 self._events.publish("cfs.stage", session_id=None, bus=bus_label(t), stage="ABORT", master_db=_db1(pf.master_db),
                                      reason="preflight failed: " + "; ".join(pf.blockers))
                 raise CfsError("PREFLIGHT_FAILED", f"cannot ring out {t.label}: " + "; ".join(pf.blockers), preflight=pf.to_dict())
+            ceiling = min(self._policy.level_ceiling_db(t), float(ro.get("master_ceiling_db", 0.0)))
+            target = ceiling if target_gain_db is None else min(float(target_gain_db), ceiling)
+            if target <= float(pf.master_db) + 1e-9:
+                # nothing to raise: running anyway would only apply the safety margin to a fader
+                # the operator set, i.e. a silent unrequested cut. Refuse before opening a session.
+                msg = (f"{t.label} master is already at {format_db(pf.master_db)} dB, at or above the target "
+                       f"{format_db(target)} dB; lower the master or raise the target")
+                self._events.publish("cfs.stage", session_id=None, bus=bus_label(t), stage="ABORT",
+                                     master_db=_db1(pf.master_db), reason=msg)
+                raise CfsError("BAD_ARGUMENT", msg, bus=bus_label(t), master_db=_db1(pf.master_db), target_db=_db1(target))
             ses = await self._open_session(CfsMode.RINGOUT, t, pf, notch_budget)
             ses.system_id = _system_id
             ses.step_db, ses.dwell_ms = step, dwell
-            ceiling = min(self._policy.level_ceiling_db(t), float(ro.get("master_ceiling_db", 0.0)))
-            ses.target_db = ceiling if target_gain_db is None else min(float(target_gain_db), ceiling)
+            ses.target_db = target
             if _expected_mics:
                 ses.expected_mics = [int(c) for c in _expected_mics]
                 missing = [c for c in ses.expected_mics if not any(m.ch == c and m.include for m in pf.mics)]
@@ -646,10 +693,12 @@ class CfsManager:
         except asyncio.CancelledError:
             ses.abort_reason = ses.abort_reason or "cancelled"
             log.warning("ring-out %s cancelled; backing off", ses.session_id)
-            try:
-                await asyncio.shield(self._finalize_levels(ses, None))
-            finally:
-                await asyncio.shield(self._finish(ses))
+            await self._unwind(ses)
+            raise
+        except BaseException as e:  # nothing may leave the session armed and the master raised
+            log.exception("ring-out %s failed unexpectedly", ses.session_id)
+            ses.abort_reason = ses.abort_reason or f"internal error: {e!r}"
+            await self._unwind(ses)
             raise
         else:
             await self._finish(ses)
@@ -660,7 +709,8 @@ class CfsManager:
         """Ring out every stage of ``plan`` (``{"stages": [{"bus": 3, "target_gain_db": …,
         "mics": [ch…]}, …, {"bus": "main"}]}``) in order; without a plan, every bus (then Main
         LR) whose ring-out GEQ validates. One consolidated report; a stage whose preflight fails
-        is skipped, a connection loss stops the run."""
+        is skipped, a connection loss stops the run, and ``stop()``/``abort()``/``close()`` stop it
+        before the next stage (no further bus is raised)."""
         self._policy.check_show_mode_allows("ring_out_system")
         self._require_idle()
         stages = await self._system_stages(plan)
@@ -674,6 +724,9 @@ class CfsManager:
         abort_reason: str | None = None
         try:
             for st in stages:
+                if self._system is not None and self._system.get("stopped"):
+                    abort_reason = str(self._system["stopped"])  # stop()/abort()/close() between stages
+                    break
                 bus = st["bus"]
                 try:
                     rep = await self.ring_out(
@@ -716,6 +769,7 @@ class CfsManager:
     async def close(self) -> None:
         """Abort whatever runs, stop the frames and unsubscribe (server shutdown)."""
         self._unsub_conn()
+        self._stop_system("shutdown")
         ses = self._ses
         if ses is not None:
             await self.abort("shutdown")
@@ -724,8 +778,13 @@ class CfsManager:
             except asyncio.TimeoutError:
                 pass
         await self._disarm()
-        for task in list(self._bg):
+        # the background tasks (connection-loss handling, a watch stop) touch the desk and write
+        # reports: cancel AND await them, or the loop closes under them ("Task was destroyed").
+        tasks, self._bg = list(self._bg), set()
+        for task in tasks:
             task.cancel()
+        if tasks:
+            await asyncio.wait(tasks, timeout=_STOP_WAIT_S)
 
     # -- sessions ----------------------------------------------------------------------------------
 
@@ -771,7 +830,14 @@ class CfsManager:
         return ses
 
     async def _arm(self, ses: _Session) -> None:
-        """RTA source → frames → detector task. Sets the live session."""
+        """Pre-write snapshot → RTA source → frames → detector task. Sets the live session."""
+        # Nothing else on this path writes through the Desk, so without this the FIRST notch would
+        # pay for the whole desk dump (BRIEF §5 budgets < 100 ms detect→cut). A failure here is not
+        # fatal: policy.snapshot_before_write stays set and Desk._write tries again (and raises).
+        try:
+            await self._desk.ensure_pre_write_snapshot()
+        except (DeskError, X32ConnectionError, OSError, ValueError) as e:
+            log.warning("pre-write snapshot before arming on %s failed: %s", ses.target.label, e)
         try:
             ses.rta = await set_rta_source(self._conn, self._d, ses.target)
         except RtaSourceError as e:
@@ -812,6 +878,24 @@ class CfsManager:
                     raise
             except Exception:
                 pass
+
+    async def _unwind(self, ses: _Session) -> None:
+        """Back the master off and finish the session while the caller unwinds (cancellation or an
+        unexpected failure). ``_finalize_levels`` swallows its own write failures and ``_finish``
+        is idempotent through ``ses.done``; the session is cleared here whatever happens."""
+        try:
+            try:
+                await asyncio.shield(self._finalize_levels(ses, None))
+            except Exception:
+                log.exception("ring-out %s: the back-off after the failure did not complete", ses.session_id)
+            await asyncio.shield(self._finish(ses))
+        except Exception:
+            log.exception("ring-out %s: could not be finished cleanly", ses.session_id)
+        finally:
+            if self._ses is ses:
+                self._ses = None
+                self._last = ses
+            ses.done.set()
 
     async def _finish(self, ses: _Session) -> None:
         """Disarm, build + save the report, publish, and hand the state to ``_last``."""
@@ -959,12 +1043,14 @@ class CfsManager:
         except (DeskError, OSError, ValueError) as e:
             log.warning("ring-out snapshot of %s failed: %s", ses.target.label, e)
 
-    async def _write_master(self, ses: _Session, db: float) -> float:
-        """Move the bus master to ``db`` (single step) through the Desk; returns what was written."""
+    async def _write_master(self, ses: _Session, db: float, *, force: bool = False) -> float:
+        """Move the bus master to ``db`` (single step) through the Desk; returns what was written.
+        ``force`` bypasses the relative clamp — used for every *lowering* write (back-off), which is
+        always safe and must never be refused by show mode (``set_main_level`` forces it already)."""
         if ses.target.family == "main":
             res = await self._desk.set_main_level("st", db, ramp_ms=0)
         else:
-            res = await self._desk.set_level(ses.target, db, ramp_ms=0)
+            res = await self._desk.set_level(ses.target, db, ramp_ms=0, force=force)
         after = res.get("after_db")
         return NEG_INF_DB if after is None else float(after)
 
@@ -1019,10 +1105,20 @@ class CfsManager:
             nxt = min(ses.master_db + ses.step_db, target)
             try:
                 after = await self._write_master(ses, nxt)
-            except (DeskError, PolicyError, X32ConnectionError) as e:
-                await self._lose_connection(ses, f"desk write failed while raising: {e}")
+            except PolicyError as e:  # a LOCAL refusal (rate limit / relative clamp): abort normally
+                ses.abort_reason = ses.abort_reason or f"raise refused by policy: {e}"
                 break
-            if after <= ses.master_db + 1e-9:
+            except (DeskError, X32ConnectionError) as e:
+                if isinstance(e, X32ConnectionError) or (isinstance(e, DeskError) and e.code in ("NOT_CONNECTED", "TIMEOUT")):
+                    await self._lose_connection(ses, f"desk write failed while raising: {e}")
+                else:
+                    ses.abort_reason = ses.abort_reason or f"raise refused: {e}"
+                break
+            # ``after`` is the read-back rounded to the 0.1 dB report grid, so it may sit just under
+            # the request: only a refusal that makes no progress at all is a real clamp.
+            if after >= nxt - _REPORT_GRID_DB:
+                after = max(after, nxt)
+            elif after <= ses.master_db + 1e-9:
                 ses.master_db = after
                 reason = f"master clamped at {format_db(after)} dB"
                 break
@@ -1036,7 +1132,8 @@ class CfsManager:
         """NOTCH → VERIFY, deepening until the band decays; False when it cannot be tamed."""
         cfg = self._cfg
         while ses.abort_reason is None:
-            level0 = max(det.level_db, self._band_level(ses, det.band) or det.level_db)
+            lvl = self._band_level(ses, det.band)  # None (no frame yet) — never `or`: 0.0 dB is clip
+            level0 = max(det.level_db, lvl) if lvl is not None else det.level_db
             n = await self._notch(ses, det)
             if n is None:
                 return False
@@ -1053,10 +1150,16 @@ class CfsManager:
         return False
 
     async def _verify_decay(self, ses: _Session, det: Detection, level0: float) -> tuple[bool, float]:
+        """Wait up to ``decay_verify_s`` for the band to sit ``decay_verify_db`` below ``level0`` on
+        ``decay_verify_frames`` consecutive frames. One dipping frame is RTA noise (the synthetic
+        source alone wobbles ±3 dB), not a tamed ring — a premature pass resumes raising the master
+        under an insufficient cut. Returns (ok, best drop seen in dB)."""
         cfg = self._cfg
+        need = max(1, int(cfg.decay_verify_frames))
         loop = asyncio.get_running_loop()
         deadline = loop.time() + cfg.decay_verify_s
         best = 0.0
+        ok_frames = 0
         while ses.abort_reason is None:
             remaining = deadline - loop.time()
             if remaining <= 0:
@@ -1069,9 +1172,14 @@ class CfsManager:
             lvl = self._band_level(ses, det.band)
             if lvl is None:
                 continue
-            best = max(best, level0 - lvl)
-            if level0 - lvl >= cfg.decay_verify_db:
-                return True, level0 - lvl
+            drop = level0 - lvl
+            best = max(best, drop)
+            if drop >= cfg.decay_verify_db:
+                ok_frames += 1
+                if ok_frames >= need:
+                    return True, drop
+            else:
+                ok_frames = 0
         return False, best
 
     async def _finalize_levels(self, ses: _Session, reason: str | None) -> None:
@@ -1087,6 +1195,13 @@ class CfsManager:
             ses.final_stage = "ABORT"
             await self._stage(ses, "ABORT", reason=ses.abort_reason, restored=ses.restored)
             return
+        if ses.abort_reason is None and ses.master_db <= ses.start_master_db + 1e-9:
+            # the master was never raised (target already reached, zero budget): the safety margin is
+            # measured from a level WE pushed up to — never cut a fader the operator set.
+            ses.end_master_db = ses.master_db
+            ses.final_stage = "DONE"
+            await self._stage(ses, "DONE", reason=reason, backoff_db=0.0)
+            return
         if ses.abort_reason is not None:
             back = float(ro.get("abort_backoff_db", 6.0))
             final_stage = "ABORT"
@@ -1096,7 +1211,7 @@ class CfsManager:
         final = max(FADER_FLOOR_DB, ses.master_db - back)
         await self._stage(ses, "BACKOFF", to_db=_db1(final), backoff_db=back)
         try:
-            written = await self._write_master(ses, final)
+            written = await self._write_master(ses, final, force=True)  # lowering: never let a clamp refuse it
             ses.master_db = written
             ses.end_master_db = written
         except (DeskError, PolicyError, X32ConnectionError) as e:

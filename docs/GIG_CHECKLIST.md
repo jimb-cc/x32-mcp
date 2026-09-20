@@ -121,8 +121,9 @@ Reads match the UI (compare each with X32-Edit)
   (6 bands incl. shelf/cut types), `get_dynamics("ch.1")`.
 - [ ] Rename a channel from X32-Edit → within 2 s `get_channel` shows the new name (the
   `/xremote` push invalidates the cache). Move a fader on the surface → same.
-- [ ] `dump_desk_state()` completes with `missing: []` and in < 5 s (record the time and the
-  section count: ______ / ______ ). Save it: `snapshot_desk("m5-full")`.
+- [ ] `dump_desk_state()` completes with `missing: []` and in < 5 s (record the time and
+  `section_count`, not the 200 sections it returns: ______ / ______ ). Save the lot:
+  `snapshot_desk("m5-full")`.
 - [ ] Single-leaf `/node` text and FW 4.x column widths: `dump_desk_state(["/ch/01"])` values
   are sane (no `None` where X32-Edit shows a value) — the padded-line parser is FW 2.x-verified.
 
@@ -241,6 +242,9 @@ Automatic ring-out
   moves in 1 dB steps with 1.5 s dwell; each notch is followed by an audible drop; the run ends at
   the target or the budget, **backs off 3 dB**, and the report lists start/peak/end levels.
 - [ ] The bus master never exceeds 0 dB even with `target_gain_db=+3` (clamped).
+- [ ] `ring_out(<bus>, target_gain_db=-30)` on a bus already at −20 dB is **refused**
+  (`BAD_ARGUMENT`, "already at") and the fader does not move; so are `step_db` below 0.1 dB and
+  above 6 dB.
 - [ ] `validate_ringout_eqs` now reports `matched_session` = this run.
 
 Abort paths
@@ -252,11 +256,14 @@ Abort paths
   `cfs.restore` events in the log, report says aborted; the server reconnects.
 - [ ] Budget exhaustion: `notch_budget=1` and a stubborn ring → deepen to −9 dB, then `ABORT`
   with backoff rather than a runaway.
+- [ ] Turn `show_mode(true)` on *during* a run → the abort back-off still moves the master the
+  full 6 dB (lowering writes are forced; the ±3 dB clamp must not leave a wedge ringing).
 
 System run
 
 - [ ] `ring_out_system()` (no plan) → one prompt listing every bus with a valid GEQ then Main LR
-  → confirm → stages run in order, one consolidated report with per-bus sections; a bus that
+  → confirm → stages run in order (`feedback_watch_stop()` between two stages stops the run before
+  the next bus is raised), one consolidated report with per-bus sections; a bus that
   fails preflight is skipped and says why.
 
 Show mode and read-only guarantees

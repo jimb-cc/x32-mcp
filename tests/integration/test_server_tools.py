@@ -167,8 +167,18 @@ async def test_scene_listing_and_dump(app):
     dump = await srv.dump_desk_state(["ch.1"])
     assert dump["ok"] and "/ch/01/mix" in dump["sections"] and dump["missing"] == [] and dump["scope"] == ["ch.1"]
     assert dump["sections"]["/ch/01/mix"]["mix/fader"] == 0.0 and dump["sections"]["/ch/01/mix"]["mix/mlevel"] == "-oo"
+    assert dump["truncated"] is False and dump["returned"] == dump["section_count"] == len(dump["sections"])
     json.dumps(dump)
     assert_err(await srv.dump_desk_state(["nonsense.99"]), "BAD_ARGUMENT")
+
+
+async def test_dump_desk_state_whole_desk_is_capped(app):
+    """The whole desk is ~2100 sections / ~200 KB — far past any tool-result budget."""
+    dump = await srv.dump_desk_state()
+    assert dump["ok"] and dump["section_count"] > 1000, dump["section_count"]
+    assert dump["truncated"] is True and dump["returned"] == len(dump["sections"]) == srv.MAX_DUMP_SECTIONS
+    assert "snapshot_desk" in dump["summary"] and "sections=" in dump["summary"]
+    assert len(json.dumps(dump)) < 60_000, "a capped dump still fits in a tool result"
 
 
 # ---------------------------------------------------------------------------------------- Tier 1 moves
@@ -221,7 +231,7 @@ async def test_tier1_moves_and_summaries(app, fakedesk):
     assert_err(await srv.set_pan("ch.1", 150), "BAD_ARGUMENT")
     comp = await srv.set_comp("ch.1", on=True, threshold_db=-20.0, ratio=4, attack_ms=10, release_ms=100, makeup_db=3.0)
     assert comp["ok"] and comp["applied"]["ratio"] == "4.0" and comp["applied"]["threshold_db"] == -20.0
-    assert comp["summary"].startswith("Ch 1 'Ch01' comp: on on, threshold −20.0 dB, ratio 4.0, attack 10")
+    assert comp["summary"].startswith("Ch 1 'Ch01' comp: on, threshold −20.0 dB, ratio 4.0, attack 10")  # not "on on"
     await settle(app)
     assert fakedesk.value("/ch/01/dyn/on") is True and fakedesk.value("/ch/01/dyn/ratio") == "4.0"
     gate = await srv.set_gate("ch.1", on=True, threshold_db=-40.0, range_db=30.0)
@@ -449,6 +459,88 @@ async def test_set_channel_config_dance(app, fakedesk):
     assert_err(await srv.set_channel_config(2, source="nope"), "BAD_ARGUMENT")
 
 
+async def test_ramp_ms_is_bounded_and_budgeted_for_the_real_cadence(app):
+    """ramp_ms is 0..60000 in every docstring — and the budget must outlast the ramp it covers."""
+    for call in (
+        srv.set_fader("ch.1", -3.0, ramp_ms=300_000),
+        srv.adjust_fader("ch.1", -1.0, ramp_ms=300_000),
+        srv.set_send("ch.1", 3, -10.0, ramp_ms=-1),
+        srv.adjust_send("ch.1", 3, 1.0, ramp_ms=60_001),
+        srv.set_main_fader("st", -10.0, ramp_ms=300_000),
+    ):
+        assert_err(await call, "BAD_ARGUMENT")
+    assert_err(await srv.set_fader("ch.1", -3.0, ramp_ms=1.5), "BAD_ARGUMENT")
+    # a ramp of N = ramp_ms/ramp_step_ms steps costs at least a step interval and a write slot each,
+    # and on Windows the 20 ms sleep rounds up to the ~15.6 ms timer tick (measured ~1.67 x ramp_ms)
+    for ms in (4_000, 30_000, 60_000):
+        steps = app.policy.ramp_steps(0.0, -5.0, ms)
+        assert srv._level_timeout(ms) > len(steps) * app.policy.ramp_step_s * 1.7, ms
+    assert srv._level_timeout(0) == srv._level_timeout(None) == 15.0 + app.policy.ramp_step_s * 2.5
+    res = await srv.set_fader("ch.5", -4.0, ramp_ms=1000)  # a real ramp finishes inside its budget
+    assert res["ok"] and res["after_db"] == -4.0
+
+
+async def test_a_ramp_cut_short_reports_ramp_aborted_not_timeout(app, monkeypatch):
+    """The desk was answering; the move simply did not finish — say so, and say where it stopped."""
+    monkeypatch.setattr(srv, "_level_timeout", lambda ms: 0.05)
+    res = await srv.set_fader("ch.8", -6.0, ramp_ms=2000)
+    assert_err(res, "RAMP_ABORTED")
+    assert res["error"]["ramp_ms"] == 2000 and "read it back" in res["error"]["message"]
+    assert "not answering" not in res["summary"]
+
+
+async def test_setup_ringout_eqs_validation_failure_is_an_error_envelope(app, monkeypatch):
+    """DESIGN §19 knows two ok:false shapes; a failed post-write check must use the error one."""
+    async def failing_apply(desk, plan):
+        return {"ok": False, "changed": 3, "geq": {"1": {"ok": False, "reasons": ["insert switched off"]}}}
+
+    monkeypatch.setattr(srv._prov, "apply_setup", failing_apply)
+    token = assert_pending(await srv.setup_ringout_eqs([1]))
+    res = await srv.setup_ringout_eqs([1], confirm_token=token)
+    assert_err(res, "GEQ_VALIDATION_FAILED")
+    assert "insert switched off" in res["error"]["message"] and res["error"]["changed"] == 3
+    assert "ok" not in res["error"] and "requires_confirmation" not in res
+
+
+async def test_reconnect_rearms_the_snapshot_before_write_net(app, fakedesk):
+    """BRIEF §4 ties the undo net to the desk in front of us, not to the process."""
+    assert (await srv.set_fader("ch.1", -6.0, ramp_ms=0))["ok"]
+    assert app.policy.snapshot_before_write is False and app.desk.pre_write_snapshot is not None
+    first = app.desk.pre_write_snapshot.id
+    assert (await srv.connect(fakedesk.host, fakedesk.port))["ok"]
+    assert app.policy.snapshot_before_write is True and app.desk.pre_write_snapshot is None
+    assert (await srv.connection_status())["pre_write_snapshot"] is None
+    assert (await srv.set_fader("ch.2", -6.0, ramp_ms=0))["ok"]
+    assert app.desk.pre_write_snapshot is not None and app.desk.pre_write_snapshot.id != first
+
+
+async def test_get_rta_target_writes_the_prefs_through_the_policy(app):
+    """Pointing the RTA writes three Tier-1 desk parameters: they take the policy path."""
+    writes: list = []
+    unsub = app.events.subscribe(lambda ev: writes.append(ev.data), types={"desk.write"})
+    try:
+        rta = await srv.get_rta("bus.1", frames=2)
+    finally:
+        unsub()
+    assert rta["ok"] and rta["rta_source"] == "bus.1"
+    addrs = [w["address"] for w in writes]
+    assert "/-prefs/rta/source" in addrs and "/-prefs/rta/pos" in addrs, addrs
+    assert all(w["tier"] == 1 and w["tool"] == "get_rta" and w["target"] == "bus.1" for w in writes), writes
+    assert app.policy.snapshot_before_write is False and app.desk.pre_write_snapshot is not None
+    plain = await srv.get_rta(frames=2)  # no target: nothing is written
+    assert plain["ok"] and plain["rta"] is None
+
+
+async def test_ring_out_system_stages_obey_the_single_bus_limits(app):
+    """A plan stage is not a back door around the notch budget / step size the tool enforces."""
+    assert_err(await srv.ring_out_system({"stages": [{"bus": 1, "notch_budget": 40}]}), "BAD_ARGUMENT")
+    assert_err(await srv.ring_out_system({"stages": [{"bus": 1, "step_db": 12.0}]}), "BAD_ARGUMENT")
+    assert_err(await srv.ring_out_system({"stages": [{"bus": 1, "step_db": 0}]}), "BAD_ARGUMENT")
+    assert_err(await srv.ring_out_system({"stages": [{"bus": 1, "dwell_ms": 90_000}]}), "BAD_ARGUMENT")
+    ok = await srv.ring_out_system({"stages": [{"bus": 1, "notch_budget": 6, "step_db": 1.0, "dwell_ms": 10}]})
+    assert assert_pending(ok) and ok["stages"][0]["notch_budget"] == 6
+
+
 # ---------------------------------------------------------------------------------------- meters
 
 
@@ -590,12 +682,22 @@ async def test_dashboard_status(app):
 # ---------------------------------------------------------------------------------------- stdio end to end
 
 
-async def test_stdio_smoke_spawns_the_server():
+async def test_stdio_smoke_spawns_the_server(tmp_path):
     from mcp import Client
     from mcp.client.stdio import StdioServerParameters
 
+    from x32mcp.nodes import DeskState, SnapshotStore
+
+    # a controlled X32MCP_HOME: the snapshot resource must read a file this test wrote, not
+    # whatever the developer's repo happens to hold (on a fresh clone snapshots/ is empty)
+    (tmp_path / "patches").mkdir(parents=True, exist_ok=True)
+    shutil.copy(EXAMPLE, tmp_path / "patches" / EXAMPLE.name)
+    state = DeskState(created="2026-09-20T09:00:00+00:00", console={"name": "X32-FAKE"},
+                      scene={"index": 0, "name": "Init"}, sections={"/ch/01/mix": {"mix/on": True, "mix/fader": -6.0}})
+    saved = SnapshotStore(tmp_path / "snapshots").save(state, "stdio smoke")
     # INFO logging on purpose: every log line must go to stderr, never onto the stdout wire
-    env = {"X32MCP_DASH": "0", "X32MCP_LOG": "INFO", "X32_HOST": "", "PYTHONPATH": str(REPO / "src")}
+    env = {"X32MCP_DASH": "0", "X32MCP_LOG": "INFO", "X32_HOST": "", "PYTHONPATH": str(REPO / "src"),
+           "X32MCP_HOME": str(tmp_path), "X32MCP_DEVICE_YAML": str(REPO / "device.yaml")}
     params = StdioServerParameters(command=sys.executable, args=["-m", "x32mcp.server"], env=env, cwd=str(REPO))
     async with Client(params, read_timeout_seconds=30.0) as c:
         assert c.instructions and "confirm_token" in c.instructions and "panic" in c.instructions
@@ -609,7 +711,9 @@ async def test_stdio_smoke_spawns_the_server():
         assert "meta:" in text and "policy:" in text
         state = json.loads((await c.read_resource("x32://cfs/state")).contents[0].text)
         assert state["mode"] == "idle" and state["notches"] == []
-        json.loads((await c.read_resource("x32://snapshot/latest")).contents[0].text)  # a snapshot file or {"error": ...}
+        snap = json.loads((await c.read_resource("x32://snapshot/latest")).contents[0].text)
+        assert "error" not in snap and snap["id"] == saved.id and snap["label"] == "stdio smoke"
+        assert snap["state"]["sections"]["/ch/01/mix"]["mix/fader"] == -6.0
         assert "The Molecules" in (await c.read_resource("x32://patches/example_band")).contents[0].text
         r = await c.call_tool("connection_status", {})
         assert r.is_error is False
@@ -622,34 +726,31 @@ async def test_stdio_smoke_spawns_the_server():
         assert r.structured_content["ok"] is True and r.structured_content["show_mode"] is True
 
 
-async def test_main_configures_stderr_so_unicode_log_records_survive(tmp_path, monkeypatch):
+async def test_main_configures_stderr_so_unicode_log_records_survive(tmp_path):
     """A cp1252 stderr must not silently drop log lines containing − → ² (Windows default).
 
     logging discards any record its stream cannot encode, so without the reconfigure in
     main() the most interesting diagnostics (confirmations, notches, refusals) disappear.
+    The subprocess runs the REAL entry point with only the transport stubbed out, so deleting
+    the reconfigure from server.main() fails this test.
     """
-    import io, logging, subprocess, sys, textwrap
+    import os, subprocess, textwrap
 
     script = textwrap.dedent(
         """
         import io, logging, sys
         sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="cp1252", errors="strict")
         from x32mcp import server
-        try:
-            server.main.__wrapped__  # noqa: B018
-        except AttributeError:
-            pass
-        # replicate main()'s logging setup without starting the transport
-        try:
-            sys.stderr.reconfigure(encoding="utf-8", errors="backslashreplace")
-        except Exception:
-            pass
-        logging.basicConfig(stream=sys.stderr, level=logging.INFO, format="%(message)s", force=True)
+        server.server.run = lambda *a, **k: None   # the stdio transport must not start
+        server.main([])                            # the real entry point does the reconfigure
         logging.getLogger("x32mcp.t").info("fader \u22126.0 dB \u2192 \u22124.0 dB CFS\u00b2")
         """
     )
+    env = {**os.environ, "PYTHONPATH": str(REPO / "src"), "X32MCP_DASH": "0", "X32MCP_LOG": "INFO",
+           "X32_HOST": "", "X32MCP_HOME": str(tmp_path), "X32MCP_DEVICE_YAML": str(REPO / "device.yaml")}
     out = subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True, encoding="utf-8", timeout=60,
+        [sys.executable, "-c", script], capture_output=True, text=True, encoding="utf-8", timeout=60, env=env,
     )
+    assert out.returncode == 0, out.stderr
     assert "Logging error" not in out.stderr, out.stderr
-    assert "fader" in out.stderr and "dB" in out.stderr, out.stderr
+    assert "fader −6.0 dB → −4.0 dB CFS²" in out.stderr, out.stderr

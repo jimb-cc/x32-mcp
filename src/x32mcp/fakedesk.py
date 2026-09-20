@@ -103,7 +103,10 @@ _MISSING = object()
 
 _FX_PAR_RE = re.compile(r"^/fx/(\d)/par/(\d\d)$")
 _FX_TYPE_RE = re.compile(r"^/fx/(\d)/type$")
-_METER_NAME_RE = re.compile(r"^/?meters/(\d+)$")
+# meters.md §1.1 (VERIFIED, X32.c 531-551): Xmeters[i].command are the literal strings
+# "/meters/0"…"/meters/16" WITH the leading slash, and the emulator matches nothing else.
+_METER_NAME_RE = re.compile(r"^/meters/(\d+)$")
+_METER_NAME_LOOSE_RE = re.compile(r"^/?meters/(\d+)$")  # only to explain the rejection at DEBUG
 _SCENE_FIELD_RE = re.compile(r"^/-show/showfile/scene/(\d{3})/(name|notes)$")
 _FREQ_K = re.compile(r"^([+-]?\d*)k(\d*)$")
 
@@ -850,10 +853,14 @@ class FakeDesk:
             log.warning("fakedesk: no room for xremote client %s (%d registered)", addr, len(self.clients))
 
     def _meter_name(self, arg: Any) -> tuple[int, str] | None:
+        """``"/meters/N"`` -> ``(N, reply address)``, else ``None`` (meters.md §1.1)."""
         if not isinstance(arg, str):
             return None
-        m = _METER_NAME_RE.match(arg.strip())
+        text = arg.strip()
+        m = _METER_NAME_RE.match(text)
         if not m:
+            if _METER_NAME_LOOSE_RE.match(text):
+                log.debug("fakedesk: rejecting %r — meters.md §1.1: the console matches the leading-slash form only", arg)
             return None
         mtype = int(m.group(1))
         if mtype not in METER_COUNTS:
@@ -920,13 +927,17 @@ class FakeDesk:
     def _meter_datagram(self, sub: MeterSub) -> bytes:
         return encode_meter_datagram(sub.meter_type, self._meter_values(sub.meter_type, sub.args), address=sub.reply_address)
 
-    def _strip_level(self, prefix: str, t: float, salt: int) -> float:
+    def _strip_level(self, prefix: str, t: float, salt: int, *, pre_fade: bool = False) -> float:
+        """Synthetic linear level for one strip. ``pre_fade`` ignores the fader and the mute
+        (meters.md §3: ``/meters/6`` word 0 is the post-trim, *pre*-fade level)."""
+        wobble = 0.85 + 0.15 * math.sin(2.0 * math.pi * 0.7 * t + salt)
+        if pre_fade:
+            return max(SILENCE_LIN, min(8.0, 0.25 * wobble))
         on = self.state.get(f"{prefix}/mix/on", 1)
         fader = self.state.get(f"{prefix}/mix/fader", 0.0)
         if not on or not isinstance(fader, float) or fader <= 0.0:
             return SILENCE_LIN
         db = fader_to_db(fader)
-        wobble = 0.85 + 0.15 * math.sin(2.0 * math.pi * 0.7 * t + salt)
         return max(SILENCE_LIN, min(8.0, 0.25 * 10.0 ** (db / 20.0) * wobble))
 
     def _meter_values(self, mtype: int, args: tuple[int, ...]) -> list[float]:
@@ -937,17 +948,26 @@ class FakeDesk:
         if mtype == 16:
             return [1.0] * count * 2  # 88 gains of 1.0 (no reduction) + 8 automix gains of 1.0
         t = asyncio.get_running_loop().time()
+        # meters.md §3: the gain-reduction words are the linear gain *applied*, 1.0 = no
+        # reduction — not levels. (§2.2's verbatim desk capture of /meters/6 decodes to
+        # 9.6e-6, 0.99999982, 1.0, 3.98e-7: level, gate gain, dyn gain, level.) So each id
+        # gets its own fill; the strip walk must stop where its GR range begins.
         values = [SILENCE_LIN] * count
-        if mtype in (0, 1, 13):
+        if mtype in (0, 13):  # all levels: [0-69] resp. [0-47] of the 70-strip order
             for i, prefix in enumerate(_METER_STRIPS_70[:count]):
                 values[i] = self._strip_level(prefix, t, i)
-        elif mtype == 2:
-            for i, prefix in enumerate(_METER_STRIPS_MAIN[:count]):
+        elif mtype == 1:  # [0-31] ch levels, [32-63] gate GR, [64-95] dyn GR
+            for i, prefix in enumerate(_METER_STRIPS_70[:32]):
                 values[i] = self._strip_level(prefix, t, i)
-        elif mtype == 6:
+            values[32:] = [1.0] * (count - 32)
+        elif mtype == 2:  # [0-24] bus/mtx/main levels, [25-48] their dyn GR
+            for i, prefix in enumerate(_METER_STRIPS_MAIN):
+                values[i] = self._strip_level(prefix, t, i)
+            values[len(_METER_STRIPS_MAIN):] = [1.0] * (count - len(_METER_STRIPS_MAIN))
+        elif mtype == 6:  # [0] pre-fade level, [1] gate GR, [2] dyn GR, [3] post-fade level
             ch = args[0] if args else 0
             prefix = _METER_STRIPS_70[ch] if 0 <= ch < len(_METER_STRIPS_70) else "/main/st"
-            values = [self._strip_level(prefix, t, ch)] * count
+            values = [self._strip_level(prefix, t, ch, pre_fade=True), 1.0, 1.0, self._strip_level(prefix, t, ch)]
         return values
 
     def _h_renew(self, msg: OscMessage, data: bytes, addr: Addr) -> None:

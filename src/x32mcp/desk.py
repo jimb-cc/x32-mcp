@@ -93,6 +93,8 @@ _PANIC_FAMILIES: tuple[str, ...] = ("main", "bus", "mtx")  # fx_routing_scenes.m
 _SCENE_VERIFY_S = 2.0
 _SCENE_POLL_S = 0.05
 _NAME_MAX = 12  # scales_params.md §4.1
+_NAME_BAD = '"'  # transport.md §6.3/§6.6: node text has no escape for a quote; the desk's parser stops at it
+_SHOW_CONTROL = "/-prefs/show_control"  # fx_routing_scenes.md §6.2: only SCENES makes prepos/current a scene slot
 
 
 class DeskError(Exception):
@@ -316,10 +318,11 @@ class Desk:
                 for p in fetch:
                     f = self._inflight.pop(p, None)
                     if f is not None and not f.done():
-                        if isinstance(e, Exception):
-                            f.set_exception(e)
-                        else:
-                            f.cancel()
+                        # Never cancel() a shared future: asyncio.shield does not stop an *inner*
+                        # cancellation reaching the waiters, so another tool call would die with a
+                        # CancelledError it never asked for. Hand it an error it can report instead.
+                        f.set_exception(e if isinstance(e, Exception) else DeskError("TIMEOUT", f"read of {p} was abandoned"))
+                        f.exception()  # mark retrieved: nobody may await this one
                 raise
             t1 = time.monotonic()
             for p in fetch:
@@ -331,7 +334,13 @@ class Desk:
                 if f is not None and not f.done():
                     f.set_result(vals)
         for p, fut in waits.items():
-            out[p] = await asyncio.shield(fut)
+            try:
+                out[p] = await asyncio.shield(fut)
+            except asyncio.CancelledError:
+                cur = asyncio.current_task()
+                if cur is not None and cur.cancelling():
+                    raise  # we really are being cancelled
+                raise DeskError("TIMEOUT", f"read of {p} was abandoned by another caller") from None
         return out
 
     def _unreachable(self, path: str) -> DeskError:
@@ -575,12 +584,49 @@ class Desk:
             out.append({"index": i, "name": v.get(k + "name") or "", "notes": v.get(k + "notes") or "", "has_data": bool(v.get(k + "hasdata"))})
         return out
 
+    async def _show_control(self) -> str | None:
+        """``/-prefs/show_control`` as a token (``CUES``/``SCENES``/``SNIPPETS``), ``None`` when the
+        desk did not answer. Read off the bare address: no ``/node`` section covers this leaf, and
+        X32GetLib.c/X32SetLib.c read and restore it exactly this way (fx_routing_scenes.md §6.2)."""
+        try:
+            raw = await self._conn.get(_SHOW_CONTROL)
+        except RequestTimeout:
+            return None
+        except NotConnected as e:
+            raise DeskError("NOT_CONNECTED", str(e)) from None
+        hit = self._d.param_for_address(_SHOW_CONTROL)
+        if hit is None:
+            return None
+        try:
+            return str(hit[0].to_value(raw))
+        except (ScaleError, ValueError, TypeError):
+            log.warning("unreadable %s: %r", _SHOW_CONTROL, raw)
+            return None
+
+    def _not_scenes(self, sc: str) -> str:
+        return (f"the desk's scene page is showing {sc}, not SCENES: /-show/prepos/current indexes that list, "
+                "not the scenes (fx_routing_scenes.md §6.2) — set Setup/show control to SCENES on the desk")
+
     async def current_scene(self) -> dict[str, Any]:
-        """``{index, name, has_data}`` of ``/-show/prepos/current`` (fx_routing_scenes.md §6.2)."""
+        """``{index, name, has_data, show_control}`` of ``/-show/prepos/current``
+        (fx_routing_scenes.md §6.2). The pointer only holds a scene slot while
+        ``/-prefs/show_control`` is SCENES; with CUES/SNIPPETS it indexes those lists instead, so
+        ``index`` is ``None`` rather than a wrong scene number. DESIGN.md is silent on the
+        preference: we read it and report, we do not write it (GetSceneName.c forces it to SCENES)
+        — a Tier 0 read must not change what the operator sees on the desk."""
+        sc = await self._show_control()
+        if sc is not None and sc != "SCENES":
+            return {"index": None, "name": "", "has_data": False, "show_control": sc, "note": self._not_scenes(sc)}
         idx = await self._leaf("/-show/prepos/current")
         if not isinstance(idx, int) or isinstance(idx, bool):
             raise DeskError("TIMEOUT", "desk did not report /-show/prepos/current")
-        return {"index": idx, **(await self._scene_info(idx))}
+        if idx < 0:
+            # Observed on a real X32 Rack (FW 4.13) that had been powered up without recalling a
+            # scene: the pointer reads -1. Reporting "scene -1" reads as a real slot number to
+            # both the model and the operator, so say plainly that nothing is loaded.
+            return {"index": None, "name": "", "has_data": False, "show_control": sc,
+                    "note": "no scene is currently loaded (the desk's scene pointer is -1)"}
+        return {"index": idx, **(await self._scene_info(idx)), "show_control": sc}
 
     async def _scene_info(self, idx: int) -> dict[str, Any]:
         if not 0 <= idx <= 99:
@@ -793,11 +839,18 @@ class Desk:
             log.info("pre-write snapshot %s taken", snap.id)
             return snap
 
+    def _guarded_msg(self, address: str, target: Target | None) -> str:
+        """Refusal text that names the tool to use — a raw OSC address is not a tool argument."""
+        if target is not None and target.family == "main" and address.endswith("/mix/on"):
+            return f"{target.label} mute is a guarded (Tier 2) parameter; use set_main_mute"
+        who = f" ({target.label})" if target is not None else ""
+        return f"{address}{who} is a guarded (Tier 2) parameter; use the confirming tool for it"
+
     async def _write(self, address: str, raw: Any, *, value: Any, tool: str, target: Target | None = None, guarded: bool = False) -> None:
         """policy.tier_for → snapshot-before-write → rate limiter → ``conn.set`` → cache + event."""
         tier = self._policy.tier_for(address)
         if tier >= Tier.GUARDED and not guarded:
-            raise DeskError("GUARDED", f"{address} is a guarded (Tier 2) parameter; use the confirming tool for it", address=address)
+            raise DeskError("GUARDED", self._guarded_msg(address, target), address=address)
         await self.ensure_pre_write_snapshot()
         await self._policy.acquire_write()
         try:
@@ -1060,8 +1113,14 @@ class Desk:
         t = self._target(t)
         applied: dict[str, Any] = {}
         truncated = False
+        requoted = False
         if name is not None:
             text = str(name)
+            if _NAME_BAD in text:
+                # transport.md §6.3: node text has no escape for a quote, and the desk's parser
+                # (XslashSetString, §6.6) reads to the closing '"' — a name carrying one truncates
+                # the rest of the line on the desk. Downgrade it to an apostrophe and say so.
+                text, requoted = text.replace(_NAME_BAD, "'"), True
             if len(text) > _NAME_MAX:
                 text, truncated = text[:_NAME_MAX], True
             _a, applied["name"] = await self._write_value(t, "config/name", text, tool="label")
@@ -1074,6 +1133,8 @@ class Desk:
         out = {"target": t.key, "label": t.label, "applied": applied}
         if truncated:
             out["truncated"] = True
+        if requoted:
+            out["quote_replaced"] = True
         return out
 
     async def panic(self) -> dict[str, Any]:
@@ -1085,23 +1146,34 @@ class Desk:
         await self._policy.acquire_write(panic=True)
         unconfirmed = False
         done: list[str] = []
+        failed: list[str] = []
+        last: Exception | None = None
         for t in targets:
             address = f"{t.osc_prefix}/mix/on"
+            # One bad address must never cost the other 23 outputs (BRIEF §4: panic is never
+            # blocked) — the reconnect loop can drop the socket mid-loop, so every send is on its own.
             try:
                 await self._conn.set(address, 0)  # 0 = OFF = muted (inversion, DESIGN §0.4)
-            except NotConnected as e:
-                if self._conn.state is ConnectionState.DEGRADED:
+            except (NotConnected, OSError) as e:
+                try:
                     await self._conn.send_raw(address, 0)  # try anyway: the desk may just be slow
                     unconfirmed = True
-                else:
-                    raise DeskError("NOT_CONNECTED", str(e), muted=done) from None
+                except (NotConnected, OSError) as e2:
+                    last = e2 if isinstance(e2, Exception) else e
+                    failed.append(t.key)
+                    continue
             self._invalidate_address(address)
             done.append(t.key)
         elapsed = (time.perf_counter() - t0) * 1000.0
         self.write_count += len(done)
-        self._events.publish("desk.panic", elapsed_ms=round(elapsed, 1), count=len(done), delivered="unconfirmed" if unconfirmed else "sent")
-        log.warning("PANIC: %d outputs muted in %.1f ms%s", len(done), elapsed, " (desk degraded, unconfirmed)" if unconfirmed else "")
-        return {"muted": done, "count": len(done), "elapsed_ms": round(elapsed, 1), "delivered": "unconfirmed" if unconfirmed else "sent"}
+        delivered = "unconfirmed" if unconfirmed else "sent"
+        self._events.publish("desk.panic", elapsed_ms=round(elapsed, 1), count=len(done), failed=len(failed), delivered=delivered)
+        log.warning("PANIC: %d outputs muted in %.1f ms%s%s", len(done), elapsed,
+                    " (desk degraded, unconfirmed)" if unconfirmed else "",
+                    f", {len(failed)} NOT SENT: {', '.join(failed)}" if failed else "")
+        if not done:
+            raise DeskError("NOT_CONNECTED", f"panic could not reach the desk: {last}", muted=done, failed=failed)
+        return {"muted": done, "count": len(done), "failed": failed, "elapsed_ms": round(elapsed, 1), "delivered": delivered}
 
     # -- Tier 2 executors (the server does the confirmation dance) ---------------------------------------
 
@@ -1138,27 +1210,38 @@ class Desk:
         self._policy.check_show_mode_allows("scene_recall")
         idx = _int(index, "scene index", 0, 99)
         info = await self._scene_info(idx)
-        previous = await self._leaf("/-show/prepos/current")
+        sc = await self._show_control()
+        # The pointer only tracks scenes while show_control is SCENES (fx_routing_scenes.md §6.2);
+        # otherwise it indexes the cue/snippet list, so polling it would just burn 2 s and lie.
+        indexes_scenes = sc is None or sc == "SCENES"
+        previous = await self._leaf("/-show/prepos/current") if indexes_scenes else None
         await self._write("/-action/goscene", idx, value=idx, tool="recall_scene", guarded=True)
-        verified = False
-        deadline = time.monotonic() + _SCENE_VERIFY_S
-        while True:
-            try:
-                cur = await self._conn.get("/-show/prepos/current")
-            except RequestTimeout:
-                cur = None
-            except NotConnected as e:
-                raise DeskError("NOT_CONNECTED", str(e)) from None
-            if cur == idx:
-                verified = True
-                break
-            if time.monotonic() >= deadline:
-                break
-            await asyncio.sleep(_SCENE_POLL_S)
+        verified: bool | None = None if not indexes_scenes else False
+        if indexes_scenes:
+            deadline = time.monotonic() + _SCENE_VERIFY_S
+            while True:
+                try:
+                    cur = await self._conn.get("/-show/prepos/current")
+                except RequestTimeout:
+                    cur = None
+                except NotConnected as e:
+                    raise DeskError("NOT_CONNECTED", str(e)) from None
+                if cur == idx:
+                    verified = True
+                    break
+                if time.monotonic() >= deadline:
+                    break
+                await asyncio.sleep(_SCENE_POLL_S)
         self.invalidate()
         self._events.publish("desk.scene", action="recall", index=idx, name=info["name"], verified=verified)
         log.info("scene %d %r recalled (%s)", idx, info["name"], "verified" if verified else "UNVERIFIED")
-        return {"index": idx, "name": info["name"], "has_data": info["has_data"], "verified": verified, "previous_index": previous}
+        out: dict[str, Any] = {
+            "index": idx, "name": info["name"], "has_data": info["has_data"],
+            "verified": verified, "previous_index": previous, "show_control": sc,
+        }
+        if not indexes_scenes:
+            out["note"] = "recall sent, but it cannot be verified: " + self._not_scenes(str(sc))
+        return out
 
     async def save_scene(self, index: int, name: str, notes: str = "") -> dict[str, Any]:
         """``/save ,siss scene index name notes`` → expects ``,si scene 1`` (fx_routing_scenes.md §6.4)."""
