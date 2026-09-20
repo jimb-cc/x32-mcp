@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "x32": {
+      "type": "stdio",
+      "command": "C:/Users/jim/Documents/claude/x32-mcp/.venv/Scripts/python.exe",
+      "args": ["-m", "x32mcp.server"],
+      "env": {
+        "X32_HOST": "${X32_HOST:-}",
+        "X32MCP_HOME": "C:/Users/jim/Documents/claude/x32-mcp"
+      }
+    }
+  }
+}
