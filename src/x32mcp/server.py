@@ -1795,6 +1795,14 @@ def main(argv: Sequence[str] | None = None) -> None:
     global app
     settings = Settings.from_env()
     level = getattr(logging, settings.log_level, None)
+    # Summaries carry U+2212 MINUS, U+2192 ARROW and CFS². A Windows console is cp1252 by
+    # default, and logging DROPS any record its stream cannot encode (printing "--- Logging
+    # error ---" instead), so diagnostics would vanish precisely when they matter. Force a
+    # lossy-but-never-failing stderr; keep stdout untouched — it is the MCP wire.
+    try:
+        sys.stderr.reconfigure(encoding="utf-8", errors="backslashreplace")  # type: ignore[union-attr]
+    except (AttributeError, ValueError, OSError):  # already wrapped, or not a text stream
+        pass
     logging.basicConfig(
         stream=sys.stderr, level=level if isinstance(level, int) else logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s", force=True,

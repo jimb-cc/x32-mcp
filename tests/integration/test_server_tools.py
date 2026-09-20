@@ -620,3 +620,36 @@ async def test_stdio_smoke_spawns_the_server():
         assert r.structured_content["ok"] is False and r.structured_content["error"]["code"] == "NOT_CONNECTED"
         r = await c.call_tool("show_mode", {"on": True})
         assert r.structured_content["ok"] is True and r.structured_content["show_mode"] is True
+
+
+async def test_main_configures_stderr_so_unicode_log_records_survive(tmp_path, monkeypatch):
+    """A cp1252 stderr must not silently drop log lines containing − → ² (Windows default).
+
+    logging discards any record its stream cannot encode, so without the reconfigure in
+    main() the most interesting diagnostics (confirmations, notches, refusals) disappear.
+    """
+    import io, logging, subprocess, sys, textwrap
+
+    script = textwrap.dedent(
+        """
+        import io, logging, sys
+        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="cp1252", errors="strict")
+        from x32mcp import server
+        try:
+            server.main.__wrapped__  # noqa: B018
+        except AttributeError:
+            pass
+        # replicate main()'s logging setup without starting the transport
+        try:
+            sys.stderr.reconfigure(encoding="utf-8", errors="backslashreplace")
+        except Exception:
+            pass
+        logging.basicConfig(stream=sys.stderr, level=logging.INFO, format="%(message)s", force=True)
+        logging.getLogger("x32mcp.t").info("fader \u22126.0 dB \u2192 \u22124.0 dB CFS\u00b2")
+        """
+    )
+    out = subprocess.run(
+        [sys.executable, "-c", script], capture_output=True, text=True, encoding="utf-8", timeout=60,
+    )
+    assert "Logging error" not in out.stderr, out.stderr
+    assert "fader" in out.stderr and "dB" in out.stderr, out.stderr
