@@ -241,7 +241,8 @@ async def test_tier1_moves_and_summaries(app, fakedesk):
     assert gate["ok"] and gate["applied"]["on"] is True and gate["applied"]["range_db"] == 30.0
     assert_err(await srv.set_gate("bus.1", on=True), "NOT_SUPPORTED")
     p = await srv.panic()
-    assert p["ok"] and p["count"] == 24 and p["delivered"] == "sent" and p["summary"].startswith("PANIC: 24 outputs muted in")
+    assert p["ok"] and p["count"] == 24 and p["delivered"] == "confirmed" and p["confirmed"] == 24 and p["summary"].startswith("PANIC: 24 mutes sent in")
+    assert "all 24 read back muted" in p["summary"]
     await settle(app)
     assert fakedesk.get("/main/st/mix/on") == 0 and fakedesk.get("/bus/16/mix/on") == 0 and fakedesk.get("/mtx/06/mix/on") == 0
     assert fakedesk.get("/ch/01/mix/on") == 1  # inputs are left alone
@@ -503,6 +504,27 @@ async def test_setup_ringout_eqs_validation_failure_is_an_error_envelope(app, mo
     assert_err(res, "GEQ_VALIDATION_FAILED")
     assert "insert switched off" in res["error"]["message"] and res["error"]["changed"] == 3
     assert "ok" not in res["error"] and "requires_confirmation" not in res
+
+
+async def test_setup_ringout_eqs_on_a_desk_that_applies_late_is_ok_or_not_yet_verified(app, fakedesk, monkeypatch):
+    """HANDOVER §4b: a successful setup reported GEQ_VALIDATION_FAILED because the desk showed the
+    inserts only after it had answered the read-back. Late-but-in-time → plain ok (verified);
+    later than the settle deadline → ok with verified False and a warning, never the error."""
+    fakedesk.set_apply_delay("/bus/", 150)
+    fakedesk.set_apply_delay("/fx/", 150)
+    token = assert_pending(await srv.setup_ringout_eqs([1, 2]))
+    done = await srv.setup_ringout_eqs([1, 2], confirm_token=token)
+    assert done["ok"] is True and done["verified"] is True and done["changed"] == 3 and "all validate" in done["summary"]
+    assert done["settle"]["attempts"] >= 2
+    monkeypatch.setattr(srv._prov, "SETUP_SETTLE_S", 0.3)
+    fakedesk.set_apply_delay("/bus/03/insert", 60_000)
+    token = assert_pending(await srv.setup_ringout_eqs([3]))
+    late = await srv.setup_ringout_eqs([3], confirm_token=token)
+    assert late["ok"] is True and late["verified"] is False and "NOT YET VERIFIED" in late["summary"]
+    assert late["warnings"] and "insert" in late["warnings"][0] and "error" not in late
+    fakedesk.flush_pending()
+    v = await srv.validate_ringout_eqs([3])
+    assert v["all_ok"] is True  # and the stale answer was not left in the cache
 
 
 async def test_reconnect_rearms_the_snapshot_before_write_net(app, fakedesk):

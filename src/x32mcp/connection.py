@@ -553,6 +553,20 @@ class X32Connection:
         per_attempt = self._timeout_s if timeout is None else float(timeout)
         await self._request_bytes(encode("/", text), "/", per_attempt, self._retries, what=f"/ {text!r}")
 
+    async def sync(self, *, timeout: float | None = None) -> float:
+        """Write barrier: send ``/status`` and await its reply. When it returns, every datagram this
+        connection sent before it has been received and dispatched by the desk's OSC server (one
+        socket, one path, in-order delivery; the server answers in arrival order — CONFIRMED for
+        the emulator, transport.md §4.2/§6.6, UNCONFIRMED but never contradicted for the desk).
+        It does NOT prove the desk *applied* those writes: real hardware answered the next read
+        with the previous value (HANDOVER §4b) — use :func:`x32mcp.settle.read_until` for that.
+        Use it as flow control after a burst of fire-and-forget SETs (DOC 4591–4593 recommends
+        reading an echo before sending more). Returns the round trip in ms; retried like
+        :meth:`request`; raises :class:`RequestTimeout` / :class:`NotConnected`."""
+        t0 = time.monotonic()
+        await self.request("/status", timeout=timeout)
+        return (time.monotonic() - t0) * 1000.0
+
     async def node_many(self, paths: list[str], concurrency: int = 16) -> dict[str, str | None]:
         """Pipelined :meth:`node` sweep with at most ``concurrency`` requests in flight.
         A path that times out (or is unknown to the desk) maps to ``None``; never raises for

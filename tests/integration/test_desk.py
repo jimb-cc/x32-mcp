@@ -115,10 +115,11 @@ async def test_cache_is_invalidated_by_pushes_and_own_writes(desk, conn, fakedes
     assert desk.stats["cached_sections"] > 0
     await desk.label("ch.7", name="Mine")  # our own write drops the section too
     assert (await desk.get_channel(7))["name"] == "Mine"
+    assert "/ch/07/config" not in desk._cache  # answered by the desk, not cached: inside the settle window
     # a write by another module through the same connection is seen via the bus's "write" event
-    assert "/ch/07/config" in desk._cache
-    events.publish("write", address="/ch/07/config/color", args=[6])
-    assert "/ch/07/config" not in desk._cache
+    assert "/ch/07/mix" in desk._cache
+    events.publish("write", address="/ch/07/mix/fader", args=[0.5])
+    assert "/ch/07/mix" not in desk._cache
     desk.invalidate()
     assert desk.stats["cached_sections"] == 0
 
@@ -359,8 +360,11 @@ async def test_label_and_resolve(desk, conn, fakedesk):
 
 async def test_panic_mutes_24_outputs_fast(desk, conn, fakedesk, policy):
     res = await desk.panic()
-    assert res["count"] == 24 and res["elapsed_ms"] < 200 and res["delivered"] == "sent"
+    assert res["count"] == 24 and res["elapsed_ms"] < 200  # elapsed_ms times the sends only
+    assert res["delivered"] == "confirmed" and res["confirmed"] == 24 and res["unconfirmed"] == [] and res["resent"] == []
+    assert res["verify"]["attempts"] == 1  # a synchronous desk costs exactly one read-back round
     assert res["muted"][:2] == ["main.st", "main.m"] and "bus.16" in res["muted"] and "mtx.6" in res["muted"]
+    assert (await desk.panic(verify_s=0))["delivered"] == "sent"  # opt-out keeps the old contract
     await settle(conn)
     for key in res["muted"]:
         t = Target(*key.split(".")) if key.startswith("main") else Target(key.split(".")[0], int(key.split(".")[1]))
@@ -368,6 +372,31 @@ async def test_panic_mutes_24_outputs_fast(desk, conn, fakedesk, policy):
     assert fakedesk.get("/ch/01/mix/on") == 1  # inputs are left alone
     assert policy.snapshot_before_write is True  # no dump on the panic path
     assert res["failed"] == []
+
+
+async def test_panic_detects_and_resends_a_lost_mute(desk, conn, fakedesk):
+    """transport.md §5.2/§2: a SET has no ack and a datagram can be lost. Losing the first of the
+    24 mutes used to leave Main LR OPEN while the tool said "24 outputs muted". The read-back
+    finds it, re-sends it once and reports it."""
+    fakedesk.drop_inbound_next(1)  # the /main/st/mix/on datagram never arrives
+    res = await desk.panic()
+    assert res["count"] == 24 and res["resent"] == ["main.st"]
+    assert res["delivered"] == "confirmed" and res["confirmed"] == 24 and res["unconfirmed"] == []
+    assert res["verify"]["attempts"] >= 2 and res["verify"]["elapsed_ms"] < 1500
+    await settle(conn)
+    assert fakedesk.get("/main/st/mix/on") == 0
+
+
+async def test_panic_confirms_mutes_the_desk_applies_late_and_reports_the_rest(desk, conn, fakedesk):
+    fakedesk.set_apply_delay("/bus/", 200)  # applied after the first read-back
+    res = await desk.panic()
+    assert res["delivered"] == "confirmed" and res["resent"] == [] and res["verify"]["attempts"] >= 2
+    for i in range(1, 7):
+        fakedesk.set(f"/mtx/{i:02d}/mix/on", 1)  # the operator unmuted the matrices again
+    fakedesk.set_apply_delay("/mtx/", 60_000)  # never (within the panic's patience)
+    res = await desk.panic(verify_s=0.3)
+    assert res["delivered"] == "partial" and res["confirmed"] == 18
+    assert res["unconfirmed"] == [f"mtx.{i}" for i in range(1, 7)] and res["resent"] == res["unconfirmed"]
 
 
 async def test_panic_still_mutes_while_degraded(desk, conn, fakedesk):
@@ -738,3 +767,39 @@ async def test_headamp_resolves_through_firmware_4x_user_routing(fakedesk, conn,
     conn.invalidate(); d.invalidate()
     assert await d.headamp_index_for("ch.1") == 0
     assert await d.headamp_index_for("ch.4") == 3
+
+
+# ------------------------------------------------------------ read-your-writes (REVIEW_BRIEF §5)
+
+
+async def test_reader_after_a_write_never_joins_a_request_issued_before_it(desk, conn, fakedesk, policy):
+    """A section read in flight BEFORE label() stayed joinable AFTER it, so a get_strip issued
+    after the write returned the pre-write name (our own staleness, no desk asynchrony needed)."""
+    policy.snapshot_before_write = False
+    t = Target("ch", 1)
+    old = (await desk.get_strip(t))["name"]
+    desk.invalidate()
+    fakedesk.latency_ms = 150.0  # replies are slow: the first read is still in flight across the write
+    early = asyncio.create_task(desk.get_strip(t))
+    await asyncio.sleep(0.02)
+    await desk.label(t, name="NEWNAME")
+    late = await desk.get_strip(t)  # issued after the write
+    assert (await early)["name"] == old  # that request predates the write: fine
+    assert late["name"] == "NEWNAME", "a reader after the write was served the pre-write reply"
+
+
+async def test_a_read_straight_after_a_write_is_not_cached(desk, conn, fakedesk, policy):
+    """HANDOVER §4b: the desk answered the read straight after label_channel with the previous
+    name. That answer must not then be served from OUR cache for read_cache_ttl_s."""
+    policy.snapshot_before_write = False
+    t = Target("ch", 2)
+    fakedesk.set_apply_delay("/ch/02/config", 150)  # the desk shows the name 150 ms after the SET
+    await desk.label(t, name="LATE")
+    first = (await desk.get_strip(t))["name"]
+    assert first == "Ch02"  # the desk really is stale here: it is the source of truth, we report it
+    await asyncio.sleep(0.2)
+    assert (await desk.get_strip(t))["name"] == "LATE"  # ...but we ask it again rather than repeat the lie
+    # once settled (older than settle_window_s) the section is cached as usual
+    await asyncio.sleep(0.4)
+    await desk.get_strip(t)
+    assert "/ch/02/config" in desk._cache

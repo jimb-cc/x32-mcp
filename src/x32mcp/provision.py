@@ -46,6 +46,7 @@ from typing import Any, Sequence
 
 from .desk import Desk, DeskError
 from .scales import format_db
+from .settle import read_until
 from .targets import Target, TargetError, parse_target
 
 __all__ = [
@@ -67,6 +68,10 @@ __all__ = [
 log = logging.getLogger(__name__)
 
 _FLAT_EPS = 0.05  # dB: the GEQ grid is 0.5 dB, node text prints one decimal
+# HANDOVER §4b: a real desk answered the read straight after the insert writes with the OLD
+# values, so a successful setup reported GEQ_VALIDATION_FAILED. After writing, validation is
+# re-read until it agrees or this deadline passes (then it is "not yet verified", not failed).
+SETUP_SETTLE_S = 2.0
 
 
 # -- bus spelling ---------------------------------------------------------------------------------
@@ -500,11 +505,16 @@ async def plan_setup(desk: Desk, buses: Sequence[int | str | Target]) -> SetupPl
     return plan
 
 
-async def apply_setup(desk: Desk, plan: SetupPlan) -> dict[str, Any]:
+async def apply_setup(desk: Desk, plan: SetupPlan, *, settle_deadline_s: float | None = None) -> dict[str, Any]:
     """Execute a :class:`SetupPlan` idempotently: a type load or insert field that already
     matches is skipped, so a second apply writes nothing. The caller (server) has already done
-    the Tier-2 confirmation. Returns ``{buses, writes, skipped, changed, ok, geq}`` where ``geq``
-    is a fresh :func:`validate_ringout_eqs` result."""
+    the Tier-2 confirmation. Returns ``{buses, writes, skipped, changed, ok, verified, settle,
+    geq}`` where ``geq`` is a fresh :func:`validate_ringout_eqs` result. When anything was
+    written, validation is re-read (dropping the cached sections this apply touched) until it
+    passes or ``settle_deadline_s`` (:data:`SETUP_SETTLE_S`) elapses: ``verified`` is then
+    ``False`` and ``ok`` stays ``False`` — *not yet verified*, which the caller must not report
+    as a failure (the desk applies inserts/type loads after it answers, HANDOVER §4b). With no
+    writes ``verified`` is ``None`` and ``ok`` is the plain validation verdict."""
     if plan.blockers:
         raise DeskError("NOT_SUPPORTED", "setup plan has blockers: " + "; ".join(plan.blockers), blockers=list(plan.blockers))
     writes: list[dict[str, Any]] = []
@@ -527,11 +537,33 @@ async def apply_setup(desk: Desk, plan: SetupPlan) -> dict[str, Any]:
             continue
         res = await desk.set_insert(key, **kw)
         writes.append({"target": key, **res.get("applied", kw)})
-    status = await validate_ringout_eqs(desk, plan.buses)
+    touched = [f"/fx/{int(tl['slot'])}" for tl in plan.type_loads] + [
+        f"{parse_target(str(item['target'])).osc_prefix}/insert" for item in plan.inserts]
+    verified: bool | None = None
+    settle: dict[str, Any] | None = None
+    if writes:
+        async def revalidate() -> dict[int | str, GeqStatus]:
+            for path in touched:  # a stale answer must not be served again from our own cache
+                desk.invalidate(path)
+            return await validate_ringout_eqs(desk, plan.buses)
+
+        deadline = SETUP_SETTLE_S if settle_deadline_s is None else float(settle_deadline_s)
+        settled = await read_until(revalidate, lambda st: all(g.ok for g in st.values()), deadline_s=deadline,
+                                   first_delay_s=0.05, retry_on=(), what="ring-out GEQ setup")
+        status = settled.value if settled.value is not None else await validate_ringout_eqs(desk, plan.buses)
+        verified = settled.ok
+        settle = settled.to_dict()
+        if not verified:
+            for path in touched:  # leave nothing stale behind for the next validate
+                desk.invalidate(path)
+    else:
+        status = await validate_ringout_eqs(desk, plan.buses)
     ok = all(s.ok for s in status.values())
-    log.info("ring-out GEQ setup: %d write(s), %d skipped, valid=%s", len(writes), len(skipped), ok)
+    log.info("ring-out GEQ setup: %d write(s), %d skipped, valid=%s%s", len(writes), len(skipped), ok,
+             "" if settle is None else f" (verified={verified} after {settle['attempts']} read(s), {settle['elapsed_ms']:.0f} ms)")
     return {
         "buses": list(plan.buses), "writes": writes, "skipped": skipped, "changed": len(writes), "ok": ok,
+        "verified": verified, "settle": settle,
         "geq": {str(k): v.to_dict() for k, v in status.items()},
     }
 

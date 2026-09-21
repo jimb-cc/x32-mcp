@@ -82,6 +82,7 @@ from .nodes import (
 )
 from .policy import FADER_FLOOR_DB, Policy, Tier
 from .scales import NEG_INF_DB, ScaleError, enum_to_index, format_db
+from .settle import read_until
 from .targets import Target, TargetError, parse_target
 
 __all__ = ["DeskError", "Desk", "ALL_FAMILIES"]
@@ -90,6 +91,8 @@ log = logging.getLogger(__name__)
 
 ALL_FAMILIES: tuple[str, ...] = ("ch", "auxin", "fxrtn", "bus", "mtx", "main", "dca")
 _PANIC_FAMILIES: tuple[str, ...] = ("main", "bus", "mtx")  # fx_routing_scenes.md §11 option 1
+_PANIC_VERIFY_S = 0.6  # read the 24 mutes back until they show muted (after the sends, never before)
+_PANIC_REVERIFY_S = 0.3  # after re-sending the ones that did not
 _SCENE_VERIFY_S = 2.0
 _SCENE_POLL_S = 0.05
 _NAME_MAX = 12  # scales_params.md §4.1
@@ -210,6 +213,11 @@ class Desk:
         self._events = events
         self._snapshots = snapshots
         self._ttl = float(d.policy.get("read_cache_ttl_s", 2.0))
+        # A section read this soon after one of our writes to it is answered by the desk but never
+        # cached: real hardware served the pre-write value once (HANDOVER §4b), and caching that
+        # answer would repeat the lie for read_cache_ttl_s (DESIGN §0.6: the desk is the truth).
+        self._settle_window_s = float(d.policy.get("settle_window_s", 0.5))
+        self._written_at: dict[str, float] = {}  # node path -> monotonic time of our last write into it
         self._cache: dict[str, tuple[float, dict[str, Any]]] = {}
         self._epoch: dict[str, int] = {}  # invalidations of in-flight paths
         self._inflight: dict[str, asyncio.Future] = {}
@@ -267,17 +275,22 @@ class Desk:
 
     def _drop(self, path: str) -> None:
         self._cache.pop(path, None)
-        if path in self._inflight:
+        # A request issued before this invalidation must not serve a reader that arrives after
+        # it (read-your-writes): detach it from the join index. Its own waiters keep their
+        # future (the fetcher resolves the futures it created, not whatever the index holds).
+        if self._inflight.pop(path, None) is not None:
             self._epoch[path] = self._epoch.get(path, 0) + 1
         if self._dropped_since is not None:
             self._dropped_since.add(path)
 
-    def _invalidate_address(self, address: str) -> None:
+    def _invalidate_address(self, address: str, *, written: bool = False) -> None:
         hit = self._leaf_index.get(address)
-        if hit is not None:
-            self._drop(hit[0].path)
-        elif address in self._node_by_path:
-            self._drop(address)
+        path = hit[0].path if hit is not None else address if address in self._node_by_path else None
+        if path is None:
+            return
+        self._drop(path)
+        if written:
+            self._written_at[path] = time.monotonic()
 
     def _on_push(self, address: str, args: tuple) -> None:
         # DESIGN §0.6: the desk is the source of truth — a pushed change retires our copy.
@@ -286,7 +299,7 @@ class Desk:
     def _on_write_event(self, ev: Any) -> None:
         addr = ev.data.get("address") if isinstance(ev.data, dict) else None
         if isinstance(addr, str):
-            self._invalidate_address(addr)
+            self._invalidate_address(addr, written=True)
 
     def _parse(self, path: str, line: str | None) -> dict[str, Any] | None:
         if line is None:
@@ -321,12 +334,15 @@ class Desk:
             waits[p] = fut
         if fetch:
             epochs = {p: self._epoch.get(p, 0) for p in fetch}
+            mine = {p: waits[p] for p in fetch}  # the futures THIS call created and must resolve
             try:
                 lines = await self._conn.node_many(fetch, concurrency)
             except BaseException as e:
                 for p in fetch:
-                    f = self._inflight.pop(p, None)
-                    if f is not None and not f.done():
+                    f = mine[p]
+                    if self._inflight.get(p) is f:
+                        del self._inflight[p]
+                    if not f.done():
                         # Never cancel() a shared future: asyncio.shield does not stop an *inner*
                         # cancellation reaching the waiters, so another tool call would die with a
                         # CancelledError it never asked for. Hand it an error it can report instead.
@@ -336,11 +352,16 @@ class Desk:
             t1 = time.monotonic()
             for p in fetch:
                 vals = self._parse(p, lines.get(p))
-                if vals is not None and self._epoch.get(p, 0) == epochs[p]:
+                current = self._epoch.get(p, 0) == epochs[p]  # not invalidated while in flight
+                settled = t1 - self._written_at.get(p, float("-inf")) >= self._settle_window_s
+                if vals is not None and current and settled:
                     self._cache[p] = (t1, vals)
-                self._epoch.pop(p, None)
-                f = self._inflight.pop(p, None)
-                if f is not None and not f.done():
+                if current:
+                    self._epoch.pop(p, None)
+                f = mine[p]
+                if self._inflight.get(p) is f:
+                    del self._inflight[p]
+                if not f.done():
                     f.set_result(vals)
         for p, fut in waits.items():
             try:
@@ -662,7 +683,8 @@ class Desk:
             raise self._unreachable("desk state")
         now = time.monotonic()
         for p, vals in state.sections.items():
-            if p not in self._inflight and p not in dropped:  # a push during the sweep beats the sweep
+            # a push during the sweep beats the sweep; a section we just wrote is not settled yet
+            if p not in self._inflight and p not in dropped and now - self._written_at.get(p, float("-inf")) >= self._settle_window_s:
                 self._cache[p] = (now, vals)
         return state
 
@@ -880,7 +902,7 @@ class Desk:
         except NotConnected as e:
             raise DeskError("NOT_CONNECTED", str(e)) from None
         self.write_count += 1
-        self._invalidate_address(address)
+        self._invalidate_address(address, written=True)
         self._events.publish("desk.write", address=address, value=_jsonable(value), tier=int(tier), tool=tool, target=target.key if target else None)
 
     async def _write_value(self, t: Target, rel: str, value: Any, *, tool: str, guarded: bool = False, **vars: Any) -> tuple[str, Any]:
@@ -1181,10 +1203,18 @@ class Desk:
             out["quote_replaced"] = True
         return out
 
-    async def panic(self) -> dict[str, Any]:
+    async def panic(self, *, verify_s: float | None = None) -> dict[str, Any]:
         """Mute Main LR, Main M/C, every bus and every matrix as fast as possible: fire-and-forget
         ``mix/on 0``, no ramps, no snapshot, rate limiter bypassed (Tier 1, never blocked).
-        Silences every POST-tapped output (fx_routing_scenes.md §11 option 1)."""
+        Silences every POST-tapped output (fx_routing_scenes.md §11 option 1).
+
+        The sends always go out first. *Afterwards* (never before, never instead) the 24 mutes are
+        read back until they all show muted or ``verify_s`` (0.6 s) passes; any output still
+        reading unmuted is sent once more and re-checked briefly. A SET has no ack and a datagram
+        can be lost (transport.md §5.2, §2), so "sent" is not "muted": the result says
+        ``delivered`` = ``"confirmed"`` (all read back muted), ``"partial"`` (``unconfirmed`` lists
+        the rest), ``"sent"`` (``verify_s=0``) or ``"unconfirmed"`` (desk degraded, nothing can be
+        read). Verification never raises."""
         t0 = time.perf_counter()
         targets = [t for fam in _PANIC_FAMILIES for t in self._d.strip_targets(fam)]
         await self._policy.acquire_write(panic=True)
@@ -1206,18 +1236,67 @@ class Desk:
                     last = e2 if isinstance(e2, Exception) else e
                     failed.append(t.key)
                     continue
-            self._invalidate_address(address)
+            self._invalidate_address(address, written=True)
             done.append(t.key)
         elapsed = (time.perf_counter() - t0) * 1000.0
         self.write_count += len(done)
         delivered = "unconfirmed" if unconfirmed else "sent"
-        self._events.publish("desk.panic", elapsed_ms=round(elapsed, 1), count=len(done), failed=len(failed), delivered=delivered)
-        log.warning("PANIC: %d outputs muted in %.1f ms%s%s", len(done), elapsed,
-                    " (desk degraded, unconfirmed)" if unconfirmed else "",
+        out: dict[str, Any] = {"muted": done, "count": len(done), "failed": failed, "elapsed_ms": round(elapsed, 1), "delivered": delivered}
+        vs = _PANIC_VERIFY_S if verify_s is None else max(0.0, float(verify_s))
+        if done and not unconfirmed and vs > 0:
+            try:
+                out.update(await self._verify_panic([t for t in targets if t.key in done], vs))
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:  # verification is advice; it must never cost the panic result
+                log.warning("panic verification failed: %s", e)
+                out["verify_error"] = str(e)
+        self._events.publish("desk.panic", elapsed_ms=round(elapsed, 1), count=len(done), failed=len(failed), delivered=out["delivered"],
+                             confirmed=out.get("confirmed"), unconfirmed=len(out.get("unconfirmed") or []))
+        log.warning("PANIC: %d outputs muted in %.1f ms (%s)%s%s", len(done), elapsed, out["delivered"],
+                    f", {len(out['unconfirmed'])} NOT CONFIRMED: {', '.join(out['unconfirmed'])}" if out.get("unconfirmed") else "",
                     f", {len(failed)} NOT SENT: {', '.join(failed)}" if failed else "")
         if not done:
             raise DeskError("NOT_CONNECTED", f"panic could not reach the desk: {last}", muted=done, failed=failed)
-        return {"muted": done, "count": len(done), "failed": failed, "elapsed_ms": round(elapsed, 1), "delivered": delivered}
+        return out
+
+    async def _verify_panic(self, targets: Sequence[Target], verify_s: float) -> dict[str, Any]:
+        """Read ``mix/on`` of ``targets`` back until all show muted (bounded); re-send the rest once."""
+        paths = {t.key: f"{t.osc_prefix}/mix" for t in targets}
+        t0 = time.perf_counter()
+
+        async def read() -> dict[str, Any]:
+            for p in paths.values():
+                self._drop(p)  # every attempt asks the desk, never our cache
+            secs = await self._read_sections(list(paths.values()), concurrency=24)
+            return {k: (secs.get(p) or {}).get("mix/on") for k, p in paths.items()}  # True = ON = unmuted; None = no answer
+
+        def all_muted(vals: dict[str, Any]) -> bool:
+            return all(v is False for v in vals.values())
+
+        settled = await read_until(read, all_muted, deadline_s=verify_s, first_delay_s=0.03, retry_on=(), what="panic mutes")
+        vals = settled.value or {}
+        pending = [k for k in paths if vals.get(k) is not False]
+        resent: list[str] = []
+        attempts = settled.attempts
+        if pending:
+            for t in targets:
+                if t.key in pending:
+                    try:
+                        await self._conn.send_raw(f"{t.osc_prefix}/mix/on", 0)  # emergency path: no limiter, like the first round
+                        resent.append(t.key)
+                    except (NotConnected, OSError) as e:
+                        log.debug("panic re-send %s failed: %s", t.key, e)
+            again = await read_until(read, all_muted, deadline_s=_PANIC_REVERIFY_S, first_delay_s=0.03, retry_on=(), what="panic mutes (re-sent)")
+            attempts += again.attempts
+            vals = again.value or vals
+            pending = [k for k in paths if vals.get(k) is not False]
+        confirmed = len(paths) - len(pending)
+        return {
+            "confirmed": confirmed, "unconfirmed": pending, "resent": resent,
+            "delivered": "confirmed" if not pending else "partial",
+            "verify": {"attempts": attempts, "elapsed_ms": round((time.perf_counter() - t0) * 1000.0, 1)},
+        }
 
     # -- Tier 2 executors (the server does the confirmation dance) ---------------------------------------
 

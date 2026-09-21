@@ -1067,11 +1067,17 @@ async def panic() -> dict[str, Any]:
     stop / kill it / mute everything. Unmute afterwards with unmute / set_main_mute. Tier 1."""
     desk = _desk()
     res = await desk.panic()
-    return _ok(
-        f"PANIC: {res['count']} outputs muted in {res['elapsed_ms']} ms ({res['delivered']})"
-        + ("; the desk is degraded — verify on X32-Edit or the front panel" if res.get("delivered") == "unconfirmed" else ""),
-        **res,
-    )
+    delivered = res.get("delivered")
+    if delivered == "confirmed":
+        tail = f"; all {res.get('confirmed')} read back muted"
+    elif delivered == "partial":
+        tail = (f"; {res.get('confirmed')} read back muted, NOT CONFIRMED: {', '.join(res.get('unconfirmed') or [])}"
+                " — check them on X32-Edit or the front panel NOW")
+    elif delivered == "unconfirmed":
+        tail = "; the desk is degraded — verify on X32-Edit or the front panel"
+    else:
+        tail = ""
+    return _ok(f"PANIC: {res['count']} mutes sent in {res['elapsed_ms']} ms ({delivered}){tail}", **res)
 
 
 # -- tools: Tier 2 (confirmation dance) ----------------------------------------------------------------------
@@ -1599,16 +1605,29 @@ async def setup_ringout_eqs(buses: list[int | str], confirm_token: str | None = 
     res = await _prov.apply_setup(desk, plan)
     geq = {k: v for k, v in res.get("geq", {}).items()}
     ok = bool(res.get("ok", True))
+    reasons = "; ".join(f"{k}: {'; '.join(v.get('reasons', []))}" for k, v in geq.items() if not v.get("ok"))
+    if not ok and res.get("verified") is False:
+        # Written, but the desk had not shown it by the settle deadline (it applies inserts and
+        # type loads after it answers — HANDOVER §4b). A timeout alone is not a failure: report
+        # NOT YET VERIFIED and let validate_ringout_eqs / the ring-out preflight be the gate.
+        st = res.get("settle") or {}
+        summary = (
+            f"Ring-out GEQs on {labels}: {res.get('changed', 0)} write(s) sent, NOT YET VERIFIED — the desk still "
+            f"reported: {reasons} after {st.get('attempts', '?')} read(s) in {st.get('elapsed_ms', 0):.0f} ms. "
+            "Run validate_ringout_eqs before feedback_watch/ring_out."
+        )
+        return _ok(summary, plan=plan.to_dict(), warnings=[f"not yet verified: {reasons}"], **{k: v for k, v in res.items() if k != "ok"})
     if not ok:  # DESIGN §19 knows two ok:false shapes; a failure is the error envelope, not a third
-        reasons = "; ".join(f"{k}: {'; '.join(v.get('reasons', []))}" for k, v in geq.items() if not v.get("ok"))
         raise DeskError(
             "GEQ_VALIDATION_FAILED",
             f"ring-out GEQs on {labels} did not validate after {res.get('changed', 0)} write(s): {reasons}",
             plan=plan.to_dict(), **{k: v for k, v in res.items() if k not in ("ok", "summary")},
         )
+    st = res.get("settle")
     summary = (
         f"Ring-out GEQs on {labels}: {res.get('changed', 0)} write(s)"
         + (" (already set up)" if not res.get("changed") else "") + "; all validate"
+        + (f" (verified after {st['attempts']} read(s), {st['elapsed_ms']:.0f} ms)" if st and st.get("attempts", 1) > 1 else "")
     )
     return _ok(summary, plan=plan.to_dict(), **res)
 

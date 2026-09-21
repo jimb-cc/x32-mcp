@@ -69,6 +69,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import dataclasses
+import heapq
 import itertools
 import json
 import logging
@@ -311,6 +312,15 @@ class FakeDesk:
         self.silent = False
         self.latency_ms = 0.0
         self._drop_left = 0
+        self._drop_inbound_left = 0
+        # Asynchronous application of writes (REVIEW_BRIEF §5): address prefix -> delay in ms.
+        # A delayed write is invisible to GET, /node and the closed loop until it is applied;
+        # {} (the default) applies everything instantly, exactly as before.
+        self.apply_delay_ms: dict[str, float] = {}
+        self._apply_heap: list[tuple[float, int, str, Any, Addr | None]] = []
+        self._apply_seq = itertools.count()
+        self._apply_timer: asyncio.TimerHandle | None = None
+        self.applied_late = 0
 
         self.rx_count = 0
         self.decode_errors = 0
@@ -380,6 +390,10 @@ class FakeDesk:
         if tasks:
             await asyncio.wait(tasks, timeout=1.0)
         await self.rta.stop()
+        if self._apply_timer is not None:
+            self._apply_timer.cancel()
+            self._apply_timer = None
+        self._apply_heap.clear()
         transport, self._transport = self._transport, None
         if transport is not None:
             transport.close()
@@ -451,6 +465,82 @@ class FakeDesk:
     def drop_next(self, n: int) -> None:
         """Lose the next ``n`` replies (requests are still applied)."""
         self._drop_left = max(0, int(n))
+
+    def drop_inbound_next(self, n: int) -> None:
+        """Lose the next ``n`` inbound datagrams (``/-fake/*`` excepted): a SET lost on the way in."""
+        self._drop_inbound_left = max(0, int(n))
+
+    def set_apply_delay(self, prefix: str, ms: float) -> None:
+        """Writes to addresses under ``prefix`` ("" = every address) are applied ``ms`` later
+        (longest matching prefix wins; 0 removes the delay)."""
+        if ms and ms > 0:
+            self.apply_delay_ms[str(prefix)] = float(ms)
+        else:
+            self.apply_delay_ms.pop(str(prefix), None)
+
+    @property
+    def pending_writes(self) -> int:
+        """Writes received but not yet applied (see ``apply_delay_ms``)."""
+        return len(self._apply_heap)
+
+    def flush_pending(self) -> int:
+        """Apply every delayed write now, in due order. Returns how many were applied."""
+        return self._drain(everything=True)
+
+    def _apply_delay_for(self, address: str) -> float:
+        best, best_len = 0.0, -1
+        for prefix, ms in self.apply_delay_ms.items():
+            if address.startswith(prefix) and len(prefix) > best_len:
+                best, best_len = float(ms), len(prefix)
+        return best / 1000.0
+
+    def _apply(self, items: Iterable[tuple[str, Any]], exclude: Addr | None, *, verbatim: bytes | None = None) -> None:
+        """Apply ``[(address, raw)]`` writes from the wire: now, or after the address's
+        ``apply_delay_ms``. ``verbatim`` (a multi-argument node SET) is forwarded as received
+        when everything applies now; late leaves are pushed one by one instead."""
+        items = list(items)
+        now_items: list[tuple[str, bool]] = []
+        queued = 0
+        for address, raw in items:
+            delay = self._apply_delay_for(address) if self.apply_delay_ms else 0.0
+            if delay <= 0.0:
+                now_items.append((address, self._store(address, raw)))
+                continue
+            loop = asyncio.get_running_loop()
+            heapq.heappush(self._apply_heap, (loop.time() + delay, next(self._apply_seq), address, raw, exclude))
+            queued += 1
+        if verbatim is not None and queued == 0:
+            if any(changed for _, changed in now_items):
+                self._push(verbatim, exclude=exclude)
+            self._commit(now_items, exclude=exclude, push=False)
+        else:
+            self._commit(now_items, exclude=exclude)
+        if queued:
+            self._arm_apply_timer()
+
+    def _arm_apply_timer(self) -> None:
+        if self._apply_timer is not None:
+            self._apply_timer.cancel()
+            self._apply_timer = None
+        if self._apply_heap and self._transport is not None:
+            loop = asyncio.get_running_loop()
+            self._apply_timer = loop.call_later(max(0.0, self._apply_heap[0][0] - loop.time()), self._drain)
+
+    def _drain(self, everything: bool = False) -> int:
+        """Apply every queued write that is due (all of them with ``everything``), oldest due first."""
+        self._apply_timer = None
+        n = 0
+        if self._apply_heap:
+            now = asyncio.get_running_loop().time()
+            while self._apply_heap and (everything or self._apply_heap[0][0] <= now + 1e-9):
+                _due, _seq, address, raw, exclude = heapq.heappop(self._apply_heap)
+                self._commit([(address, self._store(address, raw))], exclude=exclude)
+                n += 1
+        if n:
+            self.applied_late += n
+            self._after_change()
+        self._arm_apply_timer()
+        return n
 
     def node_line(self, path: str) -> str:
         """The ``/node`` reply text for ``path`` (without the trailing newline)."""
@@ -719,11 +809,11 @@ class FakeDesk:
                 continue
         return None
 
-    def _apply_node_text(self, text: str) -> list[tuple[str, bool]]:
-        """Apply a ``/`` write; returns ``[(address, changed)]`` for every leaf that was listed."""
+    def _parse_node_write(self, text: str) -> list[tuple[str, Any]]:
+        """Parse a ``/`` write into ``[(address, raw)]`` for every leaf that was listed."""
         path, _toks = split_node_line(text)
         node = self._node_for_write(path)
-        stored: list[tuple[str, bool]] = []
+        out: list[tuple[str, Any]] = []
         if node is not None:
             values = parse_node_line(text, node)
             for addr, field, spec in zip(node.addresses, node.fields, node.specs):
@@ -732,18 +822,18 @@ class FakeDesk:
                     continue  # partial trailing list / unreadable token
                 eff = self._specs.get(addr, spec)
                 try:
-                    stored.append((addr, self._store(addr, self._raw_from_value(addr, eff, v))))
+                    out.append((addr, self._raw_from_value(addr, eff, v)))
                 except (ScaleError, ValueError, NodeParseError) as e:
                     log.debug("fakedesk: / write %s: %s", addr, e)
-            return stored
+            return out
         spec = self._specs.get(path)
         if spec is None:
             raise DescriptorError(f"{path!r} is neither a node nor a parameter")
         values = parse_node_line(text, [spec])
         v = values.get(spec.relpath)
         if v is not None:
-            stored.append((path, self._store(path, self._raw_from_value(path, spec, v))))
-        return stored
+            out.append((path, self._raw_from_value(path, spec, v)))
+        return out
 
     # -- receive / dispatch -------------------------------------------------------------------
 
@@ -759,6 +849,11 @@ class FakeDesk:
             self._h_fake(msg, data, addr)
             return
         if self.silent:
+            return
+        if self._drop_inbound_left > 0:
+            self._drop_inbound_left -= 1
+            self.dropped += 1
+            log.debug("fakedesk: dropping inbound %s (%d more)", msg.address, self._drop_inbound_left)
             return
         log.debug("fakedesk: rx %s from %s", msg, addr)
         handler = self._handlers.get(msg.address)
@@ -1012,13 +1107,13 @@ class FakeDesk:
     def _h_slash(self, msg: OscMessage, data: bytes, addr: Addr) -> None:
         if not msg.args or not isinstance(msg.args[0], str) or not msg.args[0].strip():
             return
-        stored: list[tuple[str, bool]] = []
+        items: list[tuple[str, Any]] = []
         try:
-            stored = self._apply_node_text(msg.args[0])
+            items = self._parse_node_write(msg.args[0])
         except (NodeParseError, DescriptorError, ScaleError, ValueError) as e:
             log.debug("fakedesk: / write %r ignored: %s", msg.args[0], e)
         self._reply(data, addr)  # transport.md §6.6: the desk echoes the / datagram back verbatim
-        self._commit(stored, exclude=addr)
+        self._apply(items, exclude=addr)  # the echo proves receipt, not application (HANDOVER §4b)
 
     def _h_param(self, msg: OscMessage, data: bytes, addr: Addr) -> None:
         a = msg.address
@@ -1041,7 +1136,7 @@ class FakeDesk:
             except (ScaleError, ValueError) as e:
                 log.debug("fakedesk: SET %s %r ignored: %s", a, msg.args, e)
                 return
-            self._commit([(a, self._store(a, raw))], exclude=addr)
+            self._apply([(a, raw)], exclude=addr)
             return
         try:
             node = self.d.node(a)
@@ -1052,18 +1147,16 @@ class FakeDesk:
             log.debug("fakedesk: string SET on node %s ignored (DOC fn.7)", a)
             return
         # multi-argument SET on a node address = one SET per leaf (transport.md §1.4)
-        stored: list[tuple[str, bool]] = []
+        items: list[tuple[str, Any]] = []
         for leaf, arg in zip(node.addresses, msg.args):
             leaf_spec = self._specs.get(leaf)
             if leaf_spec is None:
                 continue
             try:
-                stored.append((leaf, self._store(leaf, self._coerce(leaf, leaf_spec, arg))))
+                items.append((leaf, self._coerce(leaf, leaf_spec, arg)))
             except (ScaleError, ValueError) as e:
                 log.debug("fakedesk: SET %s %r ignored: %s", leaf, arg, e)
-        if any(changed for _, changed in stored):
-            self._push(data, exclude=addr)  # the emulator forwards the received datagram verbatim (§4.2)
-        self._commit(stored, exclude=addr, push=False)
+        self._apply(items, exclude=addr, verbatim=data)  # the emulator forwards the received datagram verbatim (§4.2)
 
     def _h_setrtasrc(self, msg: OscMessage, data: bytes, addr: Addr) -> None:
         # meters.md §5.2 / fx_routing_scenes.md §8: /-action/setrtasrc ,i N with the /-stat numbering
@@ -1074,8 +1167,7 @@ class FakeDesk:
         src = 1 if n == 72 else n + 2 if 0 <= n <= 71 else None
         if src is None:
             return
-        self._commit([("/-prefs/rta/source", self._store("/-prefs/rta/source", src))], exclude=addr)
-        self._mirror_rta_stat(addr)
+        self._apply([("/-prefs/rta/source", src)], exclude=addr)  # _side_effects mirrors /-stat/rtasource
 
     # -- side effects -----------------------------------------------------------------------------
 
