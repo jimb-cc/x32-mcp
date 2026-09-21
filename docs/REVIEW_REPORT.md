@@ -1,10 +1,11 @@
-# Review report — x32-mcp / CFS² (response to `REVIEW_BRIEF.md`)
+# Review report — x32-mcp / CFS² (response to `docs/REVIEW_BRIEF.md`)
 
-Reviewer: Claude (Opus), 2026-09-21, working offline against commit `a408a2a` with no hardware.
-Companion artefacts: the pull requests listed in §0.3, and the offline validation corpus under `tests/rtasim/` (PR).
+Reviewer: Claude, 2026-09-21, working offline against commit `a408a2a` with no hardware.
+Companion artefacts: eleven local review branches (§0.3), the offline validation corpus under `tests/rtasim/`, and the
+appendices in `docs/review/` (physics briefs, corpus documentation, every finding with its verification record).
 
-> Reading order if you have ten minutes: §0 (summary) → §1.2 (why the detector fails, mechanically) → §1.5 (the proposed
-> discriminator and its offline results) → §3.1 (safety findings table) → §4 (the calibration bug).
+> Ten-minute path: §0 → §1.2 (why the detector fails, mechanically) → §1.5–1.6 (the new discriminator and its offline results) →
+> §3.1 (safety findings table) → §4.1 (the calibration bug's actual root cause) → §8 (what to do at the desk next).
 
 ---
 
@@ -12,24 +13,88 @@ Companion artefacts: the pull requests listed in §0.3, and the offline validati
 
 ### 0.1 What was done
 
-The brief's five workstreams were run as independent investigations, each fanned out to several agents with different starting
-hypotheses or attack angles, and every finding was then put in front of at least two skeptical verifiers (one reproducing it in
-code, one arguing from the source and the research docs) before it was allowed into this report. Design questions (the
-discriminator, read-after-write) were given to several designers with deliberately different briefs and judged comparatively.
-Where a claim below says **reproduced**, a test demonstrating it was written and run against the code in this repository.
+Each of the brief's five workstreams was run as an independent investigation, fanned out to several agents with deliberately
+different starting hypotheses or attack angles, and **no finding entered this report without two independent skeptical
+verifications** (one reproducing it in code against the repository, one arguing from the source and `docs/research/`). Design
+questions (the discriminator, read-after-write) went to several designers with different mandates and were judged comparatively,
+with the judges re-running every prototype's tests themselves. In total ~380 agent runs; the record is in the appendices.
 
-Because this review ran in a sandbox with no IP networking, the FakeDesk integration suites (which bind UDP on loopback) could
-not run as-is. A test-only in-memory UDP shim (`tests/conftest.py` in the review environment, deliberately *not* committed —
-see §7.2) was written so that 912 of the 934 tests run here; the 22 that cannot are the TCP dashboard tests, which are out of
-scope. Every PR was validated against that 912-test baseline plus its own new tests.
+The review sandbox has no IP networking, so the FakeDesk integration suites could not bind their loopback socket. A test-only
+in-memory UDP shim was written (Appendix C; not in any PR) so that 912 of the 934 tests run here — the other 22 are the TCP
+dashboard's. Every review branch was validated against that baseline plus its own new tests; the integration branch that merges
+all of them runs **955+ tests green**.
 
 ### 0.2 Headline findings
 
-*(filled in below as each workstream reported; see the section for evidence)*
+1. **The detector's growth feature is manufactured by the analyser.** A 1/10-octave band cannot respond faster than ~1/Δf: 370 ms
+   at 39 Hz, 185 ms at 78 Hz, 7 ms at 2 kHz. An acoustically instant, perfectly steady bass note therefore renders on the 40–80 Hz
+   bands as a 5–8-frame rise at tens of dB/s — inside the detector's 6–60 dB/s "regenerative growth" window — while real rings on
+   a wedge grow at ~200 dB/s per dB of excess and are discarded by the 60 dB/s onset guard. Verified numerically against the
+   shipped code: a steady tone through a 1/Δf band model is reported as feedback 10/10 times for every band from 45 to 315 Hz.
+   That, plus the never-set RTA `decay`/`peakhold` prefs and a score whose sustained-ring region is unreachable by construction,
+   is the whole M7 story (§1.2). On the new 61-scenario physics corpus the shipped detector passes 12 scenarios with **948 false
+   positives**; the redesigned discriminator (§1.5) [RESULTS]. 
+2. **The calibration bug was a cancellation, not a stale read** (§4). `_notch()` commits the cut to the controller *before* the
+   GEQ write; `set_geq_band` first reads `/fx/N`'s type through a 2 s cache; the 2 s calibration aged that entry past its TTL, so
+   the write path suspended between commit and datagram, and the test's own `feedback_watch_stop` cancelled it there —
+   deterministically on Windows + CPython 3.12 (15.6 ms event-loop clock), a 1–3 % race elsewhere, which is why it looked
+   inexplicable. `CancelledError` is not in `_notch`'s except tuple, so nothing was logged. Three investigators seeded with
+   different hypotheses converged on this independently and two cross-checkers falsified the alternatives. It is a live-desk
+   defect (every first notch of a real session has the window), fixed in PR `cfs-write-safety`.
+3. **Safety: 58 findings, 58 confirmed** (§3). Seven critical, all now fixed on review branches with regression tests:
+   Main LR compressor make-up (+24 dB) and EQ (+15 dB) were Tier 1; `panic()` was undone by the server's own in-flight restore,
+   ramps and ring-out; the ring-out answered an operator's emergency pull-down with an absolute write straight back up (+47 dB in
+   one datagram). Plus: tokens bound arguments rather than what the user was shown (five variants), no RTA-liveness or
+   RTA-source interlock, CFS validated "cuts only" against its own belief (a hand-deepened band was written shallower),
+   `show_mode(false)`/`disconnect`/`connect(elsewhere)` unconfirmed.
+4. **The tests certify the emulator, and the emulator was written from the same beliefs as the code** (§2). 114 assumption
+   findings (81 confirmed, 31 partial, 2 refuted), 11 high; the loop closes on itself in five places: the analyser (memoryless,
+   absolute, always on the bus we chose, floor at −50-odd instead of exactly −128), the loop (fixed 15 dB/s growth, brick-wall
+   cuts), the console (**Main LR treated as one side of a dual GEQ2 — a notch "on the PA" cuts the left stack only and side B is
+   lent to another bus; found by three slices independently, fixed in PR `main-lr-stereo-geq`**; linked pairs; FX loads instant;
+   head-amp mapping computed rather than read from `/-ha`), other hands on the desk (four-client `/xremote` cap), and the network
+   (only replies are ever lost). Ten FakeDesk "realism switches" are specified; two ship in the PRs.
+5. **Read-after-write** (§5): only an observed value proves application; replies and the `/` echo are flow control. Three
+   prototype designs were built and judged; the synthesis ships as PR `read-after-write` (a `read_until` settle helper,
+   `conn.sync()`, two real cache bugs fixed — an in-flight-join hole and a 2 s stale-answer amplifier — FakeDesk apply latency and
+   inbound loss, `setup_ringout_eqs` reporting *not yet verified* instead of a false `GEQ_VALIDATION_FAILED`, and
+   `scripts/measure_settle.py` to turn the UNCONFIRMED latencies into a measured `timing:` table at the next desk session).
 
-### 0.3 Pull requests raised
+### 0.3 The review branches (local, ready to push)
 
-*(listed at the end of the review; each PR description links back to the section here that motivates it)*
+The sandbox this review ran in blocks `git push` to GitHub repositories outside its own organisation, so the branches are in
+your clone at `/Users/jimb/code/x32-mcp` rather than opened as PRs. Each is self-contained off `main` (`a408a2a`), has a full
+commit message written as the PR description (`gh pr create --fill` works), and its tests fail on `main` and pass on the branch.
+`review/all-integrated` merges all of them with the (few, mechanical) conflicts already resolved.
+
+```bash
+cd /Users/jimb/code/x32-mcp
+for b in rtasim-corpus detector rta-ballistics guard-main-processing panic-hardening cfs-write-safety token-binding \
+         argument-hardening read-after-write discover-mics-signal main-lr-stereo-geq; do
+  git push -u origin review/$b && gh pr create --head review/$b --fill
+done
+git push -u origin review/all-integrated   # optional: everything, pre-merged
+```
+
+| Branch | What | § | Tests added |
+|---|---|---|---|
+| `review/rtasim-corpus` | `tests/rtasim/`: physics-based RTA/loop simulator, 61-scenario corpus, detector harness, baseline driver, `CORPUS.md` | 1.4 | 24 |
+| `review/detector` | The redesigned discriminator (builds on `rtasim-corpus`) [PENDING] | 1.5 | |
+| `review/rta-ballistics` | `set_rta_source` forces `decay`→min, `peakhold`→OFF, records `gain` and the prefs it found | 1.2c, 2 A3 | 1 |
+| `review/guard-main-processing` | `/main/*/dyn/*`, `/main/*/eq/*` guarded; Tier-1 compressor make-up clamped to 6 dB | 3 S1 | 3 |
+| `review/panic-hardening` | panic cancels ramps, aborts restore/CFS, latches outputs (`clear_panic`, T2), re-asserts on reconnect, reads back and re-sends; honest docs on what it cannot silence | 3 S2/S14/S23 | 6 |
+| `review/cfs-write-safety` | two-phase notch (propose→write→commit), no hidden read in the cut path, operator-override abort, frame-liveness interlock, GEQ pushes adopted, abort on RTA-source/slot/insert change and on show mode, back-off retried | 3 S3/S7–S10/S19–S20, 4 | 9 |
+| `review/token-binding` | tokens bind file digests / resolved stages / open-mic list / scene name; canonical payload compare; one live token per action; cap; hazard-first restore preview in the right direction | 3 S4–S6/S16–S18 | 3 (+2 changed) |
+| `review/argument-hardening` | ring-out `max_step_db` 3 / `min_dwell_ms` 250; report ids and export paths confined; `show_mode(false)`, `disconnect`, re-`connect` confirmed; show-mode relative check on absolute moves; DCA ceiling 0; label control chars | 3 S11–S13/S15/S21–S22/S26 | 3 (+3 changed) |
+| `review/read-after-write` | `settle.read_until`, `conn.sync()`, cache E0/E1 fixes, FakeDesk apply-delay + inbound loss, setup/RTA-source verified-or-not-yet, `scripts/measure_settle.py` | 5 | 15 |
+| `review/discover-mics-signal` | candidates annotated with live input level; "no input signal" warnings; FakeDesk `unplugged` | 2 C6, 6 | 1 |
+| `review/main-lr-stereo-geq` | stereo strip takes a whole slot / both GEQ2 sides written / never lent; two-leg main in the fake | 2 C1 | 1 (+1 changed) |
+| `review/all-integrated` | all of the above merged | | 955 pass |
+
+What is deliberately *not* in a branch (recommendations with designs and test recipes in the sections): the head-amp `/-ha`
+read (§2 C5), linked bus pairs (C2), insert eviction/flatness/PRE fix-ups in `plan_setup` (C4), `/outputs` taps (B4/S23),
+`feedback_watch` on `main` in show mode (S25), strict argument types at the MCP boundary (S27), the remaining read-after-write
+items (§5.3 items 3–5), the FakeDesk realism switches (§2.3), and restoring the operator's RTA prefs at disarm (§2 D3).
 
 ---
 
@@ -192,8 +257,92 @@ have denser transients than the beds (0 FP here is necessary, not sufficient), a
 
 ### 1.5 The proposed discriminator
 
-*(Phase B — five competing designs, independent audits, judge panel — was still running when this section was assembled; it is
-filled in below once the results are in.)*
+**How it was chosen.** Five designers were given the two physics briefs, the corpus and harness, the lead's predicate notes,
+and deliberately different mandates: *explicit physical predicates* (the lead's P1–P6 as boolean tests), *sequential evidence*
+(a log-likelihood accumulator), *minimal delta* (smallest change to the shipped detector that is actually correct), *track and
+group* (track spectral lines over time, group them into sources, classify sources), and *free hand*. Each produced a working
+`detector.py` scored on the 61-scenario corpus. Five auditors then re-ran every claimed number (all reproduced byte-for-byte),
+ran the hold-out seeds and analyser sweeps the designers had skipped, read code against documentation, and wrote 55 new
+hostile scenarios between them — every design was broken by its auditor. Two judges then ranked the five on the evidence,
+independently, and agreed: **1. predicates, 2. free-hand, 3. track-and-group, 4. minimal-delta, 5. sequential-evidence.**
+All five had reached 0 false positives on seeds 1–3 (from 948), so the ranking was decided on *unseen* programme: predicates was
+the only design whose zero held on hold-out seeds (1 FP per three unseen seeds, always the same synth-pad swell), on every
+analyser variant (attack constant ×2, biquad bank, skirt order 2, `decay` 4 s, RMS detector, noise ×1.5), and — decisively —
+with the LF window opened to 40 Hz (the M7 40/80 Hz mechanism stays dead *inside* the window because rises within the band's
+own settling time are never scored; track-and-group reproduced the M7 cuts the moment a kick mic was declared). It also has the
+smallest decision surface and the right asymmetry: a line that merely *qualifies* is published as a candidate, never cut, until
+one piece of positive evidence arrives, and none of the evidence is a growth *rate*. Its weaknesses were all on the miss side and
+all local (below). The judges' reports, with per-design tables, are Appendix H.
+
+**Decision logic** (`src/x32mcp/detector.py` on branch `review/detector`; every constant is a `device.yaml detector:` key with
+its physical origin in `docs/DETECTOR.md`). Per frame, O(bands·k):
+
+* *Lines.* Prominence = level − median of ±3 neighbours (unchanged). A **line** is a local maximum ≥ 6 dB prominent; a peak and a
+  neighbour within 6 dB form a *cluster* (a tone between centres reads −3/−3; edge vibrato alternates the louder band). Per line:
+  cluster power, cluster prominence, **narrowness** (peak − the louder of the two bands just outside the cluster's skirts; a
+  sinusoid clears 24–60 dB at ±2 bands on a 1/10-octave bank, a formant or cymbal hump reads 0–6), and a **sub-band centroid**
+  (power-weighted position of peak±1 after removing the local floor; ±0.1 band) — so a ring at 525 Hz is reported as 525 Hz and
+  `NotchController` can choose the right GEQ band or a flanking pair.
+* *Common mode.* The median of per-band *changes* over the signal-bearing bands (excluding the line's own ±4) between two instants:
+  a fader, auto-gain or master move shifts every signal band equally; a chord, a crash or one growing line moves a minority. All
+  rises are measured net of common mode beyond a 2 dB dead-band. (This is the only common-mode formulation on the panel that
+  survived the RMS-detector sweep; a level-percentile reference jumps on crashes.)
+* *Baseline.* Per band, an asymmetric tracker (fast down, very slow up after a 1 s seed): "excess over baseline" replaces the
+  M7-fitted −45 dBFS gate, so quiet rings at −50…−78 dBFS are reachable and hum/HVAC/rumble present from the start are "already
+  there".
+* *Tracks.* Lines are associated frame-to-frame by centroid (±0.6 band); a track coasts 8 frames through a masking crash; a track
+  whose centroid wanders > 1 band in 10 frames is **re-born** with no history (glide, scoop, melody step, a hand-held ring hopping
+  to the next loop candidate) and must re-earn everything at the new frequency.
+* *Predicates* (feedback ⇒ true): **P1 NARROW** (cluster prominence ≥ 12 dB and narrowness ≥ 8 dB); **P2 NO FAMILY** — partials at
+  +10, +15.85, +20, +23.2 bands present *as peaks*, within 18 dB of the candidate, and **co-moving** with it; two such, or a lone
+  exact octave *born within 2 frames* of the line (catches 8′+4′ organ; two independent rings an octave apart are not co-born);
+  vetoed also if the line is itself H2/H3 of a lower peak that owns another partial; a family that first appears after the line has
+  risen 12 dB is distortion of a howl, not an instrument; **P3 STABLE** (centroid range ≤ ±0.25 band ≈ ±30 cents over 250 ms — vibrato
+  straddling an edge swings ±0.3–0.8 band, glides walk); **P4 SUSTAINED** (not decaying faster than 3 dB/s, sag under the recent
+  max ≤ 4 dB — plucked/struck notes decay 3–15 dB/s, and a ring already killed by a cut falls at ≥ 3.75 dB/s even with `decay` at
+  16 s, which is what removes the wasted re-deepening on RTA release tails); **COMMON-MODE** and **CO-GROWTH** vetoes (the line moved
+  with the mix; ≥ 2 other lines *born with it* are rising with it — a pad, a fade-in); **P5 NEW / AT-ARM** (≥ 10 dB over the band's
+  baseline; or present at arm: continuously, flat, prominent ≥ 18 dB, and either loud or outlasting `arm_confirm_s`); **P6 WINDOW**
+  (lower edge 160 Hz in watch, 63 Hz in ring-out, 40 Hz when the caller says LF feedback is possible — and, new, an explicit
+  `lf_edge_hz` the CFS layer derives from the open mics' high-pass filters; §1.7 Q3).
+* *Evidence* (any one promotes a qualifying line; none is a rate): **RISE** — the line's own level is ≥ 6 dB above the low-water
+  mark of its settled presence run, net of common mode, where the first ⌈1.5·k/(Δf·T) − ½⌉ frames of a run are never scored
+  (k = 1.0, the critically-resolved bound — 1 frame above 300 Hz, 4 at 100 Hz, 7 at 63 Hz, 11 at 39 Hz; **this is the M7 fix**: an
+  instant bass onset renders as a decelerating ramp inside exactly those frames) and a run restarts on a single-frame jump of a line
+  that was not already climbing (a re-struck note, a syllable); **LOUD** — at the 0.0 clip flag, or ≥ 6 dB above every band outside
+  its own ±3 *and* above a level referenced to the arm-time spectrum (−10 dBFS only as a ceiling; with `/-prefs/rta/gain` now
+  pinned, §2 A3); **AT-ARM** (P5's second form: the M7 "60 dB line at 0.50 for 15 s" is emitted 200 ms after arming); **PROBE**
+  (ring-out only) — after each `note_gain_step(Δ)` from the CFS layer, a line steady before the step whose median over the next
+  0.15–1.4 s rose by ≥ Δ + 2 dB while the common mode moved ≤ Δ + 0.5, on two steps: regenerative gain 1/(1−g) gives +3 dB/dB at
+  −4 dB from threshold, programme at the pre-fader tap gives 0…+1 dB/dB; a line answering 1 dB/dB and never over-responding is
+  **STATIONARY** (hum, HVAC, playback) — reported, never cut; a line with two hits is emitted *before* it crosses threshold, which
+  is what a human ring-out does with a band that swells on every nudge; and, grafted from the runner-up, **back-filled fast rise** —
+  when a track is born its band's last 8–16 frames are pulled from the spectrum store and a run of ≥ 3 settled increments each ≥ 2 dB,
+  summing ≥ 12 dB, no single increment > 55 % of the rise, counts as RISE (this is what catches the 150–400 dB/s howl whose growth
+  frames pre-date its track, without admitting 1–2-frame instrument attacks).
+* *Classes and emission.* `MUSICAL` = family ∨ common-mode ∨ co-growth (per frame, not latched). `BASE` = P1 ∧ ¬MUSICAL ∧ P3 ∧ P4 ∧
+  P5 ∧ P6 ∧ age ≥ 250 ms. `STRONG` = BASE ∧ (RISE ∨ LOUD ∨ AT-ARM ∨ PROBE) → a `Detection` with `reasons` (the predicates and evidence
+  that fired, in words), interpolated `freq_hz`, class, prominence, excess, rise. `MODERATE` = BASE only → published in
+  `detector.candidates` (and as a `cfs.candidate` event), **not cut**. In `ringout` mode STRONG and pre-emptive PROBE lines are
+  emitted; AT-ARM lines wait for the probe unless LOUD (nothing regenerative can be *established* at ring-out arm unless the system
+  is already howling, and then it is loud); in `watch` mode STRONG only. Re-emission (deepening) only while the line is within 1 dB
+  of, or above, its level at the previous emission and still STRONG by RISE/LOUD/PROBE — never while decaying, never on BASE alone;
+  `note_cut()` from the CFS layer marks a line that dropped by ≈ the bell depth and then sat flat as `FALSE_CUT` (programme through
+  an EQ; a loop losing gain falls away by far more than the cut) — never re-emitted, reported. A `PEAK_HOLD_SUSPECTED` flag (many
+  bands bit-identical for many frames — live audio through int16/256 never repeats exactly) and `programme_present()` (spectral
+  flux/occupancy over 2 s) are exposed for the CFS layer's arming checks.
+* *What the CFS layer adds* (`cfs.py`): mode; the +1 dB step fed to `note_gain_step`; `lf_edge_hz` = 0.7 × the lowest HPF corner
+  among the open mics (floored at 60 Hz; 100 Hz when none has an HPF on); the ring-out *contract check* — if `programme_present()`
+  at arm, the run proceeds under watch policy and says so; the **tier-B one-shot policy** for the one class every design misses
+  passively (a howl that arrives in 2–5 frames and plateaus under a limiter *below* the loud lane: `MODERATE`, ≥ 20 dB over its
+  band's baseline, survives 600 ms → one −3 dB cut, classified by VERIFY: drops ≫ 3 dB → ring, eligible for deepening only on
+  re-growth; drops ≈ 3 dB and sits → `FALSE_CUT`, ignore-listed, released if policy allows) — bounded harm, one band, −3 dB, which is
+  the only physically supported answer to an observation that is genuinely identical to a dead-steady family-less synth note; RTA
+  prefs pinned at arm and restored at disarm (PR `rta-ballistics`); the dead `_calibrate_floor` removed.
+
+What it deliberately does **not** do: use growth *rate* as evidence (an optional GROWTH lane exists, ships off: at any threshold
+that helps latency it fires on a 10 dB/s saw-pad partial on an unseen seed); cut a MODERATE line in watch on passive evidence; latch
+any veto; use the simulator's own analyser constant.
 
 ### 1.6 Offline results
 
@@ -201,7 +350,69 @@ filled in below once the results are in.)*
 
 ### 1.7 Answers to the brief's four questions
 
-*(pending phase B — the physics answers are in §1.3; the design-specific answers follow the winning design.)*
+**Q1 — What property unifies "growing" and "already-sustained" feedback and excludes musical content?** Not one property; a
+conjunction, and the conjunction is different in kind from "growth". A feedback mode is (a) *narrowband and stationary in
+frequency* — one band, or a fixed pair of adjacent bands with a constant split, for its whole life (vibrato, glides and formant
+movement violate this; a room mode does not); (b) *level-autonomous* — its envelope is either a straight line in dB (growth or
+decay at excess/τ) or a plateau whose frame-to-frame spread is that of a deterministic tone (≲ 1 dB with PEAK ballistics), and in
+neither case does it co-move with the broadband programme level (a sung note, a synth pad, a crowd swell all rise and fall with
+their own bed; a ring does not fall when the band stops); (c) *without a harmonic family* — no partials at +10, +16, +20, +23
+bands that were born with it and move with it (every pitched instrument has them; a ring acquires 2f/3f only once it clips, and
+then they appear *late* and *weaker*, which is distinguishable from a note whose partials arrive together); (d) *persistent beyond
+musical time* — still there, unchanged, after any note would have decayed or moved (hundreds of ms at HF, seconds at LF where the
+analyser itself is slow); and (e) in `ring_out`, *caused by us*: it appears or steepens within one loop-delay-plus-analyser-τ of
+our own +1 dB step and its rate scales with the excess we just added. "Growing" and "sustained" are the same object seen before
+and after saturation; (a)–(d) hold for both, growth rate holds for neither reliably. What excludes the sustained *musical* cases
+that survive (a)–(d) — organ pedal, a held synth sine, an 808 — is (b)'s co-movement test over a window longer than a bar plus (c);
+what nothing on a 1/10-octave magnitude analyser excludes is a pure, unaccompanied, unmodulated sine held for seconds in a silent
+room (a tuning reference, a sine pad intro). That residual is irreducible without phase or without the probe (e); the design makes
+it explicit: in `feedback_watch` such a line is reported, not cut, unless it is also ≥ the level at which a ring would be
+dangerous *and* nothing else is playing — see §1.5 for the exact lanes.
+
+**Q2 — Is ~15 s of pre-roll calibration sound, given `ring_out` then changes the gain structure?** A per-band baseline is the
+right idea and the wrong lifetime. Three fixes make it sound. (i) It must be *per band and robust* (median and MAD or a high
+percentile per band, not a mean in dB, not a single broadband number) and it must be established from the live stream inside the
+consumer, after the RTA source is verified — never as a separate blocking phase (§4.3). (ii) It must be *gain-compensated*: the bus
+RTA tap is pre-fader, so raising the **bus master** does not move the programme at the tap at all — only energy that has been
+round the loop rises — which means that in `ring_out` on a bus the baseline needs **no** compensation for our own steps, and any
+band that rises when we step the master is loop energy by construction (this is the strongest discriminant the system has and the
+current code does not use it). Raising a *channel* fader or send does move the tap; those moves are known to the server
+(`desk.write` events) and shift the whole baseline by the same dB, so they are compensated exactly. Moves made on the console
+surface arrive as `/xremote` pushes and are compensated the same way; unseen moves show up as a *common-mode* shift of all bands,
+which the co-movement statistic already discounts. (iii) It must *track*: a rolling window (tens of seconds, frozen for bands
+currently flagged as candidates so a ring cannot teach the baseline to accept it) replaces the one-shot pre-roll, so walk-in music
+starting, the room filling, the band getting louder are absorbed. With those three, "quiet PA" pre-roll is unnecessary: the first
+2–3 s of frames after arming seed the baseline and confidence in it grows with time; detections in the first seconds lean on the
+lanes that need no baseline (absolute danger level, probe response).
+
+**Q3 — Should detection be frequency-limited?** Bounded below, yes; above, only softly; and the lower bound should come from the
+desk, not a constant. Physics: a loop needs round-trip gain > 1, and below ~100–150 Hz three things make that rare — vocal/
+instrument mic sensitivity and PA/wedge response both roll off, the channel HPF (typically 80–150 Hz on every vocal mic) removes
+12–24 dB/oct, and room-mode support is narrow and position-dependent — while the analyser is at its slowest and coarsest there
+(§1.2), so the false-positive cost is highest exactly where true positives are rarest. The exceptions are real (kick/floor-tom mics
+into a drum fill with subs: 60–120 Hz rings happen; lavs and lecterns: 150–300 Hz; hollow-body guitar into a wedge: 100–250 Hz), so
+a hard 200 Hz floor would be wrong for a drum-fill bus. The rule that matches practice: **lower bound = the lowest HPF corner among
+the open mics feeding this bus** (readable at `/ch/NN/preamp/hpf` + `hpon`), floored at ~60 Hz and defaulting to 100 Hz when no
+HPF is on; below it, never cut automatically, report only. Between the bound and ~250 Hz require the longer persistence the
+analyser's τ demands anyway. No hard upper bound — 2–8 kHz is where most vocal-mic rings live (presence peaks, cymbal spill) and
+10–12 kHz rings occur with condensers — but above ~10 kHz require the level lane too, because air absorption and driver roll-off
+make sustained HF rings quieter and hiss/cymbal wash makes narrow HF peaks common. Sabine/dbx-style suppressors do the same thing
+implicitly: their detection runs full-range but their musical-content rejection is weakest at LF, and their manuals tell users to
+high-pass first.
+
+**Q4 — Different detectors for `ring_out` and `feedback_watch`?** Same feature extraction, different *decision policy and priors* —
+one detector class with a `mode`. In `ring_out` the operator has asserted the stage is quiet and the server owns the only gain
+change in the room: every +1 dB step is a labelled experiment, a band that responds to the step (rises within τ_loop + τ_analyser
+and keeps rising, or settles higher by more than the step) is loop energy with near-certainty, the prior for "programme" is low,
+and the cost of a false cut is small (a flat-ish GEQ on a bus nobody is listening to yet) while the cost of a miss is a howl at the
+next step — so thresholds are permissive, the probe lane is primary, and the sustain lane may act on lines well below danger
+level. In `feedback_watch` there is programme by definition, no probe, the prior for "programme" is high and a false cut damages
+the mix for the rest of the night — so the harmonic/co-movement vetoes are mandatory, the sustain lane acts only above a danger
+level or with very long persistence, growth must be autonomous (not co-moving) to count, and below the LF bound and for
+irreducible cases the output is a *report* ("possible ring at 315 Hz, +9 dB over baseline for 4 s, not cut: harmonic family
+present") rather than a write. The M7 log is the illustration: the same 8 kHz line should be cut in 300 ms during a ring-out and
+was correctly a harder call during a watch with music — where the right answer was still "cut", but *because* it sat 25 dB
+prominent, dead still, family-less and un-moved by the music for seconds, not because of its growth rate.
 
 ### 1.8 What the corpus cannot tell us (residual risk for the next hardware test)
 
@@ -706,4 +917,5 @@ so most of it needs no sound in the room at all).
 | [E](review/E-assumption-findings.md) | All 114 assumption findings with both verifier verdicts and per-slice coverage notes |
 | [F](review/F-bug4-investigation.md) | Bug 4: three investigations, two cross-checks, the calibration/transaction design spec |
 | [G](review/G-read-after-write.md) | Read-after-write: site inventory, the three designs, both judgments |
+| [H](review/H-discriminator-competition.md) | The discriminator design competition: both judges' verdicts, the five audits, the designers' summaries |
 
