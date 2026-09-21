@@ -90,7 +90,7 @@ from .detector import Detection, DetectorConfig, FeedbackDetector, Notch, NotchC
 from .events import Event, EventBus
 from .meters import FrameSource, LiveMeters, MeterFrame, RtaSourceError, RtaSourceResult, rta_band_hz, set_rta_source
 from .policy import FADER_FLOOR_DB, Policy, PolicyError
-from .provision import Preflight, bus_label, bus_target, preflight, validate_ringout_eqs
+from .provision import geq_sides_for, Preflight, bus_label, bus_target, preflight, validate_ringout_eqs
 from .scales import NEG_INF_DB, format_db
 from .targets import Target
 
@@ -411,13 +411,16 @@ class _DeskGeqWriter:
     side, band, gain_db)`` after ``policy.validate_notch`` against the last gain it knows."""
 
     def __init__(self, desk: Desk, policy: Policy, bus: int, fx_slot: int, side: str, existing: dict[int, float],
-                 fx_type: str | None = None) -> None:
+                 fx_type: str | None = None, sides: Sequence[str] | None = None) -> None:
         self._desk = desk
         self._policy = policy
         self.bus = bus
         self.fx_slot = fx_slot
         self.side = side
         self.fx_type = fx_type  # validated by preflight; keeps the /fx/N type read off the detect→cut path
+        # A stereo strip (Main LR) on a dual GEQ2 runs L through side A and R through side B: a notch "on
+        # the PA" must be written to both sides or only the left stack is cut (REVIEW_REPORT §2 C1).
+        self.sides: tuple[str, ...] = tuple(sides) if sides else (side,)
         self.gains: dict[int, float] = dict(existing)
         self.writes: list[tuple[int, int, float]] = []
 
@@ -425,8 +428,9 @@ class _DeskGeqWriter:
         if bus != self.bus:
             raise CfsError("BAD_ARGUMENT", f"notch for bus {bus} on a session for bus {self.bus}")
         self._policy.validate_notch(self.gains.get(band, 0.0), gain_db)  # cuts only, ≤ notch_max_db, never shallower
-        await self._desk.set_geq_band(self.fx_slot, self.side, band, gain_db, fx_type=self.fx_type)
-        self.gains[band] = float(gain_db)  # only once the datagram has left
+        for s in self.sides:
+            await self._desk.set_geq_band(self.fx_slot, s, band, gain_db, fx_type=self.fx_type)
+        self.gains[band] = float(gain_db)  # only once the datagram(s) have left
         self.writes.append((bus, band, float(gain_db)))
 
     def observe(self, band: int, gain_db: float) -> None:
@@ -923,7 +927,8 @@ class CfsManager:
         existing = {i + 1: float(g) for i, g in enumerate(pf.geq.bands_db or []) if g is not None}
         bus_int = 0 if t.family == "main" else int(t.index)
         nc = NotchController(cfg, self._geq_hz, self._policy.validate_notch, budget=budget, existing=existing)
-        writer = _DeskGeqWriter(self._desk, self._policy, bus_int, ins.fx_slot, ins.side, existing, fx_type=ins.fx_type)
+        sides = geq_sides_for(t.key, ins.fx_type, set(self._d.geq.get("fx_types_dual", ())), ins.side)
+        writer = _DeskGeqWriter(self._desk, self._policy, bus_int, ins.fx_slot, ins.side, existing, fx_type=ins.fx_type, sides=sides)
         cfg = await self._calibrate_floor(cfg)
         det = FeedbackDetector(cfg, self._band_hz)
         start = float(pf.master_db)

@@ -1219,15 +1219,26 @@ class FakeDesk:
         if token not in self._geq_types:
             return
         geq = self.d.geq
-        first = int(geq.get("par_b_first", 33)) if (side_b and token in self._geq_dual) else int(geq.get("par_a_first", 1))
-        master_par = int(geq.get("par_b_master", 64)) if (side_b and token in self._geq_dual) else int(geq.get("par_a_master", 32))
-        gains = [float(self.state.get(f"/fx/{slot}/par/{first + i:02d}", 0.5)) * 30.0 - 15.0 for i in range(31)]
-        master = float(self.state.get(f"/fx/{slot}/par/{master_par:02d}", 0.5)) * 30.0 - 15.0
+
+        def side_gains(b_side: bool) -> tuple[list[float], float]:
+            first = int(geq.get("par_b_first", 33)) if (b_side and token in self._geq_dual) else int(geq.get("par_a_first", 1))
+            master_par = int(geq.get("par_b_master", 64)) if (b_side and token in self._geq_dual) else int(geq.get("par_a_master", 32))
+            g = [float(self.state.get(f"/fx/{slot}/par/{first + i:02d}", 0.5)) * 30.0 - 15.0 for i in range(31)]
+            m = float(self.state.get(f"/fx/{slot}/par/{master_par:02d}", 0.5)) * 30.0 - 15.0
+            return g, m
+
+        legs = [side_gains(side_b)]
+        if prefix == "/main/st" and token in self._geq_dual:
+            # A stereo strip runs L through side A and R through side B of a dual GEQ (fx_routing_scenes.md
+            # §2.1/§3.4); the analyser hears both legs. A cut on one side only lowers the summed power by
+            # about half of its depth (M7: a -15 dB cut on one leg read -4..-6 dB on the RTA).
+            legs = [side_gains(False), side_gains(True)]
         log_geq = [math.log(h) for h in self._geq_hz]
         for i, hz in enumerate(rta.band_hz):
             lh = math.log(hz)
             k = min(range(len(log_geq)), key=lambda j: abs(log_geq[j] - lh))  # nearest 1/3-octave band
-            cut = -(gains[k] + master)
+            lin = sum(10.0 ** ((g[k] + m) / 10.0) for g, m in legs) / len(legs)
+            cut = -10.0 * math.log10(lin) if lin > 0 else 0.0
             rta.attenuate(i, 0.0 if abs(cut) < 1e-9 else cut)
         log.debug("fakedesk: RTA cuts refreshed from %s via FX%d%s (%s)", prefix, slot, "R" if side_b else "L", token)
 
