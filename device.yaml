@@ -841,10 +841,10 @@ detector:
   growth_lf_periods: 2.0     # this many 1/bandwidth (no filter resolving df can fake a ramp that long):
                              # 3 fr >= 300 Hz, 5 @ 125 Hz, 8 @ 80 Hz, 10 @ 63 Hz, 15 @ 40 Hz
   growth_rise_db: 6          # corrected rise over the window
-  growth_step_share: 0.7     # no two consecutive intervals may carry more of the rise than this (step)
+  growth_step_share: 0.7     # the two largest single-frame increments may carry at most this share of the rise
   growth_late_share: 0.25    # the later half of the window must carry at least this (smeared step decelerates)
-  growth_min_steps: 3        # and at least this many intervals must each carry >= growth_step_min_share of it
-  growth_step_min_share: 0.1 # (a loop rises continuously; partial frames and neighbour arrivals are lone jumps)
+  growth_min_steps: 3        # and at least this many frames must each carry >= growth_step_min_share x the mean
+  growth_step_min_share: 0.5 # increment (a loop rises continuously; partial frames and neighbour arrivals are lone jumps)
   monotonic_tolerance_db: 1.0
   growth_ref_db_per_s: 20    # dashboard confidence scaling only
   # --- sustained lane (plateaued / slow rings; replaces the M7 25 dB override) ---------------------

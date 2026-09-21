@@ -63,10 +63,11 @@ Per candidate (a peak tracked within ``±band_tolerance`` from frame to frame):
   than ``monotonic_tolerance_db`` or by a step) of at least ``n_g(band)`` samples the least-squares slope
   of the *reference-corrected* level (level minus the frame's spectrum reference = median of bands
   ``ref_lo_band..ref_hi_band``, so a fader/common-mode move is not growth) is ``>= growth_min_db_per_s``,
-  the corrected rise is ``>= growth_rise_db``, no two consecutive intervals carry more than
-  ``growth_step_share`` of the rise (a step is not a ramp) and the later half of the window carries at
-  least ``growth_late_share`` of it (an analyser-smeared step decelerates to nothing; a loop's dB-linear
-  ramp does not). ``n_g(band) = max(growth_min_frames, ceil(growth_lf_periods / (Δf·frame_period)))``:
+  the corrected rise is ``>= growth_rise_db``, the two largest single-frame increments carry no more than
+  ``growth_step_share`` of the rise and at least ``growth_min_steps`` frames each carry half a mean
+  increment (a continuous ramp, not one or two jumps), and the later half of the window carries at least
+  ``growth_late_share`` of it (an analyser-smeared step decelerates to nothing; a loop's dB-linear ramp
+  does not). ``n_g(band) = max(growth_min_frames, ceil(growth_lf_periods / (Δf·frame_period)))``:
   the window must span ``growth_lf_periods``/Δf so that no filter resolving Δf can fill it with a steady
   ramp from a step (3 frames above ~300 Hz, 5 at 125 Hz, 10 at 63 Hz). There is no upper slope bound.
 * **SUSTAINED evidence** (the plateau lane): ``frames >= sustain_frames``, no step onset seen, the
@@ -204,10 +205,10 @@ class DetectorConfig:
     growth_min_frames: int = 3           # growth window samples above ~300 Hz
     growth_lf_periods: float = 2.0       # growth window must span this many 1/Δf below that
     growth_rise_db: float = 6.0          # reference-corrected rise required over the growth window
-    growth_step_share: float = 0.7       # max share of the rise carried by two consecutive intervals
+    growth_step_share: float = 0.7       # max share of the rise carried by the two largest single-frame increments
     growth_late_share: float = 0.25      # min share of the rise carried by the later half of the window
-    growth_min_steps: int = 3            # intervals that must each carry >= growth_step_min_share of the rise
-    growth_step_min_share: float = 0.1   # (a loop rises continuously; partial frames / neighbour arrivals are lone jumps)
+    growth_min_steps: int = 3            # frames that must each carry >= growth_step_min_share x the mean increment
+    growth_step_min_share: float = 0.5   # (a loop rises continuously; partial frames / neighbour arrivals are lone jumps)
     sustain_frames: int = 6              # SUSTAINED lane: frames of stable, non-decaying, family-free line (300 ms)
     sustain_strong_prominence_db: float = 18.0   # below this the lane waits sustain_moderate_frames instead: at 12-18 dB the
     sustain_moderate_frames: int = 12    # absence of a family proves little (partials may sit under the floor), so ask for time
@@ -716,8 +717,11 @@ class FeedbackDetector:
         rng = range(max(0, band - 1), min(n, band + 2))
         alive = [q for q in rng if self._step_alive[q] and abs(q - c.centroid) <= 0.8]
         if alive:
-            if not c.step_onset or any(self._step_frame[q] == self.frames_seen for q in alive):
+            newest = max(self._step_frame[q] for q in alive)
+            if (not c.step_onset and newest > self.frames_seen - len(c.levels)) or newest == self.frames_seen:
+                # the arrival lies inside the growth window: judge what follows it, not the arrival itself
                 self._restart_window(c, 1)
+            if not c.step_onset:
                 c.step_level = max(self._step_ref[q] for q in alive)
             c.step_onset = True
         elif c.step_onset and not any(self._step_alive[q] and abs(q - c.centroid) < 1.0 for q in rng):
@@ -752,9 +756,11 @@ class FeedbackDetector:
         if n >= self._n_growth[c.band] and min(slope_rel, slope_abs) >= cfg.growth_min_db_per_s:
             rise = lv[-1] - lv[0]
             if min(rise, rel[-1] - rel[0]) >= cfg.growth_rise_db:
-                two = max((lv[i + 2] - lv[i] for i in range(n - 2)), default=rise)
+                inc = sorted((lv[i + 1] - lv[i] for i in range(n - 1)), reverse=True)
+                two = inc[0] + (inc[1] if len(inc) > 1 else 0.0)      # the two largest single-frame increments
                 late = lv[-1] - lv[n // 2]
-                steps = sum(1 for i in range(n - 1) if lv[i + 1] - lv[i] >= cfg.growth_step_min_share * rise)
+                mean_step = rise / (n - 1)
+                steps = sum(1 for d in inc if d >= cfg.growth_step_min_share * mean_step)
                 if (two <= cfg.growth_step_share * rise and late >= cfg.growth_late_share * rise
                         and steps >= cfg.growth_min_steps):
                     growth = True
