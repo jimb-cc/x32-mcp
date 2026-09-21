@@ -1354,12 +1354,26 @@ class FeedbackDetector:
             loud = lp >= cfg.loud_level_db
             escape = lp >= cfg.family_escape_level_db
             probe_veto = t.probe_linear >= 2
-            if clip and narrow and t.frames >= cfg.loud_frames and min(lv[-cfg.loud_frames:]) >= cfg.clip_level_db \
-                    and not lf_strict and stationary:
+            # for the level rules, stationarity/steadiness are judged over the plateau the line is sitting on (the
+            # frames since it arrived within 3 dB of where it is now), not over the climb that brought it there
+            pl = 0
+            for x in reversed(lv):
+                if abs(x - lp) <= 3.0:
+                    pl += 1
+                else:
+                    break
+            plat_ok = False
+            if pl >= cfg.loud_frames:
+                cpl = t.cen_list[-min(pl, len(t.cen_list)):]
+                dpl = [b - a for a, b in zip(lv[-pl:], lv[-pl + 1:])] if pl >= 2 else []
+                plat_ok = ((max(cpl) - min(cpl)) <= cfg.centroid_tol_bands
+                           and (not dpl or max(abs(d) for d in dpl) <= 2.0 * cfg.level_unsteady_db))
+            if clip and narrow and pl >= cfg.loud_frames and min(lv[-cfg.loud_frames:]) >= cfg.clip_level_db \
+                    and not lf_strict and plat_ok:
                 verdict = "clip"
                 reasons = ["clip", "narrow", "stationary"]
-            elif (loud and narrow and prominent and stationary and steady and not decaying and not lf_strict
-                  and t.frames >= cfg.loud_frames and min(lv[-cfg.loud_frames:]) >= cfg.loud_level_db
+            elif (loud and narrow and prominent and plat_ok and not decaying and not lf_strict
+                  and pl >= cfg.loud_frames and min(lv[-cfg.loud_frames:]) >= cfg.loud_level_db
                   and (escape or not family) and not probe_veto and not (t.musical and not escape)):
                 verdict = "loud"
                 reasons = ["loud", "narrow", "stationary", "steady", "no-family" if not family else "near-clip"]
