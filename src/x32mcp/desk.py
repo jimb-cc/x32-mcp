@@ -90,6 +90,8 @@ log = logging.getLogger(__name__)
 
 ALL_FAMILIES: tuple[str, ...] = ("ch", "auxin", "fxrtn", "bus", "mtx", "main", "dca")
 _PANIC_FAMILIES: tuple[str, ...] = ("main", "bus", "mtx")  # fx_routing_scenes.md §11 option 1
+_PANIC_VERIFY_S = 0.6    # after the sends: read the mutes back until they all show muted, at most this long
+_PANIC_REVERIFY_S = 0.3  # after re-sending the ones that did not
 _SCENE_VERIFY_S = 2.0
 _SCENE_POLL_S = 0.05
 _NAME_MAX = 12  # scales_params.md §4.1
@@ -223,6 +225,13 @@ class Desk:
         self._snapshot_lock = asyncio.Lock()
         self.pre_write_snapshot: Snapshot | None = None
         self.write_count = 0
+        # panic bookkeeping (see panic()): writers that span a panic compare the counter; outputs a
+        # panic muted stay latched against Tier-1 re-opening; an unconfirmed panic is re-sent on reconnect
+        self.panic_count = 0
+        self.last_panic: dict[str, Any] | None = None
+        self._panic_latched: set[str] = set()
+        self._panic_reassert = False
+        self._panic_tasks: set[asyncio.Task] = set()
         geq = d.geq
         self._geq_dual = frozenset(geq.get("fx_types_dual", ()))
         self._geq_stereo = frozenset(geq.get("fx_types_stereo", ()))
@@ -233,6 +242,7 @@ class Desk:
         # conn.set() publishes "write" {address, args}: writes by other modules through the same
         # connection (meters.set_rta_source, provision, …) are never pushed back to us by the desk.
         self._unsub_write = events.subscribe(self._on_write_event, types={"write"})
+        self._unsub_conn = events.subscribe(self._on_connection_event, types={"connection.state"})
 
     # -- lifecycle / cache ---------------------------------------------------------------------
 
@@ -240,6 +250,9 @@ class Desk:
         """Cancel running ramps and stop listening for pushes (the connection is not closed)."""
         self._unsub_update()
         self._unsub_write()
+        self._unsub_conn()
+        for t in list(self._panic_tasks):
+            t.cancel()
         ramps = [t for t in self._ramps.values() if not t.done()]
         self._ramps.clear()
         for t in ramps:
@@ -1026,6 +1039,8 @@ class Desk:
         """Mute/unmute a strip. On the wire ``mix/on`` 1 = ON = unmuted (DESIGN §0.4,
         scales_params.md §4.8) — the inversion happens here only."""
         t = self._target(t)
+        if not muted:
+            self._check_panic_latch(t)
         rel = "on" if t.family == "dca" else "mix/on"
         spec, address = self._param(t, rel)
         was = await self._leaf(address)
@@ -1199,12 +1214,35 @@ class Desk:
             out["quote_replaced"] = True
         return out
 
-    async def panic(self) -> dict[str, Any]:
+    async def panic(self, *, verify_s: float | None = None) -> dict[str, Any]:
         """Mute Main LR, Main M/C, every bus and every matrix as fast as possible: fire-and-forget
         ``mix/on 0``, no ramps, no snapshot, rate limiter bypassed (Tier 1, never blocked).
-        Silences every POST-tapped output (fx_routing_scenes.md §11 option 1)."""
+        Silences every POST-tapped output (fx_routing_scenes.md §11 option 1). The sends always go
+        out first; *afterwards* the 24 mutes are read back until they all show muted or ``verify_s``
+        (0.6 s) passes, anything still reading unmuted is sent once more and re-checked, and the
+        result says ``delivered`` = ``"confirmed"`` / ``"partial"`` (``unconfirmed`` lists the rest) /
+        ``"sent"`` (``verify_s=0``) / ``"unconfirmed"`` (desk degraded). A SET has no ack and a
+        datagram can be lost (transport.md §5.2), so "sent" is not "muted".
+
+        Before the mutes go out, everything this server was itself writing is stopped: running
+        fader ramps are cancelled and :attr:`panic_count` is bumped so that a ``restore()`` in
+        flight and a CFS² session (which subscribes to ``desk.panic.begin``) abort instead of
+        re-opening or re-raising what the panic just silenced. The muted outputs are *latched*:
+        Tier-1 ``unmute``/``restore`` refuse them with ``PANIC_LATCHED`` until :meth:`clear_panic_latch`
+        (a confirmed tool) or a confirmed ``set_main_mute(false)`` says the emergency is over. A panic
+        the desk may not have received (DEGRADED, socket gone) is re-sent when the connection returns.
+        """
         t0 = time.perf_counter()
+        self.panic_count += 1
         targets = [t for fam in _PANIC_FAMILIES for t in self._d.strip_targets(fam)]
+        # 1. Our own writers first: nothing this process started may land after the mutes.
+        ramps = [task for task in self._ramps.values() if not task.done()]
+        self._ramps.clear()
+        for task in ramps:
+            task.cancel()
+        self._panic_latched.update(t.key for t in targets)
+        self._events.publish("desk.panic.begin", count=self.panic_count, cancelled_ramps=len(ramps),
+                             targets=[t.key for t in targets])
         await self._policy.acquire_write(panic=True)
         unconfirmed = False
         done: list[str] = []
@@ -1229,13 +1267,142 @@ class Desk:
         elapsed = (time.perf_counter() - t0) * 1000.0
         self.write_count += len(done)
         delivered = "unconfirmed" if unconfirmed else "sent"
-        self._events.publish("desk.panic", elapsed_ms=round(elapsed, 1), count=len(done), failed=len(failed), delivered=delivered)
-        log.warning("PANIC: %d outputs muted in %.1f ms%s%s", len(done), elapsed,
-                    " (desk degraded, unconfirmed)" if unconfirmed else "",
-                    f", {len(failed)} NOT SENT: {', '.join(failed)}" if failed else "")
+        self._panic_reassert = unconfirmed or bool(failed)
+        self.last_panic = {"ts": time.time(), "count": self.panic_count, "muted": list(done), "failed": list(failed),
+                           "delivered": delivered if done else "not sent", "cancelled_ramps": len(ramps)}
+        out: dict[str, Any] = {"muted": done, "count": len(done), "failed": failed, "elapsed_ms": round(elapsed, 1), "delivered": delivered,
+                               "cancelled_ramps": len(ramps), "latched": True}
+        vs = _PANIC_VERIFY_S if verify_s is None else max(0.0, float(verify_s))
+        if done and not unconfirmed and vs > 0:
+            try:
+                out.update(await self._verify_panic([t for t in targets if t.key in done], vs))
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:  # verification is advice; it must never cost the panic result
+                log.warning("panic verification failed: %s", e)
+                out["verify_error"] = str(e)
+            if out.get("unconfirmed"):
+                self._panic_reassert = True  # something still reads open: re-send again on the next reconnect too
+        out["reassert_pending"] = self._panic_reassert
+        self._events.publish("desk.panic", elapsed_ms=round(elapsed, 1), count=len(done), failed=len(failed), delivered=out["delivered"],
+                             cancelled_ramps=len(ramps), reassert_pending=self._panic_reassert,
+                             confirmed=out.get("confirmed"), unconfirmed=len(out.get("unconfirmed") or []))
+        log.warning("PANIC: %d outputs muted in %.1f ms (%s)%s%s%s%s", len(done), elapsed, out["delivered"],
+                    f", {len(out['unconfirmed'])} NOT CONFIRMED: {', '.join(out['unconfirmed'])}" if out.get("unconfirmed") else "",
+                    " (desk degraded, unconfirmed; will re-send on reconnect)" if unconfirmed else "",
+                    f", {len(failed)} NOT SENT (will re-send on reconnect): {', '.join(failed)}" if failed else "",
+                    f"; {len(ramps)} ramp(s) cancelled" if ramps else "")
         if not done:
-            raise DeskError("NOT_CONNECTED", f"panic could not reach the desk: {last}", muted=done, failed=failed)
-        return {"muted": done, "count": len(done), "failed": failed, "elapsed_ms": round(elapsed, 1), "delivered": delivered}
+            raise DeskError("NOT_CONNECTED", f"panic could not reach the desk: {last}; the mutes will be sent the moment it reconnects",
+                            muted=done, failed=failed, reassert_pending=True)
+        return out
+
+    async def _verify_panic(self, targets: Sequence[Target], verify_s: float) -> dict[str, Any]:
+        """Read ``mix/on`` of ``targets`` back until all show muted (bounded); re-send the rest once."""
+        paths = {t.key: f"{t.osc_prefix}/mix" for t in targets}
+        loop = asyncio.get_running_loop()
+        t0 = loop.time()
+        attempts = 0
+
+        async def poll(deadline_s: float) -> dict[str, Any]:
+            nonlocal attempts
+            deadline = loop.time() + deadline_s
+            delay = 0.03
+            vals: dict[str, Any] = {}
+            while True:
+                attempts += 1
+                for p in paths.values():
+                    self._drop(p)  # every attempt asks the desk, never our cache
+                try:
+                    secs = await asyncio.wait_for(self._read_sections(list(paths.values()), concurrency=24),
+                                                  timeout=max(0.05, deadline - loop.time()))
+                    vals = {k: (secs.get(p) or {}).get("mix/on") for k, p in paths.items()}  # True = ON = unmuted; None = no answer
+                except (asyncio.TimeoutError, DeskError):
+                    pass
+                if vals and all(v is False for v in vals.values()):
+                    return vals
+                if loop.time() + delay >= deadline:
+                    return vals
+                await asyncio.sleep(delay)
+                delay = min(0.2, delay * 1.6)
+
+        vals = await poll(verify_s)
+        pending = [k for k in paths if vals.get(k) is not False]
+        resent: list[str] = []
+        if pending:
+            for t in targets:
+                if t.key in pending:
+                    try:
+                        await self._conn.send_raw(f"{t.osc_prefix}/mix/on", 0)  # emergency path: no limiter, like the first round
+                        resent.append(t.key)
+                    except (NotConnected, OSError) as e:
+                        log.debug("panic re-send %s failed: %s", t.key, e)
+            vals = await poll(_PANIC_REVERIFY_S) or vals
+            pending = [k for k in paths if vals.get(k) is not False]
+        return {
+            "confirmed": len(paths) - len(pending), "unconfirmed": pending, "resent": resent,
+            "delivered": "confirmed" if not pending else "partial",
+            "verify": {"attempts": attempts, "elapsed_ms": round((loop.time() - t0) * 1000.0, 1)},
+        }
+
+    # -- panic latch / re-assert -----------------------------------------------------------------------
+
+    @property
+    def panic_latched(self) -> list[str]:
+        """Target keys silenced by the last panic that have not been released yet."""
+        return sorted(self._panic_latched, key=lambda k: (k.split(".")[0], k))
+
+    def _check_panic_latch(self, t: Target) -> None:
+        if t.key in self._panic_latched:
+            when = time.strftime("%H:%M:%S", time.localtime(self.last_panic["ts"])) if self.last_panic else "?"
+            raise DeskError(
+                "PANIC_LATCHED",
+                f"{t.label} was silenced by panic() at {when} and stays muted until the operator confirms the emergency is over: "
+                "call clear_panic (confirmation required), or re-open Main LR with set_main_mute",
+                target=t.key, latched=self.panic_latched,
+            )
+
+    def clear_panic_latch(self, keys: Iterable[str] | None = None) -> list[str]:
+        """Release the panic latch (all of it, or the given target keys). Unmutes nothing."""
+        if keys is None:
+            released = self.panic_latched
+            self._panic_latched.clear()
+        else:
+            want = {str(k) for k in keys}
+            released = sorted(want & self._panic_latched)
+            self._panic_latched -= want
+        if released:
+            self._events.publish("desk.panic.cleared", released=released, remaining=self.panic_latched)
+            log.warning("panic latch released for %d output(s)%s", len(released), "" if not self._panic_latched else f"; {len(self._panic_latched)} still latched")
+        return released
+
+    def _on_connection_event(self, ev: Any) -> None:
+        if not self._panic_reassert or ev.data.get("state") != "connected":
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        task = loop.create_task(self._reassert_panic(), name="desk-panic-reassert")
+        self._panic_tasks.add(task)
+        task.add_done_callback(self._panic_tasks.discard)
+
+    async def _reassert_panic(self) -> None:
+        """The desk is back after a panic it may not have received: send the mutes again (latched
+        outputs only — anything the operator has since released is left alone)."""
+        keys = self.panic_latched
+        sent: list[str] = []
+        for key in keys:
+            try:
+                t = parse_target(key)
+                await self._conn.set(f"{t.osc_prefix}/mix/on", 0)
+                sent.append(key)
+            except (NotConnected, OSError, ValueError) as e:
+                log.warning("panic re-assert: %s not sent: %s", key, e)
+        if sent and len(sent) == len(keys):
+            self._panic_reassert = False
+        self._events.publish("desk.panic.reasserted", count=len(sent), targets=sent, complete=not self._panic_reassert)
+        log.warning("PANIC re-asserted after reconnect: %d/%d outputs muted again", len(sent), len(keys))
 
     # -- Tier 2 executors (the server does the confirmation dance) ---------------------------------------
 
@@ -1248,10 +1415,14 @@ class Desk:
         return await self._move_level(t, spec, address, before, _num(db, "db"), ramp_ms=ramp_ms, force=True, policy_kind=pk, tool="set_main_fader", guarded=True)
 
     async def set_main_mute(self, which: str, muted: bool) -> dict[str, Any]:
+        """Guarded (the server confirmed it), so re-opening a main after a panic is allowed and
+        releases that main from the panic latch: the operator has said the emergency is over."""
         t = self._main_target(which)
         spec, address = self._param(t, "mix/on")
         was = await self._leaf(address)
         await self._write(address, spec.to_raw(not bool(muted)), value={"muted": bool(muted)}, tool="set_main_mute", target=t, guarded=True)
+        if not muted:
+            self.clear_panic_latch([t.key])
         return {"target": t.key, "label": t.label, "muted": bool(muted), "was_muted": (not was) if was is not None else None}
 
     def _main_target(self, which: Any) -> Target:
@@ -1331,15 +1502,27 @@ class Desk:
         """Bring the desk back to ``snap`` (optionally only ``scope``: a target key, family or path):
         :func:`nodes.restore_plan` lines written with ``conn.slash`` (transport.md §6.6), one per
         rate-limiter slot, each awaiting the desk's echo. Timed-out lines are listed in ``failed``."""
+        if self._panic_latched:
+            raise DeskError("PANIC_LATCHED", "outputs are latched by panic(); a restore could re-open them. "
+                            "Call clear_panic (confirmation required) first", latched=self.panic_latched)
         await self.ensure_pre_write_snapshot()
         t0 = time.perf_counter()
+        panic_gen = self.panic_count
         live = await self.dump(sections=[scope] if scope else None)
         lines = restore_plan(snap.state, live, self._d, scope=scope)
         written = 0
         failed: list[str] = []
         aborted: str | None = None
         for line in lines:
+            if self.panic_count != panic_gen:
+                aborted = "panic() was called during the restore; the remaining lines were not written"
+                log.warning("restore %s aborted by panic after %d/%d line(s)", snap.id, written, len(lines))
+                break
             await self._policy.acquire_write()
+            if self.panic_count != panic_gen:  # the wait for a write slot is exactly where a panic lands
+                aborted = "panic() was called during the restore; the remaining lines were not written"
+                log.warning("restore %s aborted by panic after %d/%d line(s)", snap.id, written, len(lines))
+                break
             try:
                 await self._conn.slash(line)
                 written += 1

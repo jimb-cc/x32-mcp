@@ -241,7 +241,7 @@ async def test_tier1_moves_and_summaries(app, fakedesk):
     assert gate["ok"] and gate["applied"]["on"] is True and gate["applied"]["range_db"] == 30.0
     assert_err(await srv.set_gate("bus.1", on=True), "NOT_SUPPORTED")
     p = await srv.panic()
-    assert p["ok"] and p["count"] == 24 and p["delivered"] == "sent" and p["summary"].startswith("PANIC: 24 outputs muted in")
+    assert p["ok"] and p["count"] == 24 and p["delivered"] == "confirmed" and p["summary"].startswith("PANIC: 24 mutes sent in")
     await settle(app)
     assert fakedesk.get("/main/st/mix/on") == 0 and fakedesk.get("/bus/16/mix/on") == 0 and fakedesk.get("/mtx/06/mix/on") == 0
     assert fakedesk.get("/ch/01/mix/on") == 1  # inputs are left alone

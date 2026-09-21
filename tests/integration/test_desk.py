@@ -359,7 +359,7 @@ async def test_label_and_resolve(desk, conn, fakedesk):
 
 async def test_panic_mutes_24_outputs_fast(desk, conn, fakedesk, policy):
     res = await desk.panic()
-    assert res["count"] == 24 and res["elapsed_ms"] < 200 and res["delivered"] == "sent"
+    assert res["count"] == 24 and res["elapsed_ms"] < 200 and res["delivered"] == "confirmed" and res["confirmed"] == 24
     assert res["muted"][:2] == ["main.st", "main.m"] and "bus.16" in res["muted"] and "mtx.6" in res["muted"]
     await settle(conn)
     for key in res["muted"]:

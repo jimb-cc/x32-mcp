@@ -85,7 +85,7 @@ from .nodes import SnapshotError, SnapshotStore, describe_changes, diff_states
 from .patches import PatchError
 from .policy import FADER_FLOOR_DB, SHOW_MODE_BLOCKED, PendingConfirmation, Policy, PolicyError
 from .scales import NEG_INF_DB, format_db
-from .targets import Target, TargetError
+from .targets import Target, TargetError, parse_target
 from .webui import DashboardServer, WebUIError
 
 __all__ = ["App", "server", "app", "main", "INSTRUCTIONS"]
@@ -127,7 +127,8 @@ with the SAME arguments plus confirm_token. Never invent, reuse or pre-empt a to
 on the user's behalf.
 Every tool returns {ok, summary, ...}; a failure is {ok: false, error: {code, message}} - tools never \
 raise. panic() mutes every mix bus, matrix and the mains at once (Tier 1, never blocked): use it \
-whenever the user says stop / kill it / mute everything. show_mode(true) refuses scene recall/save and \
+whenever the user says stop / kill it / mute everything; it also cancels this server's own ramps, restores \
+and ring-outs, and latches the muted outputs until the user confirms clear_panic. show_mode(true) refuses scene recall/save and \
 ring-outs and tightens relative moves to +-3 dB. The dashboard (dashboard_status) is a read-only web \
 page for the operator; it cannot change the desk. CFS2 feedback tools: validate_ringout_eqs and \
 discover_mics first, confirm the open-mic list with the user, then feedback_watch (human drives the \
@@ -1127,14 +1128,53 @@ async def set_gate(
 async def panic() -> dict[str, Any]:
     """EMERGENCY: mute Main LR, Main M/C, all 16 mix buses and all 6 matrices as fast as possible
     (no ramp, no confirmation, never blocked by show mode or rate limits). Use when the user says
-    stop / kill it / mute everything. Unmute afterwards with unmute / set_main_mute. Tier 1."""
+    stop / kill it / mute everything. It also cancels any fader ramp, restore or ring-out this server
+    was running. The muted outputs are LATCHED: unmute/restore_snapshot refuse them until the user
+    confirms the emergency is over via clear_panic (or re-opens Main LR with set_main_mute). It silences
+    the 24 mix masters, i.e. outputs tapped POST-fader; feeds taken from direct outs (P16/personal
+    monitors, recording splits), AES50/card routing from input blocks, PRE-tapped physical outs and the
+    monitor/phones bus are NOT touched — say so and tell the user to pull those on the console. Tier 1."""
     desk = _desk()
     res = await desk.panic()
+    delivered = res.get("delivered")
+    if delivered == "confirmed":
+        tail = f"; all {res.get('confirmed')} read back muted"
+    elif delivered == "partial":
+        tail = (f"; {res.get('confirmed')} read back muted, NOT CONFIRMED: {', '.join(res.get('unconfirmed') or [])}"
+                " — check them on X32-Edit or the front panel NOW")
+    elif delivered == "unconfirmed":
+        tail = "; the desk is degraded — verify on X32-Edit or the front panel; the mutes will be re-sent when it reconnects"
+    else:
+        tail = ""
     return _ok(
-        f"PANIC: {res['count']} outputs muted in {res['elapsed_ms']} ms ({res['delivered']})"
-        + ("; the desk is degraded — verify on X32-Edit or the front panel" if res.get("delivered") == "unconfirmed" else ""),
+        f"PANIC: {res['count']} mutes sent in {res['elapsed_ms']} ms ({delivered}){tail}"
+        + (f"; {res['cancelled_ramps']} running fader ramp(s) cancelled" if res.get("cancelled_ramps") else "")
+        + ". Outputs stay latched until clear_panic is confirmed. Note: direct-out/P16/AES50/card feeds, PRE-tapped outs and"
+          " monitor/phones are not affected by bus mutes — check those on the console.",
         **res,
     )
+
+
+@server.tool()
+@_tool()
+async def clear_panic(confirm_token: str | None = None) -> dict[str, Any]:
+    """After panic(): release the latch that keeps the panicked outputs muted, once the user says the
+    emergency is over. This unmutes NOTHING — it only allows unmute / restore_snapshot on those outputs
+    again. TIER 2 confirmation dance (see set_main_fader)."""
+    desk = _desk()
+    latched = desk.panic_latched
+    if not latched:
+        return _ok("Nothing to clear: no outputs are latched by a panic", released=[], latched=[])
+    lp = desk.last_panic or {}
+    when = time.strftime("%H:%M:%S", time.localtime(lp["ts"])) if lp.get("ts") else "?"
+    payload = {"latched": latched}
+    summary = (f"Release the panic latch set at {when} on {len(latched)} output(s) ({', '.join(parse_target(k).label for k in latched[:8])}"
+               f"{', …' if len(latched) > 8 else ''}). Nothing is unmuted by this; it only allows unmute/restore again")
+    pending = _confirm("clear_panic", summary, payload, confirm_token)
+    if pending:
+        return pending
+    released = desk.clear_panic_latch()
+    return _ok(f"Panic latch released for {len(released)} output(s); they are still muted — unmute deliberately", released=released, latched=desk.panic_latched)
 
 
 # -- tools: Tier 2 (confirmation dance) ----------------------------------------------------------------------
@@ -1338,6 +1378,9 @@ async def restore_snapshot(id: str, scope: str | None = None, confirm_token: str
     and returns a confirm_token; call again with it after the user agrees."""
     a = _app()
     desk = _desk()
+    if desk.panic_latched:  # refuse before minting a token: a restore is exactly what re-opens panicked outputs
+        raise DeskError("PANIC_LATCHED", "outputs are latched by panic(); a restore could re-open them. Ask the user, then clear_panic first",
+                        latched=desk.panic_latched)
     snap = a.snapshots.load(str(id))
     # live → snapshot: the direction the restore will actually move things (the undo of the diff)
     live = await asyncio.wait_for(desk.dump(sections=[scope] if scope else None), timeout=DUMP_TIMEOUT_S)

@@ -571,7 +571,8 @@ class Desk:
     async def set_comp(self, t: Target, *, on=None, threshold_db=None, ratio=None, attack_ms=None, release_ms=None, knee=None, makeup_db=None, mix_pct=None) -> dict
     async def set_gate(self, t: Target, *, on=None, threshold_db=None, range_db=None, attack_ms=None, hold_ms=None, release_ms=None) -> dict
     async def label(self, t: Target, *, name=None, color=None, icon=None) -> dict
-    async def panic(self) -> dict     # mutes main st, main m, all 16 buses, 6 matrices as fast as possible (fire-and-forget sets, no ramps, bypass rate limit), returns elapsed ms + list; Tier 1
+    async def panic(self) -> dict     # mutes main st, main m, all 16 buses, 6 matrices as fast as possible (fire-and-forget sets, no ramps, bypass rate limit), returns elapsed ms + list; Tier 1. Cancels running ramps first and bumps panic_count (restore() and CFS² abort on it); latches the outputs (PANIC_LATCHED on Tier-1 unmute/restore until clear_panic_latch()); re-sent on reconnect if unconfirmed
+    def clear_panic_latch(self, keys=None) -> list[str]; panic_latched: list[str]; last_panic: dict | None
     # Tier 2 executors (server does the confirmation dance; these just execute)
     async def set_main_level(self, which: str, db: float, *, ramp_ms=None) -> dict ; set_main_mute(which, muted)
     async def recall_scene(self, index: int) -> dict ; save_scene(index, name, notes="") -> dict
@@ -711,6 +712,7 @@ set_pan(target: str, pan: int)
 set_comp(target: str, on: bool | None = None, threshold_db: float | None = None, ratio: float | None = None, attack_ms: float | None = None, release_ms: float | None = None, knee: int | None = None, makeup_db: float | None = None, mix_pct: int | None = None)
 set_gate(target: str, on=None, threshold_db=None, range_db=None, attack_ms=None, hold_ms=None, release_ms=None)
 panic()
+clear_panic(confirm_token=None)                                   # T2: lift the panic latch (unmutes nothing)
 set_main_fader(which: str = "st", db: float = -90, ramp_ms: int = 300, confirm_token: str | None = None) ; set_main_mute(which: str, muted: bool, confirm_token=None)
 recall_scene(scene: str | int, confirm_token: str | None = None) ; save_scene(index: int, name: str, notes: str = "", confirm_token=None)
 snapshot_desk(label: str = "") ; list_snapshots() ; restore_snapshot(id: str, scope: str | None = None, confirm_token=None) ; diff_snapshot(id: str = "latest", scope: str | None = None)

@@ -76,8 +76,11 @@ Doors
   (`SHOW_MODE_BLOCKS`). `restore_snapshot` **is** available — it is the undo.
 - [ ] **Something is wrong now (feedback, wrong output, loud noise):** physical mute / fader,
   or X32-Edit on the tablet. Then, if you want everything gone at once, say "kill it" →
-  `panic()` mutes Main LR, Main M/C, all 16 buses and 6 matrices in one go. Unmute deliberately
-  afterwards (`unmute bus.3`, `set_main_mute("st", false)` with confirmation).
+  `panic()` mutes Main LR, Main M/C, all 16 buses and 6 matrices in one go and stops any ramp,
+  restore or ring-out the server was running. The outputs are then latched: confirm `clear_panic`
+  once the cause is dealt with, then unmute deliberately (`unmute bus.3`, `set_main_mute("st", false)`
+  with confirmation). `panic()` mutes mix masters only: IEMs on P16 direct outs, a record split, or any
+  output tapped PRE keep running — those are yours to pull on the console.
 - [ ] **Desk cutout / PSU wobble:** audio through the desk is what it is; the server goes
   DEGRADED (`connection_status`), refuses writes with `NOT_CONNECTED` and reconnects by itself
   with 1/2/4/8 s backoff. Do not fight it from the conversation; fix power, wait for

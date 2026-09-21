@@ -99,6 +99,7 @@ __all__ = ["CfsError", "CfsMode", "CfsState", "STAGES", "ReportStore", "CfsManag
 log = logging.getLogger(__name__)
 
 _FLOOR_FIRST_FRAME_S = 0.3  # no RTA frame within this: the source is idle, skip calibration
+_PANIC_REASON = "panic: outputs muted by the operator's emergency stop"
 
 STAGES: tuple[str, ...] = ("PREFLIGHT", "SNAPSHOT", "ARM", "RAISE", "HOLD", "NOTCH", "VERIFY", "BACKOFF", "DONE", "ABORT")
 
@@ -526,6 +527,7 @@ class CfsManager:
         self._lock = asyncio.Lock()
         self._bad_frame_logged = False
         self._unsub_conn = events.subscribe(self._on_connection_event, types={"connection.state"})
+        self._unsub_panic = events.subscribe(self._on_panic_event, types={"desk.panic.begin"})
 
     # -- status ------------------------------------------------------------------------------------
 
@@ -798,6 +800,7 @@ class CfsManager:
     async def close(self) -> None:
         """Abort whatever runs, stop the frames and unsubscribe (server shutdown)."""
         self._unsub_conn()
+        self._unsub_panic()
         self._stop_system("shutdown")
         ses = self._ses
         if ses is not None:
@@ -1294,6 +1297,9 @@ class CfsManager:
             back = float(ro.get("safety_margin_db", 3.0))
             final_stage = "DONE"
         final = max(FADER_FLOOR_DB, ses.master_db - back)
+        if ses.abort_reason == _PANIC_REASON:
+            # An emergency stop is not a ring-out result: hand the bus back no higher than it was found.
+            final = min(final, ses.start_master_db)
         await self._stage(ses, "BACKOFF", to_db=_db1(final), backoff_db=back)
         try:
             written = await self._write_master(ses, final, force=True)  # lowering: never let a clamp refuse it
@@ -1308,6 +1314,29 @@ class CfsManager:
         await self._stage(ses, final_stage, reason=ses.abort_reason if final_stage == "ABORT" else reason)
 
     # -- connection loss ---------------------------------------------------------------------
+
+    def _on_panic_event(self, ev: Event) -> None:
+        """``panic()`` has just silenced the outputs. Whatever CFS² is doing must stop *now*: a
+        ring-out would otherwise keep raising the (muted, therefore feedback-free) bus to its target
+        and park it there for the operator to unmute into. The abort reason is set synchronously,
+        before the mutes even leave, so the RAISE loop cannot issue another write; the back-off then
+        returns the master to at most its starting level (``_finalize_levels``)."""
+        self._stop_system("panic")
+        ses = self._ses
+        if ses is None or ses.abort_reason is not None:
+            return
+        ses.abort_reason = _PANIC_REASON
+        ses.wake.set()
+        log.warning("CFS² %s aborted by panic()", ses.session_id)
+        self._events.publish("cfs.abort", session_id=ses.session_id, bus=ses.bus, reason=ses.abort_reason)
+        if ses.mode is CfsMode.WATCH and self._ses is ses:
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                return
+            task = loop.create_task(self.stop(), name="cfs-panic-stop")
+            self._bg.add(task)
+            task.add_done_callback(self._bg.discard)
 
     def _on_connection_event(self, ev: Event) -> None:
         if ev.data.get("state") != ConnectionState.DEGRADED.value:
