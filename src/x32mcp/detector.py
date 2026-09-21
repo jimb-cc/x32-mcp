@@ -26,8 +26,8 @@ testable predicates. Every constant below is a physical quantity with a stated o
 ``DetectorConfig`` and the report ``DESIGN.md`` that accompanies this branch.
 
 The model in one paragraph. A *line* is a local spectral maximum that is narrow (a lone sinusoid leaks
-only through the analyser's own skirts, so it stands ≥10 dB clear of the bands two either side) and
-prominent over the local median. Lines are tracked frame to frame by their power centroid (sub-band
+only through the analyser's own skirts, so at least one of the two bands beyond each flank is ≥8 dB
+down) and prominent over the local median. Lines are tracked frame to frame by their power centroid (sub-band
 frequency). For every track the detector knows (a) how it was **born** — already there when the
 detector armed (``est``), popped up at full level inside one analyser rise time (``pop`` = an
 instrument onset), or **grew** dB-linearly out of the bed over several frames (the signature of a loop
@@ -45,7 +45,8 @@ removes the M7 40/80 Hz false positives: an instant bass onset seen through a 2.
 0.4 s ramp (analyser brief §1), so no ramp shorter than that is admissible evidence at that frequency.
 
 Decision (per track, per frame; first matching rule emits; a track once emitted is re-emitted every
-``cooldown_s`` while it is still present and not decaying so ``cfs`` can deepen the notch):
+``cooldown_s`` while it is still present at the level it was reported at, so ``cfs`` can deepen the notch,
+and a reported ring that re-grows from lower down after a partial cut is reported again as ``regrow``):
 
 * ``CLIP``   peak ≥ ``clip_level_db`` (the 0.0 dB clip flag) on a narrow line for ``loud_frames`` frames.
 * ``LOUD``   narrow, family-less (family ignored above ``family_escape_level_db``: a clipping howl grows odd
@@ -1372,13 +1373,11 @@ class FeedbackDetector:
         # birth class: an onset that arrived in one step is an instrument (or a >500 dB/s ring — irreducible)
         if t.birth == "new" and t.frames >= 2 and t.pre_level_db is not None:
             total = lp - t.pre_level_db
-            first = t.levels[0] - t.pre_level_db if len(t.levels) <= 6 else 0.0
             steps = [t.levels[0] - t.pre_level_db] + [b - a for a, b in zip(t.levels, t.levels[1:])]
             if total >= 6.0 and max(steps[:3]) >= cfg.pop_step_frac * total and t.frames <= 4:
                 t.birth = "pop"
             elif t.frames >= 8 and total < 3.0:
                 t.birth = "static"
-            del first
 
     # -- classification -----------------------------------------------------------------------------
 
