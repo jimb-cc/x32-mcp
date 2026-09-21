@@ -140,8 +140,8 @@ class DetectorConfig:
     # -- grouping ----------------------------------------------------------------------------------
     harmonic_tol_bands: float = 0.3      # |partner centroid - predicted| (a semitone is 0.83 band; exact partials of one
                                          # source agree to ~0.1-0.2 band after interpolation)
-    partner_window_db: float = 10.0      # a partner ABOVE the candidate counts if within this of its level (howl
-                                         # distortion products sit >= 10-30 dB down; musical partials 0..-10)
+    partner_window_db: float = 12.0      # a partner ABOVE the candidate counts if within this of its level (howl
+                                         # distortion products sit >= 12-30 dB down; musical partials 0..-12)
     sub_window_db: float = 15.0          # a would-be fundamental below the candidate may be this much quieter
     family_ratio: float = 0.4            # family on >= this fraction of the window => musical
     family_window_frames: int = 20
@@ -155,7 +155,8 @@ class DetectorConfig:
     glide_bands: float = 0.75            # window median drifted this far from the birth centroid => moved
     strong_prominence_db: float = 18.0   # TIER A for at_arm/slow lines (with steadiness)
     loud_level_db: float = -12.0         # a narrow stationary line this close to full scale is cut regardless
-    clip_level_db: float = -0.5          # RTA 0.0 = "clipping occurred" (meters.md §4.2)
+    clip_level_db: float = -3.0          # RTA 0.0 = "clipping occurred" (meters.md §4.2); a narrow line within 3 dB of
+                                         # full scale at a pre-fader bus tap is treated the same (howl or mis-set gain)
     ramp_min_step_db: float = 0.4        # per-frame increment that counts toward a ramp
     ramp_strong_frames: int = 6          # >= this many linear increments and still rising => TIER A
     ramp_strong_rise_db: float = 24.0    # or this much total linear rise from the floor => TIER A
@@ -386,6 +387,7 @@ class Candidate:
     last_moving_frame: int = -10**9
     last_comove_frame: int = -10**9
     last_decay_frame: int = -10**9
+    last_frozen_frame: int = -10**9
     probe_over: list[float] = field(default_factory=list)   # (response - step) per master step seen
     probe_steps_done: int = 0
     state: str = "track"            # track | candidate | musical | feedback
@@ -831,6 +833,29 @@ class FeedbackDetector:
                 used_t.add(ti)
                 used_p.add(pi)
                 self._extend(self._tracks[ti], peaks[pi], ts, ref)
+        # pass 3: a peak inside the span an unmatched track has recently swung over (+-0.35) is that track's line at
+        # the other end of its vibrato, not a new object
+        for ti, t in enumerate(self._tracks):
+            if ti in used_t or len(t.centroids) < 3:
+                continue
+            rc = t.centroids[-8:]
+            lo_c = min(rc) - 0.35
+            hi_c = max(rc) + 0.35
+            if hi_c - lo_c < 0.9:
+                continue
+            last_cp = t.cpows[-1] if t.cpows else -128.0
+            best_pi = None
+            best_d = 9.0
+            for pi, pk in enumerate(peaks):
+                if pi in used_p or not (lo_c <= pk.centroid <= hi_c) or pk.cpow - last_cp > 6.0:
+                    continue
+                d = abs(pk.centroid - t.centroid)
+                if d < best_d:
+                    best_pi, best_d = pi, d
+            if best_pi is not None and best_d <= 1.5:
+                used_t.add(ti)
+                used_p.add(best_pi)
+                self._extend(t, peaks[best_pi], ts, ref)
         survivors: list[Candidate] = []
         self._recent_dead = [(f, d) for f, d in self._recent_dead if self.frames_seen - f <= 3]
         for ti, t in enumerate(self._tracks):
@@ -1144,6 +1169,12 @@ class FeedbackDetector:
 
         n_inc, rise, rslope, still, ref_change, linear, strict_linear = getattr(c, "_rs", None) or self._ramp_stats(c)
         ramp_ok = linear and n_inc >= 3 and rise >= 4.0 and ref_change <= 0.5 * rise and rslope >= cfg.growth_min_db_per_s
+        if ramp_ok and len(c.cpmin) >= 4:
+            # the lower envelope must climb too: vibrato/flutter riding the skirts can fit a rising line through
+            # the raw cluster power while the floor of the wobble goes nowhere
+            k_ = min(len(c.cpmin), n_inc + 1)
+            if k_ >= 4 and _ls_slope(c.ts_list[-k_:], c.cpmin[-k_:]) < 0.4 * rslope:
+                ramp_ok = False
         if ramp_ok:
             # ensemble swell: >= 2 OTHER lines ramping at a similar rate right now = a pad/crescendo/fader move
             # (rings start alone; two simultaneous rings are rare, three unheard of) [analyser brief §5]
@@ -1182,8 +1213,8 @@ class FeedbackDetector:
                 fam_ratio = sum(1 for f in famwin if f) / max(1, len(famwin))
                 family = fam_ratio >= cfg.family_ratio
 
-        # steadiness over the tier-B window (cluster power)
-        wlv = c.cpmin[-K2:]
+        # steadiness over the tier-B window (cluster power, lower envelope)
+        wlv = c.cpmin[-cfg.watch_confirm_frames:]
         steady = len(wlv) >= 2 and (max(wlv) - min(wlv)) <= cfg.plateau_range_db
         # slow rise (marginal loop, 1-6 dB/s): judged over >= 1.2 s so tremolo/Leslie AM (0.8-7 Hz) cannot pose as one
         LW = 2 * K2
@@ -1217,7 +1248,8 @@ class FeedbackDetector:
             self._probe(c)
         po = c.probe_over
         probe_strong = bool(po) and (po[-1] >= 2.0 * cfg.probe_over_db or (len(po) >= 2 and po[-1] >= cfg.probe_over_db and po[-2] >= 0.6 * cfg.probe_over_db))
-        probe_linear = len(po) >= 2 and all(abs(x) <= 0.8 for x in po[-2:]) and not probe_strong
+        probe_mild = bool(po) and po[-1] >= 0.5 * cfg.probe_over_db
+        probe_linear = len(po) >= 1 and all(abs(x) <= 0.8 for x in po[-2:]) and not probe_strong
 
         # -- gates -------------------------------------------------------------------------------
         level = c.level_db
@@ -1240,7 +1272,15 @@ class FeedbackDetector:
         if clip:
             family = False       # the desk's clip flag: a howl at full scale grows odd harmonics; nothing narrow that
                                  # loud is left alone because of them (loop brief §2.2, analyser brief §4.3)
-        base = in_win and level_ok and prom_ok and narrow_ok and age_ok and not family and stat_k1
+        # frozen: a live line through a real analyser never repeats its value bit-for-bit frame after frame (noise,
+        # wander, quantisation jitter); a peak-hold display or a stuck meter does. Not evidence of a loop.
+        lv8 = c.levels[-8:]
+        frozen_now = (not clip and len(lv8) >= 7 and sum(1 for a_, b_ in zip(lv8, lv8[1:]) if a_ == b_) >= 6)
+        if frozen_now:
+            self.flags.add("FROZEN_LINES")
+            c.last_frozen_frame = fno
+        frozen = fno - c.last_frozen_frame < cfg.watch_confirm_frames
+        base = in_win and level_ok and prom_ok and narrow_ok and age_ok and not family and stat_k1 and not frozen
         settled = base and not glide          # steady-state tiers also want no recent pitch step
         musical = family or moving_recent or comove_recent
         c.state = "musical" if musical else ("candidate" if (prom_ok and level_ok) else "track")
@@ -1264,12 +1304,17 @@ class FeedbackDetector:
                   and steady and not musical and not decay_recent and not probe_linear
                   and _median_small(list(proms)) >= cfg.strong_prominence_db):
                 tier = "A:prominent"
-            elif (c.onset in ("at_arm", "slow", "ramp") and c.frames >= K2 and stat_k2 and not musical
+            elif (c.onset in ("at_arm", "slow", "ramp") and c.frames >= cfg.watch_confirm_frames
+                  and self._stationary(c, cfg.watch_confirm_frames)[0] and not musical
                   and not decay_recent and not probe_linear
                   and (slow_rise or ramp_ok
-                       or (steady and steady_level_ok and (ringout or prom_med >= cfg.strong_prominence_db)))):
-                # watch: a steady line with no growth evidence must at least be strongly prominent (a 12-18 dB
-                # plateau that was never seen to grow is published as a candidate, not cut: loop brief §4.3 tier B/C)
+                       or (steady and steady_level_ok
+                           and (prom_med >= cfg.strong_prominence_db
+                                or (ringout and (not self._steps or probe_mild)))))):
+                # a steady line with no growth evidence: in watch it must at least be strongly prominent (a 12-18 dB
+                # plateau never seen to grow is published as a candidate, not cut: loop brief §4.3 tier B/C); in
+                # ring_out, where the server steps the gain, it must have answered the last step super-linearly
+                # (anything at the tap that follows the master <= 1 dB/dB is programme, hum or a driven resonance)
                 tier = "B"
             elif ringout and c.onset == "adult" and c.frames >= K2 and stat_k2 and not musical and not decay_recent \
                     and steady and probe_strong:
@@ -1295,7 +1340,7 @@ class FeedbackDetector:
                                                ("out_of_window", not in_win), ("below_floor", not level_ok),
                                                ("below_gate", not steady_level_ok),
                                                ("not_prominent", not prom_ok), ("broad", not narrow_ok),
-                                               ("probe_linear", probe_linear)) if on)
+                                               ("probe_linear", probe_linear), ("frozen", frozen)) if on)
             return None
         # -- emission with cooldown -----------------------------------------------------------------
         if c.last_emit_ts is not None and ts - c.last_emit_ts < cfg.cooldown_s:
