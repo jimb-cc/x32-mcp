@@ -19,51 +19,64 @@ How the discriminator decides (replaces DESIGN §12's weighted sum; full rationa
 ------------------------------------------------------------------------------------------------------
 Per frame, O(bands + peaks·k):
 
-1. **Peaks.** ``prominence[i] = level[i] - median(level[i±1..±neighbour_bins])``. A band that is a local
-   maximum with prominence >= ``peak_floor_db`` is a *peak*; its sub-band *centroid* is the vertex of the
-   parabola through the dB levels of (i-1, i, i+1) (a tone on a band edge reads -3/-3 dB in two bands and
-   gets centroid i+0.5 from either side, so a split line is ONE object), its *cluster power* is the power
-   sum of the three bands (invariant to centre offset and vibrato), its *narrowness* is
-   ``level[i] - max(level[i±2])`` (a single sinusoid clears the analyser's ±2 skirt by > 20 dB; formant
-   humps, cymbal wash and bed humps do not).
-2. **Harmonic grouping (single frame).** For every peak the partners at ×2, ×3, ×4, ×5 (+10, +15.85, +20,
-   +23.2 bands) are looked up among the *peaks* (presence-as-peak within ``harmonic_tol_bands`` of the
-   predicted centroid and within ``partner_window_db`` of the candidate's level). A peak is *in a family*
-   when it has >= 2 such partners, or when it sits at ×2/×3/×4 above a peak that has at least one OTHER
-   partner (it is somebody's overtone). Two lone lines an exact octave apart (two rings of one rig) are
-   therefore NOT a family: neither has a second partner.
-3. **Tracks.** Peaks with prominence >= ``track_floor_db`` start a :class:`Candidate` track (below the
-   emission threshold, so evidence accumulates before a line becomes "visible"); tracks follow their peak by
-   centroid (±1 band per frame), survive a one-frame gap, and keep short histories of centroid, level,
-   cluster power, prominence, narrowness, the spectrum reference (median of bands 25..85) and the family
-   flag. At birth the band's recent past is back-filled from a frame ring buffer and the **onset is
-   classified**: ``at_arm`` (present when the detector started: no onset information), ``adult`` (arrived at
-   full level within <= 2 frames and stopped: an instrument note, or an LF onset smeared by the analyser's
-   own rise time), ``ramp`` (>= 3 frames of roughly constant dB increments from the floor: exponential
-   regeneration) or ``slow`` (emerged gradually).
-4. **Behaviour over time** (windowed, so a track can change its nature, e.g. a chord tone's band taken over
-   by a ring): *family* (family flag on >= ``family_ratio`` of the last ``family_window_frames``), *moving*
-   (centroid outliers beyond ``centroid_tol_bands``, or a glide), *co-moving* with the spectrum reference
-   (level regresses on the reference with slope ≈ 1: a fader/common-mode move or a note breathing with the
-   mix), *decaying* (raw slope <= -``decay_db_per_s``: plucked/struck notes, killed rings, display release),
-   *steady* (cluster-power range over the window), *ramp* (linear-in-dB rise: frames, total rise, linearity,
-   not explained by the reference), *probe* (ring_out only: response to the server's own master step minus
-   the step; >= ``probe_over_db`` twice, or once by a large margin, is loop-gain dependence; ≈ the step is a
-   linear responder = programme/hum/HVAC).
-5. **Decision** = explicit predicates, no weighted sum. A track must be in the session's frequency window
-   (mode-dependent low edge, LF opt-in), above ``min_level_db``, prominent (>= ``prominence_db``), narrow,
-   stationary and not in a family. Then
-     TIER A (emit now): clip flag; or level >= ``loud_level_db`` held ``confirm_frames``; or a *strong ramp*
-       (>= ``ramp_strong_frames`` linear increments and still rising, or >= ``ramp_strong_rise_db`` total);
-       or (onset at_arm/slow, prominence >= ``strong_prominence_db``, steady, ``confirm_frames`` old);
-       or probe-confirmed (ring_out).
-     TIER B (emit after a clean window of ``watch_confirm_frames`` in watch, ``confirm_frames`` in ring_out):
-       onset not ``adult``, not decaying, not co-moving, steady or slowly rising.
-     An ``adult``-onset line below ``loud_level_db`` is never cut in watch mode (whistle, organ, flute, sine
-     lead are indistinguishable from a compressor-caught fast ring by passive physics; the human owns the
-     fader there) — it is published as a candidate. In ring_out the probe resolves it.
-   Emitted tracks re-emit once per ``cooldown_s`` while they still qualify and are not decaying (so a notch
-   can be deepened, and a killed ring's slowly-releasing display is not re-cut).
+1. **Peaks.** ``prominence[i] = level[i] - median(level[i±1..±neighbour_bins])``; a *cluster prominence*
+   (power of i-1..i+1 over the median of the ring i±2..±4) is taken as well and the larger counts, so a line
+   sitting between two centres (-3/-3 dB in two bands) is not penalised. A local maximum with prominence >=
+   ``peak_floor_db`` is a *peak*; its sub-band *centroid* is the vertex of the parabola through the dB levels of
+   (i-1, i, i+1) (an edge tone gets i+0.5 from either side, so a split line is ONE object), its *cluster power*
+   the power sum of the three bands (invariant to centre offset and vibrato), its *narrowness*
+   ``level[i] - max(level[i±2])`` (a single sinusoid clears the analyser's ±2 skirt by > 20 dB; formant humps,
+   cymbal wash and bed humps do not).
+2. **Tracks.** Peaks with prominence >= ``track_floor_db`` start a :class:`Candidate` track — below the emission
+   threshold, so evidence accumulates before the line is "visible". Tracks follow their peak by centroid
+   (``assoc_tol_bands`` per frame; a wider radius only for a line that visibly swings, and a strong new line a
+   third of a band away starts its OWN track), survive ``max_gap_frames`` masked frames, and keep histories of
+   centroid, level, cluster power (+ its 3-frame lower envelope), prominence, narrowness, the spectrum
+   reference (median of bands 25..85) and the family flag. At birth the band's recent past is back-filled from a
+   frame ring buffer and the **onset is classified**: ``at_arm`` (present when the detector started: no onset
+   information), ``adult`` (reached its level within <= 2 frames of leaving the floor, or arrived gliding: a
+   note, or an LF onset smeared by the analyser's own rise time), ``ramp`` (>= 3 roughly equal dB increments:
+   exponential regeneration) or ``slow``.
+3. **Harmonic grouping (single frame, track-informed).** For each peak the hypotheses "I am the m-th harmonic
+   of f0 = f/m" (m = 1..5) are tested: partials k = 1..6 are predicted at centroid + 10·log2(k/m) bands and
+   looked up among the peaks (within ``harmonic_tol_bands``; a partial ABOVE must be within
+   ``partner_window_db`` of the candidate's level — a howl's own distortion products sit lower —, one BELOW may
+   be louder or ``sub_window_db`` quieter; m >= 4 only under a much louder fundamental). A partner only counts
+   if its track is *compatible*: born within 3 frames (or both at arm) and not diverged since, or envelopes that
+   correlate (co-swell, co-decay, co-vibrato), or too young to judge. Family := some hypothesis finds >= 2
+   partners, or exactly one at an exact position that was born in the same frame (±2) or is co-growing with a
+   constant level difference (organ 8'+4', pad fundamental + H2). Two rings of one rig at an exact ratio start at
+   different moments, grow at unrelated rates and never satisfy these; while such a lone partner is too young to
+   judge, or is itself climbing at comparable level, growth-based cuts are merely *held*.
+4. **Behaviour over time** (windowed, so a track can change its nature — a chord tone's band taken over by a
+   ring re-qualifies after >= 300 ms / >= 8 dB of solitary linear growth, or >= 0.8 s of solitary dB-linear
+   creep): *family* (>= ``family_ratio`` of the last ``family_window_frames``, with a fading lineage memory),
+   *moving* (centroid MAD > ``centroid_mad_bands`` = vibrato, outliers, a glide or pitch step), *co-moving*
+   (lower envelope regresses on the transient-free reference with slope ~1: fader move / note breathing with the
+   mix; also >= 2 other lines ramping at a similar rate = ensemble swell), *decaying* (<= -``decay_db_per_s``),
+   *frozen* (bit-identical for >= 6 of 8 frames: peak-hold display, not a live line), *steady*, *ramp* (run of
+   increments >= ``ramp_min_step_db`` or a least-squares line over 6..16 samples: linear, not decelerating, not
+   one jump, not explained by a rise of the reference floor, lower envelope climbing too), *slow rise*, and in
+   ring_out the *probe*: response to the server's own master step minus the step (>= ``probe_over_db`` =
+   loop-gain dependent; ~0 = programme/hum/driven resonance at a pre-fader tap).
+5. **Decision** — explicit predicates, no weighted sum. Gate: inside the session's frequency window
+   (mode-dependent low edge, LF opt-in), above ``level_floor_db``, visible (prominence reached ``prominence_db``
+   within the last ``confirm_frames``), narrow, stationary over ``confirm_frames``, not in a family, not frozen.
+     TIER A (emit now): level >= ``clip_level_db`` (family ignored); or >= ``loud_level_db`` for
+       ``confirm_frames``; or a *strong ramp* (>= ``ramp_strong_frames`` linear increments and still rising, or
+       >= ``ramp_strong_rise_db``, or >= 4 increments slower than any note attack, or >= 3 even steps at
+       >= ``ramp_fast_db_per_s``) with the centroid stationary over the ramp and no partner pending; or
+       probe-confirmed; or (present at arm, prominence >= ``strong_prominence_db``, steady, above
+       ``min_level_db``).
+     TIER B (emit after a clean ``watch_confirm_frames`` window: not moving, not co-moving, not decaying, no
+       pitch step): onset not ``adult`` AND (slow linear rise, or a ramp, or steady AND (prominence >=
+       ``strong_prominence_db`` in watch | probe response >= 1 dB in ring_out with steps | ring_out without
+       step information)).
+     An ``adult``-onset line below ``loud_level_db`` is never cut in watch mode (whistle, organ, flute and sine
+     lead are indistinguishable from a compressor-caught 2-frame howl by passive physics; the human owns the
+     fader there) — it is published as a candidate; in ring_out the probe resolves it.
+   Emitted tracks re-emit once per ``cooldown_s`` while they still qualify and are not decaying (a notch can be
+   deepened; a killed ring's slowly releasing display is not re-cut).
 
 Optional API used by ``cfs`` when available: ``mode`` ('watch'|'ringout') and ``lf_feedback_possible`` in the
 config or as constructor keywords, :meth:`FeedbackDetector.note_gain_step` (the server's own master step =

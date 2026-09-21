@@ -821,6 +821,53 @@ detector:
   decay_verify_s: 1.5
   decay_verify_frames: 2     # consecutive frames that must show the drop (one dip is RTA noise)
   frame_period_s: 0.05
+  # ---- track / group / classify discriminator (2026-09-21; replaces the weighted sum above, whose keys are
+  # still read for the dashboard confidence figure but no longer decide anything). Every key below has a
+  # default in DetectorConfig; they are listed so the operating point is visible and adjustable per venue.
+  peak_floor_db: 6           # prominence for "present as a peak" (harmonic partners are looked up among peaks)
+  track_floor_db: 8          # prominence at which a line starts being TRACKED (< prominence_db: evidence
+                             # accumulates before the line is visible, so the decision is ready when it is)
+  narrow_db: 9               # level - max(level at +/-2 bands): a single line vs a hump (formant, wash, bed bump)
+  level_floor_db: -72        # nothing quieter is tracked; a line SEEN TO GROW is judged from here, not from
+                             # min_level_db (it will not stay quiet). min_level_db above gates only steady lines.
+  # Frequency window (loop brief 3.4): low edge by mode, high edge for condenser mics; LF opt-in for kick/tom/
+  # acoustic-pickup channels near subs (cfs passes mode and lf_feedback_possible per session).
+  f_low_watch_hz: 160        # programme present; vocal-mic loop gain is 20-30 dB down below this
+  f_low_ringout_hz: 100      # no programme by contract; a missed LF mode is what a ring-out exists to find
+  f_low_lf_hz: 40            # with lf_feedback_possible
+  f_high_hz: 12500           # SM58 dies above 10 k; lav/headset condensers ring at 10-13 k
+  lf_feedback_possible: false
+  # Harmonic grouping: partners at x2..x6 present as peaks within harmonic_tol_bands of the predicted position;
+  # a partner ABOVE the candidate must be within partner_window_db of its level (a howl's own distortion products
+  # sit >= 12-30 dB down), one BELOW may be up to sub_window_db quieter. Family on >= family_ratio of the last
+  # family_window_frames => musical source.
+  harmonic_tol_bands: 0.3
+  partner_window_db: 12
+  sub_window_db: 15
+  family_ratio: 0.4
+  family_window_frames: 20
+  # Behaviour over time
+  confirm_frames: 5          # K1 (250 ms): stationarity / loud confirmation
+  watch_confirm_frames: 15   # K2 (750 ms): clean window a STEADY line needs in feedback_watch before a cut
+  centroid_tol_bands: 0.35   # outlier radius for the sub-band centroid (a semitone is 0.83 band)
+  centroid_mad_bands: 0.15   # median |centroid - median| above this = vibrato (>= +/-25 cents) = programme
+  strong_prominence_db: 18   # a steady line present at arm needs this much to be cut without growth evidence
+  loud_level_db: -10         # a narrow stationary solitary line this close to full scale is cut regardless
+  clip_level_db: -3          # ... and within 3 dB of the clip flag even its (distortion) harmonics are ignored
+  ramp_min_step_db: 0.4      # per-frame increment counted toward a regenerative ramp
+  ramp_strong_frames: 6      # >= 6 linear increments (300 ms) and still rising => cut
+  ramp_strong_rise_db: 24    # or >= 24 dB of linear rise (fast loop)
+  ramp_moderate_db_per_s: 45 # or >= 4 increments if the ramp is slower than any note attack and strictly linear
+  ramp_fast_db_per_s: 100    # or >= 3 even steps of >= 5 dB/frame spanning >= 15 dB (wedge, ~1 dB excess)
+  decay_db_per_s: 3          # a line falling this fast is programme or a killed ring: never (re)cut
+  plateau_range_db: 2.0      # "steady": lower-envelope range over the tier-B window
+  comove_ref_range_db: 1.0   # spectrum reference (median of bands 25..85) must move this much before
+                             # "the line follows the mix/master" can be judged (it then vetoes: common mode)
+  probe_over_db: 2.0         # ring_out: response - step >= this after the server's +1 dB step => loop-gain
+  probe_settle_s: 0.2        # dependent (loop brief 1.5); measured from medians probe_window_s each side,
+  probe_window_s: 0.45       # skipping probe_settle_s after the write
+  max_gap_frames: 5          # a track survives this many frames without its peak (crash/snare masking)
+  assoc_tol_bands: 0.6       # frame-to-frame centroid match radius
 
 ringout:
   step_db: 1.0
