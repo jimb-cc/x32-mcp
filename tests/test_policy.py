@@ -276,11 +276,20 @@ def test_guard_dance(pol):
     assert first.action_summary == "Save scene 12 as 'GravelAxe'"
     empty = pol.guard("scene_save", "Save scene 12 as 'GravelAxe'", payload, "")  # "" counts as no token
     assert isinstance(empty, PendingConfirmation)
-    second = pol.guard("scene_save", "Save scene 12 as 'GravelAxe'", payload, first.confirm_token)
+    with pytest.raises(PolicyError) as ei:  # re-issuing revoked the earlier, unconfirmed token: one live summary per action
+        pol.guard("scene_save", "Save scene 12 as 'GravelAxe'", payload, first.confirm_token)
+    assert ei.value.code == "BAD_TOKEN"
+    latest = pol.guard("scene_save", "Save scene 12 as 'GravelAxe'", payload, None)
+    second = pol.guard("scene_save", "Save scene 12 as 'GravelAxe'", payload, latest.confirm_token)
     assert second == payload and not isinstance(second, PendingConfirmation)
     with pytest.raises(PolicyError) as ei:  # single use
-        pol.guard("scene_save", "…", payload, first.confirm_token)
+        pol.guard("scene_save", "…", payload, latest.confirm_token)
     assert ei.value.code == "BAD_TOKEN"
+    # tokens for DIFFERENT actions coexist
+    a = pol.guard("scene_save", "Save 1", {"index": 1}, None)
+    b = pol.guard("set_main_fader", "Main to -6", {"db": -6.0}, None)
+    assert pol.guard("scene_save", "Save 1", {"index": 1}, a.confirm_token) == {"index": 1}
+    assert pol.guard("set_main_fader", "Main to -6", {"db": -6.0}, b.confirm_token) == {"db": -6.0}
 
 
 def test_guard_rejects_token_for_other_action_or_payload(pol):
@@ -297,9 +306,24 @@ def test_guard_rejects_token_for_other_action_or_payload(pol):
         pol.guard("scene_recall", "Recall scene 8", {"index": 8}, pend.confirm_token)
     assert ei.value.code == "BAD_TOKEN" and "different" in ei.value.message
 
-    # consume_token with expected_action on a token minted without one (require_confirmation) is lenient
+    # a token minted without an action cannot satisfy a guard that names one (no wildcards)
     pend = pol.require_confirmation("x", {"a": 1})
-    assert pol.consume_token(pend.confirm_token, expected_action="anything") == {"a": 1}
+    with pytest.raises(PolicyError) as ei:
+        pol.consume_token(pend.confirm_token, expected_action="anything")
+    assert ei.value.code == "BAD_TOKEN"
+    pend = pol.require_confirmation("x", {"a": 1})
+    assert pol.consume_token(pend.confirm_token) == {"a": 1}  # still redeemable where no action is expected
+
+    # payload comparison is type-exact: True is not 1 is not 1.0 (Python == says otherwise)
+    pend = pol.guard("set_main_mute", "Unmute Main LR", {"which": "st", "muted": True}, None)
+    with pytest.raises(PolicyError):
+        pol.guard("set_main_mute", "Unmute Main LR", {"which": "st", "muted": 1}, pend.confirm_token)
+
+
+def test_outstanding_tokens_are_bounded(pol):
+    for i in range(200):
+        pol.require_confirmation(f"thing {i}", {"i": i})
+    assert pol.pending_confirmations <= 64
 
 
 def test_guard_token_expiry(pol, clock):
