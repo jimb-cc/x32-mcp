@@ -1,0 +1,6594 @@
+{
+ "meta": {
+  "label": "blind closed loop",
+  "seeds": [
+   1,
+   2,
+   3
+  ],
+  "closed_loop": true,
+  "analyser_overrides": {},
+  "scenarios": [
+   "S2a_established_ring_8k",
+   "S2b_established_ring_8k_steep",
+   "S2c_established_clipped_2k4",
+   "S3_ring_during_music",
+   "S6b_ringout_steps_latent_loop",
+   "S9_clipped_howl_fast",
+   "S10_ring_between_bands",
+   "S11a_two_rings",
+   "S11b_two_rings_near_octave",
+   "S12_acoustic_guitar_wedge_ring_196Hz",
+   "S13_slow_ring_3dB_s",
+   "S14_ring_masked_by_cymbal",
+   "S15_long_rta_decay_tails",
+   "S22_speech_ringing_then_feedback",
+   "M1_loud_band_wedge_ring",
+   "M2_quiet_music_ringout_two_modes",
+   "M3_jazz_trio_lav_ring_400Hz",
+   "X7_plateaued_ring_under_music_from_t0",
+   "X8_slow_ring_midband_under_chords",
+   "X9_ring_rta_midpoint_525Hz_speech",
+   "X10_two_rings_exact_octave",
+   "X11_amp_clipped_howl_minus12dBFS",
+   "X12a_master_drop20_raise_channel",
+   "X12b_master_drop20_raise_busmaster",
+   "X13_decay16_jazz_lav_ring",
+   "X14_peakhold_loud_band_wedge_ring",
+   "X16_wedge_ring_315Hz_loud_band",
+   "X17_ring_122Hz_acoustic_guitar_body",
+   "X19_handheld_ring_stalls_and_hops",
+   "X21_reverberant_area_mic_slow_ring",
+   "X22_kick_mic_sub_ring_65Hz",
+   "X23_ringout_quiet_room_two_modes"
+  ],
+  "variant": "blind",
+  "wall_s": 21.98,
+  "detector_config": {
+   "prominence_db": 12.0,
+   "neighbour_bins": 3,
+   "peak_floor_db": 6.0,
+   "track_floor_db": 8.0,
+   "narrow_db": 9.0,
+   "min_level_db": -45.0,
+   "level_floor_db": -72.0,
+   "f_low_watch_hz": 160.0,
+   "f_low_ringout_hz": 100.0,
+   "f_low_lf_hz": 40.0,
+   "f_high_hz": 12500.0,
+   "lf_feedback_possible": false,
+   "mode": "watch",
+   "harmonic_tol_bands": 0.3,
+   "partner_window_db": 12.0,
+   "sub_window_db": 15.0,
+   "family_ratio": 0.4,
+   "family_window_frames": 20,
+   "persistence_frames": 3,
+   "confirm_frames": 5,
+   "watch_confirm_frames": 15,
+   "centroid_tol_bands": 0.35,
+   "centroid_mad_bands": 0.15,
+   "stationary_outlier_frac": 0.25,
+   "glide_bands": 0.75,
+   "strong_prominence_db": 18.0,
+   "loud_level_db": -10.0,
+   "clip_level_db": -3.0,
+   "ramp_min_step_db": 0.4,
+   "ramp_strong_frames": 6,
+   "ramp_strong_rise_db": 24.0,
+   "ramp_moderate_db_per_s": 45.0,
+   "ramp_fast_db_per_s": 100.0,
+   "ramp_linearity": 0.5,
+   "decay_db_per_s": 3.0,
+   "decay_window_frames": 12,
+   "plateau_range_db": 2.0,
+   "ref_lo_band": 25,
+   "ref_hi_band": 85,
+   "comove_ref_range_db": 1.0,
+   "comove_window_frames": 12,
+   "probe_over_db": 2.0,
+   "probe_settle_s": 0.2,
+   "probe_window_s": 0.45,
+   "arm_frames": 4,
+   "assoc_tol_bands": 0.6,
+   "max_gap_frames": 5,
+   "history_frames": 48,
+   "backfill_frames": 16,
+   "max_tracks": 48,
+   "band_tolerance": 1,
+   "cooldown_s": 1.0,
+   "growth_min_db_per_s": 6.0,
+   "growth_ref_db_per_s": 20.0,
+   "growth_max_db_per_s": 60.0,
+   "monotonic_tolerance_db": 1.0,
+   "confidence_threshold": 0.7,
+   "growth_window_frames": 60,
+   "override_prominence_db": 25.0,
+   "override_persistence_frames": 6,
+   "notch_step_db": -3.0,
+   "notch_max_db": -9.0,
+   "notch_budget_default": 6,
+   "merge_adjacent_bands": 1,
+   "decay_verify_db": 6.0,
+   "decay_verify_s": 1.5,
+   "decay_verify_frames": 2,
+   "frame_period_s": 0.05,
+   "weights": {
+    "prominence": 0.3,
+    "persistence": 0.2,
+    "growth": 0.5
+   }
+  }
+ },
+ "summary": [
+  {
+   "scenario": "S2a_established_ring_8k",
+   "seeds": 3,
+   "events": 3,
+   "invisible_events": 0,
+   "tp": 3,
+   "miss": 0,
+   "fp": 0,
+   "fp_geq_bands": [],
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "dup": 0,
+   "cuts": 3,
+   "lat_min_ms": 198.8,
+   "lat_med_ms": 200.3,
+   "lat_max_ms": 201.8,
+   "budget_ms": 300.0,
+   "passed_seeds": 3,
+   "verdict": "PASS"
+  },
+  {
+   "scenario": "S2b_established_ring_8k_steep",
+   "seeds": 3,
+   "events": 3,
+   "invisible_events": 0,
+   "tp": 3,
+   "miss": 0,
+   "fp": 0,
+   "fp_geq_bands": [],
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "dup": 0,
+   "cuts": 3,
+   "lat_min_ms": 198.8,
+   "lat_med_ms": 200.3,
+   "lat_max_ms": 201.8,
+   "budget_ms": 300.0,
+   "passed_seeds": 3,
+   "verdict": "PASS"
+  },
+  {
+   "scenario": "S2c_established_clipped_2k4",
+   "seeds": 3,
+   "events": 3,
+   "invisible_events": 0,
+   "tp": 3,
+   "miss": 0,
+   "fp": 0,
+   "fp_geq_bands": [],
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "dup": 0,
+   "cuts": 3,
+   "lat_min_ms": 97.6,
+   "lat_med_ms": 100.1,
+   "lat_max_ms": 100.2,
+   "budget_ms": 300.0,
+   "passed_seeds": 3,
+   "verdict": "PASS"
+  },
+  {
+   "scenario": "S3_ring_during_music",
+   "seeds": 3,
+   "events": 3,
+   "invisible_events": 0,
+   "tp": 3,
+   "miss": 0,
+   "fp": 0,
+   "fp_geq_bands": [],
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "dup": 0,
+   "cuts": 3,
+   "lat_min_ms": 0.6,
+   "lat_med_ms": 101.8,
+   "lat_max_ms": 351.7,
+   "budget_ms": 300.0,
+   "passed_seeds": 2,
+   "verdict": "FAIL"
+  },
+  {
+   "scenario": "S6b_ringout_steps_latent_loop",
+   "seeds": 3,
+   "events": 3,
+   "invisible_events": 0,
+   "tp": 3,
+   "miss": 0,
+   "fp": 0,
+   "fp_geq_bands": [],
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "dup": 0,
+   "cuts": 3,
+   "lat_min_ms": 97.7,
+   "lat_med_ms": 99.3,
+   "lat_max_ms": 201.6,
+   "budget_ms": 300.0,
+   "passed_seeds": 3,
+   "verdict": "PASS"
+  },
+  {
+   "scenario": "S9_clipped_howl_fast",
+   "seeds": 3,
+   "events": 3,
+   "invisible_events": 0,
+   "tp": 3,
+   "miss": 0,
+   "fp": 0,
+   "fp_geq_bands": [],
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "dup": 0,
+   "cuts": 3,
+   "lat_min_ms": 49.4,
+   "lat_med_ms": 98.7,
+   "lat_max_ms": 150.2,
+   "budget_ms": 300.0,
+   "passed_seeds": 3,
+   "verdict": "PASS"
+  },
+  {
+   "scenario": "S10_ring_between_bands",
+   "seeds": 3,
+   "events": 3,
+   "invisible_events": 0,
+   "tp": 3,
+   "miss": 0,
+   "fp": 0,
+   "fp_geq_bands": [],
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "dup": 0,
+   "cuts": 3,
+   "lat_min_ms": 147.7,
+   "lat_med_ms": 200.4,
+   "lat_max_ms": 251.3,
+   "budget_ms": 300.0,
+   "passed_seeds": 3,
+   "verdict": "PASS"
+  },
+  {
+   "scenario": "S11a_two_rings",
+   "seeds": 3,
+   "events": 6,
+   "invisible_events": 0,
+   "tp": 6,
+   "miss": 0,
+   "fp": 0,
+   "fp_geq_bands": [],
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "dup": 0,
+   "cuts": 6,
+   "lat_min_ms": 51.8,
+   "lat_med_ms": 99.75,
+   "lat_max_ms": 202.5,
+   "budget_ms": 300.0,
+   "passed_seeds": 3,
+   "verdict": "PASS"
+  },
+  {
+   "scenario": "S11b_two_rings_near_octave",
+   "seeds": 3,
+   "events": 6,
+   "invisible_events": 0,
+   "tp": 6,
+   "miss": 0,
+   "fp": 0,
+   "fp_geq_bands": [],
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "dup": 0,
+   "cuts": 6,
+   "lat_min_ms": 47.6,
+   "lat_med_ms": 174.39999999999998,
+   "lat_max_ms": 1451.2,
+   "budget_ms": 300.0,
+   "passed_seeds": 2,
+   "verdict": "FAIL"
+  },
+  {
+   "scenario": "S12_acoustic_guitar_wedge_ring_196Hz",
+   "seeds": 3,
+   "events": 3,
+   "invisible_events": 0,
+   "tp": 3,
+   "miss": 0,
+   "fp": 0,
+   "fp_geq_bands": [],
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "dup": 0,
+   "cuts": 3,
+   "lat_min_ms": 402.0,
+   "lat_med_ms": 451.2,
+   "lat_max_ms": 652.1,
+   "budget_ms": 600.0,
+   "passed_seeds": 2,
+   "verdict": "FAIL"
+  },
+  {
+   "scenario": "S13_slow_ring_3dB_s",
+   "seeds": 3,
+   "events": 3,
+   "invisible_events": 0,
+   "tp": 3,
+   "miss": 0,
+   "fp": 0,
+   "fp_geq_bands": [],
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "dup": 0,
+   "cuts": 3,
+   "lat_min_ms": 0.3,
+   "lat_med_ms": 149.8,
+   "lat_max_ms": 350.6,
+   "budget_ms": 1000.0,
+   "passed_seeds": 3,
+   "verdict": "PASS"
+  },
+  {
+   "scenario": "S14_ring_masked_by_cymbal",
+   "seeds": 3,
+   "events": 3,
+   "invisible_events": 0,
+   "tp": 3,
+   "miss": 0,
+   "fp": 0,
+   "fp_geq_bands": [],
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "dup": 0,
+   "cuts": 3,
+   "lat_min_ms": 47.7,
+   "lat_med_ms": 50.3,
+   "lat_max_ms": 148.3,
+   "budget_ms": 300.0,
+   "passed_seeds": 3,
+   "verdict": "PASS"
+  },
+  {
+   "scenario": "S15_long_rta_decay_tails",
+   "seeds": 3,
+   "events": 3,
+   "invisible_events": 0,
+   "tp": 3,
+   "miss": 0,
+   "fp": 0,
+   "fp_geq_bands": [],
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "dup": 0,
+   "cuts": 3,
+   "lat_min_ms": 1.6,
+   "lat_med_ms": 52.2,
+   "lat_max_ms": 102.1,
+   "budget_ms": 300.0,
+   "passed_seeds": 3,
+   "verdict": "PASS"
+  },
+  {
+   "scenario": "S22_speech_ringing_then_feedback",
+   "seeds": 3,
+   "events": 3,
+   "invisible_events": 0,
+   "tp": 3,
+   "miss": 0,
+   "fp": 0,
+   "fp_geq_bands": [],
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "dup": 0,
+   "cuts": 3,
+   "lat_min_ms": 50.5,
+   "lat_med_ms": 102.0,
+   "lat_max_ms": 251.4,
+   "budget_ms": 300.0,
+   "passed_seeds": 3,
+   "verdict": "PASS"
+  },
+  {
+   "scenario": "M1_loud_band_wedge_ring",
+   "seeds": 3,
+   "events": 3,
+   "invisible_events": 0,
+   "tp": 3,
+   "miss": 0,
+   "fp": 0,
+   "fp_geq_bands": [],
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "dup": 0,
+   "cuts": 3,
+   "lat_min_ms": 49.3,
+   "lat_med_ms": 97.5,
+   "lat_max_ms": 102.0,
+   "budget_ms": 300.0,
+   "passed_seeds": 3,
+   "verdict": "PASS"
+  },
+  {
+   "scenario": "M2_quiet_music_ringout_two_modes",
+   "seeds": 3,
+   "events": 11,
+   "invisible_events": 4,
+   "tp": 11,
+   "miss": 0,
+   "fp": 0,
+   "fp_geq_bands": [],
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "dup": 0,
+   "cuts": 11,
+   "lat_min_ms": -2.4,
+   "lat_med_ms": 47.4,
+   "lat_max_ms": 102.0,
+   "budget_ms": 300.0,
+   "passed_seeds": 3,
+   "verdict": "PASS"
+  },
+  {
+   "scenario": "M3_jazz_trio_lav_ring_400Hz",
+   "seeds": 3,
+   "events": 3,
+   "invisible_events": 0,
+   "tp": 3,
+   "miss": 0,
+   "fp": 0,
+   "fp_geq_bands": [],
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "dup": 0,
+   "cuts": 3,
+   "lat_min_ms": -1.1,
+   "lat_med_ms": 150.1,
+   "lat_max_ms": 201.9,
+   "budget_ms": 300.0,
+   "passed_seeds": 3,
+   "verdict": "PASS"
+  },
+  {
+   "scenario": "X7_plateaued_ring_under_music_from_t0",
+   "seeds": 3,
+   "events": 3,
+   "invisible_events": 0,
+   "tp": 3,
+   "miss": 0,
+   "fp": 0,
+   "fp_geq_bands": [],
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "dup": 0,
+   "cuts": 3,
+   "lat_min_ms": 198.8,
+   "lat_med_ms": 200.3,
+   "lat_max_ms": 201.8,
+   "budget_ms": 1000.0,
+   "passed_seeds": 3,
+   "verdict": "PASS"
+  },
+  {
+   "scenario": "X8_slow_ring_midband_under_chords",
+   "seeds": 3,
+   "events": 3,
+   "invisible_events": 0,
+   "tp": 3,
+   "miss": 0,
+   "fp": 0,
+   "fp_geq_bands": [],
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "dup": 0,
+   "cuts": 3,
+   "lat_min_ms": 502.1,
+   "lat_med_ms": 2000.0,
+   "lat_max_ms": 2501.6,
+   "budget_ms": 1000.0,
+   "passed_seeds": 1,
+   "verdict": "FAIL"
+  },
+  {
+   "scenario": "X9_ring_rta_midpoint_525Hz_speech",
+   "seeds": 3,
+   "events": 3,
+   "invisible_events": 0,
+   "tp": 3,
+   "miss": 0,
+   "fp": 0,
+   "fp_geq_bands": [],
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "dup": 0,
+   "cuts": 3,
+   "lat_min_ms": 898.8,
+   "lat_med_ms": 1099.7,
+   "lat_max_ms": 1101.8,
+   "budget_ms": 300.0,
+   "passed_seeds": 0,
+   "verdict": "FAIL"
+  },
+  {
+   "scenario": "X10_two_rings_exact_octave",
+   "seeds": 3,
+   "events": 6,
+   "invisible_events": 0,
+   "tp": 6,
+   "miss": 0,
+   "fp": 0,
+   "fp_geq_bands": [],
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "dup": 0,
+   "cuts": 6,
+   "lat_min_ms": 48.1,
+   "lat_med_ms": 102.25,
+   "lat_max_ms": 150.4,
+   "budget_ms": 300.0,
+   "passed_seeds": 3,
+   "verdict": "PASS"
+  },
+  {
+   "scenario": "X11_amp_clipped_howl_minus12dBFS",
+   "seeds": 3,
+   "events": 3,
+   "invisible_events": 0,
+   "tp": 3,
+   "miss": 0,
+   "fp": 0,
+   "fp_geq_bands": [],
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "dup": 0,
+   "cuts": 3,
+   "lat_min_ms": 99.9,
+   "lat_med_ms": 848.8,
+   "lat_max_ms": 848.9,
+   "budget_ms": 300.0,
+   "passed_seeds": 1,
+   "verdict": "FAIL"
+  },
+  {
+   "scenario": "X12a_master_drop20_raise_channel",
+   "seeds": 3,
+   "events": 3,
+   "invisible_events": 0,
+   "tp": 3,
+   "miss": 0,
+   "fp": 0,
+   "fp_geq_bands": [],
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "dup": 0,
+   "cuts": 3,
+   "lat_min_ms": 198.8,
+   "lat_med_ms": 200.3,
+   "lat_max_ms": 201.8,
+   "budget_ms": 300.0,
+   "passed_seeds": 3,
+   "verdict": "PASS"
+  },
+  {
+   "scenario": "X12b_master_drop20_raise_busmaster",
+   "seeds": 3,
+   "events": 3,
+   "invisible_events": 0,
+   "tp": 3,
+   "miss": 0,
+   "fp": 0,
+   "fp_geq_bands": [],
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "dup": 0,
+   "cuts": 3,
+   "lat_min_ms": 198.8,
+   "lat_med_ms": 200.3,
+   "lat_max_ms": 201.8,
+   "budget_ms": 300.0,
+   "passed_seeds": 3,
+   "verdict": "PASS"
+  },
+  {
+   "scenario": "X13_decay16_jazz_lav_ring",
+   "seeds": 3,
+   "events": 3,
+   "invisible_events": 0,
+   "tp": 3,
+   "miss": 0,
+   "fp": 0,
+   "fp_geq_bands": [],
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "dup": 0,
+   "cuts": 3,
+   "lat_min_ms": 0.6,
+   "lat_med_ms": 2.2,
+   "lat_max_ms": 101.6,
+   "budget_ms": 600.0,
+   "passed_seeds": 3,
+   "verdict": "PASS"
+  },
+  {
+   "scenario": "X14_peakhold_loud_band_wedge_ring",
+   "seeds": 3,
+   "events": 3,
+   "invisible_events": 0,
+   "tp": 3,
+   "miss": 0,
+   "fp": 0,
+   "fp_geq_bands": [],
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "dup": 0,
+   "cuts": 3,
+   "lat_min_ms": 52.0,
+   "lat_med_ms": 200.1,
+   "lat_max_ms": 202.3,
+   "budget_ms": 300.0,
+   "passed_seeds": 3,
+   "verdict": "PASS"
+  },
+  {
+   "scenario": "X16_wedge_ring_315Hz_loud_band",
+   "seeds": 3,
+   "events": 3,
+   "invisible_events": 0,
+   "tp": 3,
+   "miss": 0,
+   "fp": 0,
+   "fp_geq_bands": [],
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "dup": 0,
+   "cuts": 3,
+   "lat_min_ms": 100.7,
+   "lat_med_ms": 152.6,
+   "lat_max_ms": 203.0,
+   "budget_ms": 300.0,
+   "passed_seeds": 3,
+   "verdict": "PASS"
+  },
+  {
+   "scenario": "X17_ring_122Hz_acoustic_guitar_body",
+   "seeds": 3,
+   "events": 3,
+   "invisible_events": 0,
+   "tp": 0,
+   "miss": 3,
+   "fp": 0,
+   "fp_geq_bands": [],
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "dup": 0,
+   "cuts": 0,
+   "lat_min_ms": null,
+   "lat_med_ms": null,
+   "lat_max_ms": null,
+   "budget_ms": 600.0,
+   "passed_seeds": 0,
+   "verdict": "FAIL"
+  },
+  {
+   "scenario": "X19_handheld_ring_stalls_and_hops",
+   "seeds": 3,
+   "events": 3,
+   "invisible_events": 0,
+   "tp": 3,
+   "miss": 0,
+   "fp": 0,
+   "fp_geq_bands": [],
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "dup": 0,
+   "cuts": 3,
+   "lat_min_ms": 51.3,
+   "lat_med_ms": 248.5,
+   "lat_max_ms": 400.3,
+   "budget_ms": 300.0,
+   "passed_seeds": 2,
+   "verdict": "FAIL"
+  },
+  {
+   "scenario": "X21_reverberant_area_mic_slow_ring",
+   "seeds": 3,
+   "events": 3,
+   "invisible_events": 0,
+   "tp": 3,
+   "miss": 0,
+   "fp": 0,
+   "fp_geq_bands": [],
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "dup": 0,
+   "cuts": 3,
+   "lat_min_ms": 298.2,
+   "lat_med_ms": 298.2,
+   "lat_max_ms": 602.7,
+   "budget_ms": 600.0,
+   "passed_seeds": 2,
+   "verdict": "FAIL"
+  },
+  {
+   "scenario": "X22_kick_mic_sub_ring_65Hz",
+   "seeds": 3,
+   "events": 3,
+   "invisible_events": 0,
+   "tp": 0,
+   "miss": 3,
+   "fp": 0,
+   "fp_geq_bands": [],
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "dup": 0,
+   "cuts": 0,
+   "lat_min_ms": null,
+   "lat_med_ms": null,
+   "lat_max_ms": null,
+   "budget_ms": 1000.0,
+   "passed_seeds": 0,
+   "verdict": "FAIL"
+  },
+  {
+   "scenario": "X23_ringout_quiet_room_two_modes",
+   "seeds": 3,
+   "events": 7,
+   "invisible_events": 0,
+   "tp": 7,
+   "miss": 0,
+   "fp": 0,
+   "fp_geq_bands": [],
+   "early": 2,
+   "tail": 0,
+   "harm": 0,
+   "dup": 0,
+   "cuts": 9,
+   "lat_min_ms": 50.6,
+   "lat_med_ms": 101.5,
+   "lat_max_ms": 300.3,
+   "budget_ms": 300.0,
+   "passed_seeds": 2,
+   "verdict": "FAIL"
+  }
+ ],
+ "runs": [
+  {
+   "scenario": "S2a_established_ring_8k",
+   "seed": 1,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "ring_8k",
+     "freq_hz": 8122.5,
+     "band": 87,
+     "t_onset": 0.0,
+     "t_prom": 0.0,
+     "t_end": 0.4,
+     "peak_level_db": -8.0,
+     "peak_prom_db": 46.4,
+     "established": true,
+     "visible": true
+    }
+   ],
+   "detections": [
+    {
+     "ts": 0.199,
+     "band": 87,
+     "freq_hz": 8122.5,
+     "confidence": 0.7,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 27,
+     "level_db": -8.07,
+     "prominence_db": 46.3,
+     "slope_db_per_s": -0.12
+    }
+   ],
+   "tp": 1,
+   "miss": 0,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [
+    198.8
+   ],
+   "cuts": [
+    {
+     "ts": 0.199,
+     "geq_band": 27,
+     "gain_db": -3.0
+    }
+   ],
+   "passed": true,
+   "latency_budget_ms": 300.0,
+   "wall_s": 0.094
+  },
+  {
+   "scenario": "S2a_established_ring_8k",
+   "seed": 2,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "ring_8k",
+     "freq_hz": 8122.5,
+     "band": 87,
+     "t_onset": 0.0,
+     "t_prom": 0.0,
+     "t_end": 0.4,
+     "peak_level_db": -8.0,
+     "peak_prom_db": 46.6,
+     "established": true,
+     "visible": true
+    }
+   ],
+   "detections": [
+    {
+     "ts": 0.2,
+     "band": 87,
+     "freq_hz": 8122.5,
+     "confidence": 0.7,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 27,
+     "level_db": -7.81,
+     "prominence_db": 46.5,
+     "slope_db_per_s": -0.39
+    }
+   ],
+   "tp": 1,
+   "miss": 0,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [
+    200.3
+   ],
+   "cuts": [
+    {
+     "ts": 0.2,
+     "geq_band": 27,
+     "gain_db": -3.0
+    }
+   ],
+   "passed": true,
+   "latency_budget_ms": 300.0,
+   "wall_s": 0.097
+  },
+  {
+   "scenario": "S2a_established_ring_8k",
+   "seed": 3,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "ring_8k",
+     "freq_hz": 8122.5,
+     "band": 87,
+     "t_onset": 0.0,
+     "t_prom": 0.0,
+     "t_end": 0.4,
+     "peak_level_db": -8.0,
+     "peak_prom_db": 46.4,
+     "established": true,
+     "visible": true
+    }
+   ],
+   "detections": [
+    {
+     "ts": 0.202,
+     "band": 87,
+     "freq_hz": 8122.5,
+     "confidence": 0.7,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 27,
+     "level_db": -8.13,
+     "prominence_db": 45.98,
+     "slope_db_per_s": -1.07
+    }
+   ],
+   "tp": 1,
+   "miss": 0,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [
+    201.8
+   ],
+   "cuts": [
+    {
+     "ts": 0.202,
+     "geq_band": 27,
+     "gain_db": -3.0
+    }
+   ],
+   "passed": true,
+   "latency_budget_ms": 300.0,
+   "wall_s": 0.101
+  },
+  {
+   "scenario": "S2b_established_ring_8k_steep",
+   "seed": 1,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "ring_8k",
+     "freq_hz": 8122.5,
+     "band": 87,
+     "t_onset": 0.0,
+     "t_prom": 0.0,
+     "t_end": 0.4,
+     "peak_level_db": -8.0,
+     "peak_prom_db": 54.7,
+     "established": true,
+     "visible": true
+    }
+   ],
+   "detections": [
+    {
+     "ts": 0.199,
+     "band": 87,
+     "freq_hz": 8122.5,
+     "confidence": 0.7,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 27,
+     "level_db": -7.94,
+     "prominence_db": 54.37,
+     "slope_db_per_s": 0.21
+    }
+   ],
+   "tp": 1,
+   "miss": 0,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [
+    198.8
+   ],
+   "cuts": [
+    {
+     "ts": 0.199,
+     "geq_band": 27,
+     "gain_db": -3.0
+    }
+   ],
+   "passed": true,
+   "latency_budget_ms": 300.0,
+   "wall_s": 0.096
+  },
+  {
+   "scenario": "S2b_established_ring_8k_steep",
+   "seed": 2,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "ring_8k",
+     "freq_hz": 8122.5,
+     "band": 87,
+     "t_onset": 0.0,
+     "t_prom": 0.0,
+     "t_end": 0.35,
+     "peak_level_db": -8.0,
+     "peak_prom_db": 56.5,
+     "established": true,
+     "visible": true
+    }
+   ],
+   "detections": [
+    {
+     "ts": 0.2,
+     "band": 87,
+     "freq_hz": 8122.5,
+     "confidence": 0.7,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 27,
+     "level_db": -7.78,
+     "prominence_db": 54.95,
+     "slope_db_per_s": 0.76
+    }
+   ],
+   "tp": 1,
+   "miss": 0,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [
+    200.3
+   ],
+   "cuts": [
+    {
+     "ts": 0.2,
+     "geq_band": 27,
+     "gain_db": -3.0
+    }
+   ],
+   "passed": true,
+   "latency_budget_ms": 300.0,
+   "wall_s": 0.096
+  },
+  {
+   "scenario": "S2b_established_ring_8k_steep",
+   "seed": 3,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "ring_8k",
+     "freq_hz": 8122.5,
+     "band": 87,
+     "t_onset": 0.0,
+     "t_prom": 0.0,
+     "t_end": 0.4,
+     "peak_level_db": -8.0,
+     "peak_prom_db": 54.3,
+     "established": true,
+     "visible": true
+    }
+   ],
+   "detections": [
+    {
+     "ts": 0.202,
+     "band": 87,
+     "freq_hz": 8122.5,
+     "confidence": 0.7,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 27,
+     "level_db": -7.84,
+     "prominence_db": 53.92,
+     "slope_db_per_s": 0.43
+    }
+   ],
+   "tp": 1,
+   "miss": 0,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [
+    201.8
+   ],
+   "cuts": [
+    {
+     "ts": 0.202,
+     "geq_band": 27,
+     "gain_db": -3.0
+    }
+   ],
+   "passed": true,
+   "latency_budget_ms": 300.0,
+   "wall_s": 0.095
+  },
+  {
+   "scenario": "S2c_established_clipped_2k4",
+   "seed": 1,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "howl_clip",
+     "freq_hz": 2405.0,
+     "band": 69,
+     "t_onset": 0.0,
+     "t_prom": 0.0,
+     "t_end": 0.4,
+     "peak_level_db": 0.0,
+     "peak_prom_db": 46.6,
+     "established": true,
+     "visible": true
+    }
+   ],
+   "detections": [
+    {
+     "ts": 0.1,
+     "band": 69,
+     "freq_hz": 2397.6,
+     "confidence": 0.7,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 22,
+     "level_db": -1.69,
+     "prominence_db": 46.43,
+     "slope_db_per_s": -0.0
+    }
+   ],
+   "tp": 1,
+   "miss": 0,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [
+    100.1
+   ],
+   "cuts": [
+    {
+     "ts": 0.1,
+     "geq_band": 22,
+     "gain_db": -3.0
+    }
+   ],
+   "passed": true,
+   "latency_budget_ms": 300.0,
+   "wall_s": 0.097
+  },
+  {
+   "scenario": "S2c_established_clipped_2k4",
+   "seed": 2,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "howl_clip",
+     "freq_hz": 2405.0,
+     "band": 69,
+     "t_onset": 0.0,
+     "t_prom": 0.0,
+     "t_end": 0.4,
+     "peak_level_db": 0.0,
+     "peak_prom_db": 46.5,
+     "established": true,
+     "visible": true
+    }
+   ],
+   "detections": [
+    {
+     "ts": 0.098,
+     "band": 69,
+     "freq_hz": 2397.6,
+     "confidence": 0.7,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 22,
+     "level_db": -1.69,
+     "prominence_db": 46.46,
+     "slope_db_per_s": 0.0
+    }
+   ],
+   "tp": 1,
+   "miss": 0,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [
+    97.6
+   ],
+   "cuts": [
+    {
+     "ts": 0.098,
+     "geq_band": 22,
+     "gain_db": -3.0
+    }
+   ],
+   "passed": true,
+   "latency_budget_ms": 300.0,
+   "wall_s": 0.097
+  },
+  {
+   "scenario": "S2c_established_clipped_2k4",
+   "seed": 3,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "howl_clip",
+     "freq_hz": 2405.0,
+     "band": 69,
+     "t_onset": 0.0,
+     "t_prom": 0.0,
+     "t_end": 0.4,
+     "peak_level_db": 0.0,
+     "peak_prom_db": 46.6,
+     "established": true,
+     "visible": true
+    }
+   ],
+   "detections": [
+    {
+     "ts": 0.1,
+     "band": 69,
+     "freq_hz": 2397.6,
+     "confidence": 0.7,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 22,
+     "level_db": -1.69,
+     "prominence_db": 46.44,
+     "slope_db_per_s": 0.0
+    }
+   ],
+   "tp": 1,
+   "miss": 0,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [
+    100.2
+   ],
+   "cuts": [
+    {
+     "ts": 0.1,
+     "geq_band": 22,
+     "gain_db": -3.0
+    }
+   ],
+   "passed": true,
+   "latency_budget_ms": 300.0,
+   "wall_s": 0.097
+  },
+  {
+   "scenario": "S3_ring_during_music",
+   "seed": 1,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "ring_3k15",
+     "freq_hz": 3122.6,
+     "band": 73,
+     "t_onset": 4.0,
+     "t_prom": 4.85,
+     "t_end": 5.4,
+     "peak_level_db": -23.3,
+     "peak_prom_db": 14.7,
+     "established": false,
+     "visible": true
+    }
+   ],
+   "detections": [
+    {
+     "ts": 5.202,
+     "band": 73,
+     "freq_hz": 3085.8,
+     "confidence": 0.717,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 23,
+     "level_db": -24.32,
+     "prominence_db": 11.36,
+     "slope_db_per_s": 33.18
+    }
+   ],
+   "tp": 1,
+   "miss": 0,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [
+    351.7
+   ],
+   "cuts": [
+    {
+     "ts": 5.202,
+     "geq_band": 23,
+     "gain_db": -3.0
+    }
+   ],
+   "passed": false,
+   "latency_budget_ms": 300.0,
+   "wall_s": 0.167
+  },
+  {
+   "scenario": "S3_ring_during_music",
+   "seed": 2,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "ring_3k15",
+     "freq_hz": 3122.6,
+     "band": 73,
+     "t_onset": 4.0,
+     "t_prom": 4.95,
+     "t_end": 5.05,
+     "peak_level_db": -36.2,
+     "peak_prom_db": 12.2,
+     "established": false,
+     "visible": true
+    }
+   ],
+   "detections": [
+    {
+     "ts": 4.951,
+     "band": 73,
+     "freq_hz": 3081.3,
+     "confidence": 0.7,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 23,
+     "level_db": -37.12,
+     "prominence_db": 12.15,
+     "slope_db_per_s": 13.93
+    }
+   ],
+   "tp": 1,
+   "miss": 0,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [
+    0.6
+   ],
+   "cuts": [
+    {
+     "ts": 4.951,
+     "geq_band": 23,
+     "gain_db": -3.0
+    }
+   ],
+   "passed": true,
+   "latency_budget_ms": 300.0,
+   "wall_s": 0.171
+  },
+  {
+   "scenario": "S3_ring_during_music",
+   "seed": 3,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "ring_3k15",
+     "freq_hz": 3122.6,
+     "band": 73,
+     "t_onset": 4.0,
+     "t_prom": 4.75,
+     "t_end": 5.0,
+     "peak_level_db": -31.0,
+     "peak_prom_db": 17.5,
+     "established": false,
+     "visible": true
+    }
+   ],
+   "detections": [
+    {
+     "ts": 4.852,
+     "band": 73,
+     "freq_hz": 3088.8,
+     "confidence": 0.71,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 23,
+     "level_db": -32.6,
+     "prominence_db": 15.25,
+     "slope_db_per_s": 25.43
+    }
+   ],
+   "tp": 1,
+   "miss": 0,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [
+    101.8
+   ],
+   "cuts": [
+    {
+     "ts": 4.852,
+     "geq_band": 23,
+     "gain_db": -3.0
+    }
+   ],
+   "passed": true,
+   "latency_budget_ms": 300.0,
+   "wall_s": 0.171
+  },
+  {
+   "scenario": "S6b_ringout_steps_latent_loop",
+   "seed": 1,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "latent_2k5",
+     "freq_hz": 2500.0,
+     "band": 70,
+     "t_onset": 12.5,
+     "t_prom": 12.65,
+     "t_end": 12.9,
+     "peak_level_db": -29.8,
+     "peak_prom_db": 19.1,
+     "established": false,
+     "visible": true
+    }
+   ],
+   "detections": [
+    {
+     "ts": 12.748,
+     "band": 70,
+     "freq_hz": 2497.8,
+     "confidence": 0.8,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 22,
+     "level_db": -32.39,
+     "prominence_db": 15.94,
+     "slope_db_per_s": 20.09
+    }
+   ],
+   "tp": 1,
+   "miss": 0,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [
+    97.7
+   ],
+   "cuts": [
+    {
+     "ts": 12.748,
+     "geq_band": 22,
+     "gain_db": -3.0
+    }
+   ],
+   "passed": true,
+   "latency_budget_ms": 300.0,
+   "wall_s": 0.319
+  },
+  {
+   "scenario": "S6b_ringout_steps_latent_loop",
+   "seed": 2,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "latent_2k5",
+     "freq_hz": 2500.0,
+     "band": 70,
+     "t_onset": 12.5,
+     "t_prom": 12.55,
+     "t_end": 12.9,
+     "peak_level_db": -30.6,
+     "peak_prom_db": 21.3,
+     "established": false,
+     "visible": true
+    }
+   ],
+   "detections": [
+    {
+     "ts": 12.752,
+     "band": 70,
+     "freq_hz": 2496.8,
+     "confidence": 0.8,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 22,
+     "level_db": -32.98,
+     "prominence_db": 17.43,
+     "slope_db_per_s": 21.45
+    }
+   ],
+   "tp": 1,
+   "miss": 0,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [
+    201.6
+   ],
+   "cuts": [
+    {
+     "ts": 12.752,
+     "geq_band": 22,
+     "gain_db": -3.0
+    }
+   ],
+   "passed": true,
+   "latency_budget_ms": 300.0,
+   "wall_s": 0.351
+  },
+  {
+   "scenario": "S6b_ringout_steps_latent_loop",
+   "seed": 3,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "latent_2k5",
+     "freq_hz": 2500.0,
+     "band": 70,
+     "t_onset": 12.5,
+     "t_prom": 12.65,
+     "t_end": 12.9,
+     "peak_level_db": -31.0,
+     "peak_prom_db": 20.2,
+     "established": false,
+     "visible": true
+    }
+   ],
+   "detections": [
+    {
+     "ts": 12.749,
+     "band": 70,
+     "freq_hz": 2495.0,
+     "confidence": 0.8,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 22,
+     "level_db": -32.98,
+     "prominence_db": 18.37,
+     "slope_db_per_s": 14.97
+    }
+   ],
+   "tp": 1,
+   "miss": 0,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [
+    99.3
+   ],
+   "cuts": [
+    {
+     "ts": 12.749,
+     "geq_band": 22,
+     "gain_db": -3.0
+    }
+   ],
+   "passed": true,
+   "latency_budget_ms": 300.0,
+   "wall_s": 0.355
+  },
+  {
+   "scenario": "S9_clipped_howl_fast",
+   "seed": 1,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "howl_2k",
+     "freq_hz": 2007.3,
+     "band": 67,
+     "t_onset": 2.0,
+     "t_prom": 2.25,
+     "t_end": 2.5,
+     "peak_level_db": -23.6,
+     "peak_prom_db": 31.3,
+     "established": false,
+     "visible": true
+    }
+   ],
+   "detections": [
+    {
+     "ts": 2.349,
+     "band": 67,
+     "freq_hz": 2019.2,
+     "confidence": 0.7,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 21,
+     "level_db": -29.66,
+     "prominence_db": 26.72,
+     "slope_db_per_s": 111.49
+    }
+   ],
+   "tp": 1,
+   "miss": 0,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [
+    98.7
+   ],
+   "cuts": [
+    {
+     "ts": 2.349,
+     "geq_band": 21,
+     "gain_db": -3.0
+    }
+   ],
+   "passed": true,
+   "latency_budget_ms": 300.0,
+   "wall_s": 0.071
+  },
+  {
+   "scenario": "S9_clipped_howl_fast",
+   "seed": 2,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "howl_2k",
+     "freq_hz": 2007.3,
+     "band": 67,
+     "t_onset": 2.0,
+     "t_prom": 2.25,
+     "t_end": 2.55,
+     "peak_level_db": -22.2,
+     "peak_prom_db": 34.5,
+     "established": false,
+     "visible": true
+    }
+   ],
+   "detections": [
+    {
+     "ts": 2.4,
+     "band": 67,
+     "freq_hz": 2018.0,
+     "confidence": 0.7,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 21,
+     "level_db": -27.91,
+     "prominence_db": 29.18,
+     "slope_db_per_s": 101.93
+    }
+   ],
+   "tp": 1,
+   "miss": 0,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [
+    150.2
+   ],
+   "cuts": [
+    {
+     "ts": 2.4,
+     "geq_band": 21,
+     "gain_db": -3.0
+    }
+   ],
+   "passed": true,
+   "latency_budget_ms": 300.0,
+   "wall_s": 0.072
+  },
+  {
+   "scenario": "S9_clipped_howl_fast",
+   "seed": 3,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "howl_2k",
+     "freq_hz": 2007.3,
+     "band": 67,
+     "t_onset": 2.0,
+     "t_prom": 2.25,
+     "t_end": 2.45,
+     "peak_level_db": -30.8,
+     "peak_prom_db": 27.7,
+     "established": false,
+     "visible": true
+    }
+   ],
+   "detections": [
+    {
+     "ts": 2.299,
+     "band": 67,
+     "freq_hz": 2029.2,
+     "confidence": 0.7,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 21,
+     "level_db": -36.99,
+     "prominence_db": 20.33,
+     "slope_db_per_s": 110.12
+    }
+   ],
+   "tp": 1,
+   "miss": 0,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [
+    49.4
+   ],
+   "cuts": [
+    {
+     "ts": 2.299,
+     "geq_band": 21,
+     "gain_db": -3.0
+    }
+   ],
+   "passed": true,
+   "latency_budget_ms": 300.0,
+   "wall_s": 0.07
+  },
+  {
+   "scenario": "S10_ring_between_bands",
+   "seed": 1,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "ring_edge_2k59",
+     "freq_hz": 2588.2,
+     "band": 71,
+     "t_onset": 1.0,
+     "t_prom": 1.65,
+     "t_end": 2.05,
+     "peak_level_db": -48.1,
+     "peak_prom_db": 16.2,
+     "established": false,
+     "visible": true
+    }
+   ],
+   "detections": [
+    {
+     "ts": 1.901,
+     "band": 71,
+     "freq_hz": 2591.7,
+     "confidence": 0.73,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 22,
+     "level_db": -51.49,
+     "prominence_db": 13.7,
+     "slope_db_per_s": 13.48
+    }
+   ],
+   "tp": 1,
+   "miss": 0,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [
+    251.3
+   ],
+   "cuts": [
+    {
+     "ts": 1.901,
+     "geq_band": 22,
+     "gain_db": -3.0
+    }
+   ],
+   "passed": true,
+   "latency_budget_ms": 300.0,
+   "wall_s": 0.092
+  },
+  {
+   "scenario": "S10_ring_between_bands",
+   "seed": 2,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "ring_edge_2k59",
+     "freq_hz": 2588.2,
+     "band": 71,
+     "t_onset": 1.0,
+     "t_prom": 1.55,
+     "t_end": 1.9,
+     "peak_level_db": -47.6,
+     "peak_prom_db": 16.4,
+     "established": false,
+     "visible": true
+    }
+   ],
+   "detections": [
+    {
+     "ts": 1.75,
+     "band": 70,
+     "freq_hz": 2587.6,
+     "confidence": 0.73,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 22,
+     "level_db": -51.36,
+     "prominence_db": 16.02,
+     "slope_db_per_s": 14.82
+    }
+   ],
+   "tp": 1,
+   "miss": 0,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [
+    200.4
+   ],
+   "cuts": [
+    {
+     "ts": 1.75,
+     "geq_band": 22,
+     "gain_db": -3.0
+    }
+   ],
+   "passed": true,
+   "latency_budget_ms": 300.0,
+   "wall_s": 0.093
+  },
+  {
+   "scenario": "S10_ring_between_bands",
+   "seed": 3,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "ring_edge_2k59",
+     "freq_hz": 2588.2,
+     "band": 71,
+     "t_onset": 1.0,
+     "t_prom": 1.65,
+     "t_end": 1.95,
+     "peak_level_db": -46.8,
+     "peak_prom_db": 17.1,
+     "established": false,
+     "visible": true
+    }
+   ],
+   "detections": [
+    {
+     "ts": 1.798,
+     "band": 70,
+     "freq_hz": 2586.2,
+     "confidence": 0.71,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 22,
+     "level_db": -50.54,
+     "prominence_db": 15.46,
+     "slope_db_per_s": 20.34
+    }
+   ],
+   "tp": 1,
+   "miss": 0,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [
+    147.7
+   ],
+   "cuts": [
+    {
+     "ts": 1.798,
+     "geq_band": 22,
+     "gain_db": -3.0
+    }
+   ],
+   "passed": true,
+   "latency_budget_ms": 300.0,
+   "wall_s": 0.092
+  },
+  {
+   "scenario": "S11a_two_rings",
+   "seed": 1,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "ring_1k25",
+     "freq_hz": 1250.0,
+     "band": 60,
+     "t_onset": 1.0,
+     "t_prom": 2.3,
+     "t_end": 2.7,
+     "peak_level_db": -46.6,
+     "peak_prom_db": 12.5,
+     "established": false,
+     "visible": true
+    },
+    {
+     "ring": 1,
+     "label": "ring_3k55",
+     "freq_hz": 3549.9,
+     "band": 75,
+     "t_onset": 1.6,
+     "t_prom": 2.35,
+     "t_end": 2.7,
+     "peak_level_db": -47.7,
+     "peak_prom_db": 13.2,
+     "established": false,
+     "visible": true
+    }
+   ],
+   "detections": [
+    {
+     "ts": 2.448,
+     "band": 75,
+     "freq_hz": 3534.0,
+     "confidence": 0.72,
+     "verdict": "TP",
+     "ring": 1,
+     "geq_band": 23,
+     "level_db": -48.64,
+     "prominence_db": 13.24,
+     "slope_db_per_s": 16.09
+    },
+    {
+     "ts": 2.503,
+     "band": 60,
+     "freq_hz": 1251.7,
+     "confidence": 0.764,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 19,
+     "level_db": -46.36,
+     "prominence_db": 11.72,
+     "slope_db_per_s": 6.67
+    }
+   ],
+   "tp": 2,
+   "miss": 0,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [
+    202.5,
+    98.5
+   ],
+   "cuts": [
+    {
+     "ts": 2.448,
+     "geq_band": 23,
+     "gain_db": -3.0
+    },
+    {
+     "ts": 2.503,
+     "geq_band": 19,
+     "gain_db": -3.0
+    }
+   ],
+   "passed": true,
+   "latency_budget_ms": 300.0,
+   "wall_s": 0.095
+  },
+  {
+   "scenario": "S11a_two_rings",
+   "seed": 2,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "ring_1k25",
+     "freq_hz": 1250.0,
+     "band": 60,
+     "t_onset": 1.0,
+     "t_prom": 2.1,
+     "t_end": 2.35,
+     "peak_level_db": -46.2,
+     "peak_prom_db": 14.6,
+     "established": false,
+     "visible": true
+    },
+    {
+     "ring": 1,
+     "label": "ring_3k55",
+     "freq_hz": 3549.9,
+     "band": 75,
+     "t_onset": 1.6,
+     "t_prom": 2.2,
+     "t_end": 2.5,
+     "peak_level_db": -50.9,
+     "peak_prom_db": 12.4,
+     "established": false,
+     "visible": true
+    }
+   ],
+   "detections": [
+    {
+     "ts": 2.201,
+     "band": 60,
+     "freq_hz": 1244.1,
+     "confidence": 0.77,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 19,
+     "level_db": -46.23,
+     "prominence_db": 13.88,
+     "slope_db_per_s": 10.92
+    },
+    {
+     "ts": 2.301,
+     "band": 75,
+     "freq_hz": 3539.8,
+     "confidence": 0.702,
+     "verdict": "TP",
+     "ring": 1,
+     "geq_band": 23,
+     "level_db": -51.06,
+     "prominence_db": 11.61,
+     "slope_db_per_s": 11.94
+    }
+   ],
+   "tp": 2,
+   "miss": 0,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [
+    101.2,
+    101.0
+   ],
+   "cuts": [
+    {
+     "ts": 2.201,
+     "geq_band": 19,
+     "gain_db": -3.0
+    },
+    {
+     "ts": 2.301,
+     "geq_band": 23,
+     "gain_db": -3.0
+    }
+   ],
+   "passed": true,
+   "latency_budget_ms": 300.0,
+   "wall_s": 0.095
+  },
+  {
+   "scenario": "S11a_two_rings",
+   "seed": 3,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "ring_1k25",
+     "freq_hz": 1250.0,
+     "band": 60,
+     "t_onset": 1.0,
+     "t_prom": 2.35,
+     "t_end": 2.6,
+     "peak_level_db": -46.7,
+     "peak_prom_db": 13.8,
+     "established": false,
+     "visible": true
+    },
+    {
+     "ring": 1,
+     "label": "ring_3k55",
+     "freq_hz": 3549.9,
+     "band": 75,
+     "t_onset": 1.6,
+     "t_prom": 2.15,
+     "t_end": 2.55,
+     "peak_level_db": -46.3,
+     "peak_prom_db": 14.8,
+     "established": false,
+     "visible": true
+    }
+   ],
+   "detections": [
+    {
+     "ts": 2.248,
+     "band": 75,
+     "freq_hz": 3538.5,
+     "confidence": 0.73,
+     "verdict": "TP",
+     "ring": 1,
+     "geq_band": 23,
+     "level_db": -47.18,
+     "prominence_db": 13.89,
+     "slope_db_per_s": 21.02
+    },
+    {
+     "ts": 2.402,
+     "band": 60,
+     "freq_hz": 1243.3,
+     "confidence": 0.7,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 19,
+     "level_db": -46.88,
+     "prominence_db": 13.78,
+     "slope_db_per_s": 6.66
+    }
+   ],
+   "tp": 2,
+   "miss": 0,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [
+    51.8,
+    97.6
+   ],
+   "cuts": [
+    {
+     "ts": 2.248,
+     "geq_band": 23,
+     "gain_db": -3.0
+    },
+    {
+     "ts": 2.402,
+     "geq_band": 19,
+     "gain_db": -3.0
+    }
+   ],
+   "passed": true,
+   "latency_budget_ms": 300.0,
+   "wall_s": 0.098
+  },
+  {
+   "scenario": "S11b_two_rings_near_octave",
+   "seed": 1,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "ring_1k25",
+     "freq_hz": 1250.0,
+     "band": 60,
+     "t_onset": 1.0,
+     "t_prom": 1.95,
+     "t_end": 2.45,
+     "peak_level_db": -39.3,
+     "peak_prom_db": 18.4,
+     "established": false,
+     "visible": true
+    },
+    {
+     "ring": 1,
+     "label": "ring_2k52",
+     "freq_hz": 2520.0,
+     "band": 70,
+     "t_onset": 1.6,
+     "t_prom": 2.25,
+     "t_end": 3.85,
+     "peak_level_db": -37.5,
+     "peak_prom_db": 24.3,
+     "established": false,
+     "visible": true
+    }
+   ],
+   "detections": [
+    {
+     "ts": 2.298,
+     "band": 60,
+     "freq_hz": 1246.6,
+     "confidence": 0.8,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 19,
+     "level_db": -40.39,
+     "prominence_db": 18.36,
+     "slope_db_per_s": 16.08
+    },
+    {
+     "ts": 3.701,
+     "band": 70,
+     "freq_hz": 2511.9,
+     "confidence": 0.7,
+     "verdict": "TP",
+     "ring": 1,
+     "geq_band": 22,
+     "level_db": -38.03,
+     "prominence_db": 23.03,
+     "slope_db_per_s": 7.27
+    }
+   ],
+   "tp": 2,
+   "miss": 0,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [
+    347.7,
+    1451.2
+   ],
+   "cuts": [
+    {
+     "ts": 2.298,
+     "geq_band": 19,
+     "gain_db": -3.0
+    },
+    {
+     "ts": 3.701,
+     "geq_band": 22,
+     "gain_db": -3.0
+    }
+   ],
+   "passed": false,
+   "latency_budget_ms": 300.0,
+   "wall_s": 0.101
+  },
+  {
+   "scenario": "S11b_two_rings_near_octave",
+   "seed": 2,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "ring_1k25",
+     "freq_hz": 1250.0,
+     "band": 60,
+     "t_onset": 1.0,
+     "t_prom": 2.0,
+     "t_end": 2.35,
+     "peak_level_db": -43.3,
+     "peak_prom_db": 17.3,
+     "established": false,
+     "visible": true
+    },
+    {
+     "ring": 1,
+     "label": "ring_2k52",
+     "freq_hz": 2520.0,
+     "band": 70,
+     "t_onset": 1.6,
+     "t_prom": 2.15,
+     "t_end": 2.35,
+     "peak_level_db": -48.5,
+     "peak_prom_db": 13.1,
+     "established": false,
+     "visible": true
+    }
+   ],
+   "detections": [
+    {
+     "ts": 2.201,
+     "band": 60,
+     "freq_hz": 1245.2,
+     "confidence": 0.77,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 19,
+     "level_db": -44.04,
+     "prominence_db": 16.33,
+     "slope_db_per_s": 16.11
+    },
+    {
+     "ts": 2.201,
+     "band": 70,
+     "freq_hz": 2501.4,
+     "confidence": 0.7,
+     "verdict": "TP",
+     "ring": 1,
+     "geq_band": 22,
+     "level_db": -49.45,
+     "prominence_db": 13.07,
+     "slope_db_per_s": 19.23
+    }
+   ],
+   "tp": 2,
+   "miss": 0,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [
+    201.2,
+    51.2
+   ],
+   "cuts": [
+    {
+     "ts": 2.201,
+     "geq_band": 19,
+     "gain_db": -3.0
+    },
+    {
+     "ts": 2.201,
+     "geq_band": 22,
+     "gain_db": -3.0
+    }
+   ],
+   "passed": true,
+   "latency_budget_ms": 300.0,
+   "wall_s": 0.098
+  },
+  {
+   "scenario": "S11b_two_rings_near_octave",
+   "seed": 3,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "ring_1k25",
+     "freq_hz": 1250.0,
+     "band": 60,
+     "t_onset": 1.0,
+     "t_prom": 1.9,
+     "t_end": 2.1,
+     "peak_level_db": -46.7,
+     "peak_prom_db": 13.2,
+     "established": false,
+     "visible": true
+    },
+    {
+     "ring": 1,
+     "label": "ring_2k52",
+     "freq_hz": 2520.0,
+     "band": 70,
+     "t_onset": 1.6,
+     "t_prom": 2.1,
+     "t_end": 2.4,
+     "peak_level_db": -50.0,
+     "peak_prom_db": 12.4,
+     "established": false,
+     "visible": true
+    }
+   ],
+   "detections": [
+    {
+     "ts": 1.948,
+     "band": 60,
+     "freq_hz": 1250.3,
+     "confidence": 0.75,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 19,
+     "level_db": -46.79,
+     "prominence_db": 12.53,
+     "slope_db_per_s": 9.66
+    },
+    {
+     "ts": 2.248,
+     "band": 70,
+     "freq_hz": 2504.4,
+     "confidence": 0.7,
+     "verdict": "TP",
+     "ring": 1,
+     "geq_band": 22,
+     "level_db": -50.32,
+     "prominence_db": 10.36,
+     "slope_db_per_s": 8.68
+    }
+   ],
+   "tp": 2,
+   "miss": 0,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [
+    47.6,
+    147.6
+   ],
+   "cuts": [
+    {
+     "ts": 1.948,
+     "geq_band": 19,
+     "gain_db": -3.0
+    },
+    {
+     "ts": 2.248,
+     "geq_band": 22,
+     "gain_db": -3.0
+    }
+   ],
+   "passed": true,
+   "latency_budget_ms": 300.0,
+   "wall_s": 0.097
+  },
+  {
+   "scenario": "S12_acoustic_guitar_wedge_ring_196Hz",
+   "seed": 1,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "wedge_196",
+     "freq_hz": 199.7,
+     "band": 34,
+     "t_onset": 4.95,
+     "t_prom": 5.25,
+     "t_end": 6.05,
+     "peak_level_db": -17.4,
+     "peak_prom_db": 33.4,
+     "established": false,
+     "visible": true
+    }
+   ],
+   "detections": [
+    {
+     "ts": 5.902,
+     "band": 34,
+     "freq_hz": 200.6,
+     "confidence": 0.7,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 11,
+     "level_db": -21.59,
+     "prominence_db": 33.09,
+     "slope_db_per_s": 23.05
+    }
+   ],
+   "tp": 1,
+   "miss": 0,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [
+    652.1
+   ],
+   "cuts": [
+    {
+     "ts": 5.902,
+     "geq_band": 11,
+     "gain_db": -3.0
+    }
+   ],
+   "passed": false,
+   "latency_budget_ms": 600.0,
+   "wall_s": 0.329
+  },
+  {
+   "scenario": "S12_acoustic_guitar_wedge_ring_196Hz",
+   "seed": 2,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "wedge_196",
+     "freq_hz": 199.7,
+     "band": 34,
+     "t_onset": 4.95,
+     "t_prom": 5.25,
+     "t_end": 5.8,
+     "peak_level_db": -22.6,
+     "peak_prom_db": 28.1,
+     "established": false,
+     "visible": true
+    }
+   ],
+   "detections": [
+    {
+     "ts": 5.652,
+     "band": 34,
+     "freq_hz": 201.3,
+     "confidence": 0.7,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 11,
+     "level_db": -26.75,
+     "prominence_db": 25.49,
+     "slope_db_per_s": 20.2
+    }
+   ],
+   "tp": 1,
+   "miss": 0,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [
+    402.0
+   ],
+   "cuts": [
+    {
+     "ts": 5.652,
+     "geq_band": 11,
+     "gain_db": -3.0
+    }
+   ],
+   "passed": true,
+   "latency_budget_ms": 600.0,
+   "wall_s": 0.331
+  },
+  {
+   "scenario": "S12_acoustic_guitar_wedge_ring_196Hz",
+   "seed": 3,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "wedge_196",
+     "freq_hz": 199.7,
+     "band": 34,
+     "t_onset": 4.95,
+     "t_prom": 5.25,
+     "t_end": 5.85,
+     "peak_level_db": -23.3,
+     "peak_prom_db": 30.1,
+     "established": false,
+     "visible": true
+    }
+   ],
+   "detections": [
+    {
+     "ts": 5.701,
+     "band": 34,
+     "freq_hz": 201.3,
+     "confidence": 0.73,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 11,
+     "level_db": -27.21,
+     "prominence_db": 27.27,
+     "slope_db_per_s": 18.82
+    }
+   ],
+   "tp": 1,
+   "miss": 0,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [
+    451.2
+   ],
+   "cuts": [
+    {
+     "ts": 5.701,
+     "geq_band": 11,
+     "gain_db": -3.0
+    }
+   ],
+   "passed": true,
+   "latency_budget_ms": 600.0,
+   "wall_s": 0.324
+  },
+  {
+   "scenario": "S13_slow_ring_3dB_s",
+   "seed": 1,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "slow_5k",
+     "freq_hz": 5034.8,
+     "band": 80,
+     "t_onset": 1.0,
+     "t_prom": 8.5,
+     "t_end": 8.65,
+     "peak_level_db": -41.1,
+     "peak_prom_db": 12.2,
+     "established": false,
+     "visible": true
+    }
+   ],
+   "detections": [
+    {
+     "ts": 8.5,
+     "band": 80,
+     "freq_hz": 5014.1,
+     "confidence": 0.7,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 25,
+     "level_db": -40.96,
+     "prominence_db": 12.17,
+     "slope_db_per_s": 2.07
+    }
+   ],
+   "tp": 1,
+   "miss": 0,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [
+    0.3
+   ],
+   "cuts": [
+    {
+     "ts": 8.5,
+     "geq_band": 25,
+     "gain_db": -3.0
+    }
+   ],
+   "passed": true,
+   "latency_budget_ms": 1000.0,
+   "wall_s": 0.178
+  },
+  {
+   "scenario": "S13_slow_ring_3dB_s",
+   "seed": 2,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "slow_5k",
+     "freq_hz": 5034.8,
+     "band": 80,
+     "t_onset": 1.0,
+     "t_prom": 8.9,
+     "t_end": 9.4,
+     "peak_level_db": -41.1,
+     "peak_prom_db": 13.8,
+     "established": false,
+     "visible": true
+    }
+   ],
+   "detections": [
+    {
+     "ts": 9.251,
+     "band": 80,
+     "freq_hz": 5010.4,
+     "confidence": 0.7,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 25,
+     "level_db": -41.13,
+     "prominence_db": 10.43,
+     "slope_db_per_s": 3.59
+    }
+   ],
+   "tp": 1,
+   "miss": 0,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [
+    350.6
+   ],
+   "cuts": [
+    {
+     "ts": 9.251,
+     "geq_band": 25,
+     "gain_db": -3.0
+    }
+   ],
+   "passed": true,
+   "latency_budget_ms": 1000.0,
+   "wall_s": 0.181
+  },
+  {
+   "scenario": "S13_slow_ring_3dB_s",
+   "seed": 3,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "slow_5k",
+     "freq_hz": 5034.8,
+     "band": 80,
+     "t_onset": 1.0,
+     "t_prom": 9.2,
+     "t_end": 9.5,
+     "peak_level_db": -42.6,
+     "peak_prom_db": 12.4,
+     "established": false,
+     "visible": true
+    }
+   ],
+   "detections": [
+    {
+     "ts": 9.35,
+     "band": 80,
+     "freq_hz": 4995.0,
+     "confidence": 0.7,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 25,
+     "level_db": -42.44,
+     "prominence_db": 10.39,
+     "slope_db_per_s": 3.52
+    }
+   ],
+   "tp": 1,
+   "miss": 0,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [
+    149.8
+   ],
+   "cuts": [
+    {
+     "ts": 9.35,
+     "geq_band": 25,
+     "gain_db": -3.0
+    }
+   ],
+   "passed": true,
+   "latency_budget_ms": 1000.0,
+   "wall_s": 0.177
+  },
+  {
+   "scenario": "S14_ring_masked_by_cymbal",
+   "seed": 1,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "ring_4k2",
+     "freq_hz": 4200.0,
+     "band": 77,
+     "t_onset": 2.1,
+     "t_prom": 2.7,
+     "t_end": 3.0,
+     "peak_level_db": -16.3,
+     "peak_prom_db": 20.6,
+     "established": false,
+     "visible": true
+    }
+   ],
+   "detections": [
+    {
+     "ts": 2.848,
+     "band": 77,
+     "freq_hz": 4181.3,
+     "confidence": 0.7,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 24,
+     "level_db": -20.95,
+     "prominence_db": 18.07,
+     "slope_db_per_s": 32.33
+    }
+   ],
+   "tp": 1,
+   "miss": 0,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [
+    148.3
+   ],
+   "cuts": [
+    {
+     "ts": 2.848,
+     "geq_band": 24,
+     "gain_db": -3.0
+    }
+   ],
+   "passed": true,
+   "latency_budget_ms": 300.0,
+   "wall_s": 0.096
+  },
+  {
+   "scenario": "S14_ring_masked_by_cymbal",
+   "seed": 2,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "ring_4k2",
+     "freq_hz": 4200.0,
+     "band": 77,
+     "t_onset": 2.1,
+     "t_prom": 2.8,
+     "t_end": 3.0,
+     "peak_level_db": -20.6,
+     "peak_prom_db": 17.7,
+     "established": false,
+     "visible": true
+    }
+   ],
+   "detections": [
+    {
+     "ts": 2.85,
+     "band": 77,
+     "freq_hz": 4181.4,
+     "confidence": 0.7,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 24,
+     "level_db": -24.93,
+     "prominence_db": 15.35,
+     "slope_db_per_s": 26.15
+    }
+   ],
+   "tp": 1,
+   "miss": 0,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [
+    50.3
+   ],
+   "cuts": [
+    {
+     "ts": 2.85,
+     "geq_band": 24,
+     "gain_db": -3.0
+    }
+   ],
+   "passed": true,
+   "latency_budget_ms": 300.0,
+   "wall_s": 0.095
+  },
+  {
+   "scenario": "S14_ring_masked_by_cymbal",
+   "seed": 3,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "ring_4k2",
+     "freq_hz": 4200.0,
+     "band": 77,
+     "t_onset": 2.1,
+     "t_prom": 2.7,
+     "t_end": 2.9,
+     "peak_level_db": -19.8,
+     "peak_prom_db": 17.0,
+     "established": false,
+     "visible": true
+    }
+   ],
+   "detections": [
+    {
+     "ts": 2.748,
+     "band": 77,
+     "freq_hz": 4183.6,
+     "confidence": 0.7,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 24,
+     "level_db": -23.96,
+     "prominence_db": 14.65,
+     "slope_db_per_s": 31.35
+    }
+   ],
+   "tp": 1,
+   "miss": 0,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [
+    47.7
+   ],
+   "cuts": [
+    {
+     "ts": 2.748,
+     "geq_band": 24,
+     "gain_db": -3.0
+    }
+   ],
+   "passed": true,
+   "latency_budget_ms": 300.0,
+   "wall_s": 0.094
+  },
+  {
+   "scenario": "S15_long_rta_decay_tails",
+   "seed": 1,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "ring_3k15",
+     "freq_hz": 3122.6,
+     "band": 73,
+     "t_onset": 3.0,
+     "t_prom": 3.75,
+     "t_end": 3.9,
+     "peak_level_db": -47.7,
+     "peak_prom_db": 14.3,
+     "established": false,
+     "visible": true
+    }
+   ],
+   "detections": [
+    {
+     "ts": 3.752,
+     "band": 73,
+     "freq_hz": 3081.7,
+     "confidence": 0.7,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 23,
+     "level_db": -48.73,
+     "prominence_db": 13.12,
+     "slope_db_per_s": 19.95
+    }
+   ],
+   "tp": 1,
+   "miss": 0,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [
+    1.6
+   ],
+   "cuts": [
+    {
+     "ts": 3.752,
+     "geq_band": 23,
+     "gain_db": -3.0
+    }
+   ],
+   "passed": true,
+   "latency_budget_ms": 300.0,
+   "wall_s": 0.181
+  },
+  {
+   "scenario": "S15_long_rta_decay_tails",
+   "seed": 2,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "ring_3k15",
+     "freq_hz": 3122.6,
+     "band": 73,
+     "t_onset": 3.0,
+     "t_prom": 3.7,
+     "t_end": 3.95,
+     "peak_level_db": -42.6,
+     "peak_prom_db": 17.8,
+     "established": false,
+     "visible": true
+    }
+   ],
+   "detections": [
+    {
+     "ts": 3.802,
+     "band": 73,
+     "freq_hz": 3082.9,
+     "confidence": 0.72,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 23,
+     "level_db": -44.23,
+     "prominence_db": 16.12,
+     "slope_db_per_s": 24.12
+    }
+   ],
+   "tp": 1,
+   "miss": 0,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [
+    102.1
+   ],
+   "cuts": [
+    {
+     "ts": 3.802,
+     "geq_band": 23,
+     "gain_db": -3.0
+    }
+   ],
+   "passed": true,
+   "latency_budget_ms": 300.0,
+   "wall_s": 0.186
+  },
+  {
+   "scenario": "S15_long_rta_decay_tails",
+   "seed": 3,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "ring_3k15",
+     "freq_hz": 3122.6,
+     "band": 73,
+     "t_onset": 3.0,
+     "t_prom": 3.8,
+     "t_end": 4.0,
+     "peak_level_db": -45.1,
+     "peak_prom_db": 14.7,
+     "established": false,
+     "visible": true
+    }
+   ],
+   "detections": [
+    {
+     "ts": 3.852,
+     "band": 73,
+     "freq_hz": 3096.8,
+     "confidence": 0.72,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 23,
+     "level_db": -46.35,
+     "prominence_db": 13.5,
+     "slope_db_per_s": 17.15
+    }
+   ],
+   "tp": 1,
+   "miss": 0,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [
+    52.2
+   ],
+   "cuts": [
+    {
+     "ts": 3.852,
+     "geq_band": 23,
+     "gain_db": -3.0
+    }
+   ],
+   "passed": true,
+   "latency_budget_ms": 300.0,
+   "wall_s": 0.189
+  },
+  {
+   "scenario": "S22_speech_ringing_then_feedback",
+   "seed": 1,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "lectern_2k8",
+     "freq_hz": 2800.0,
+     "band": 72,
+     "t_onset": 6.0,
+     "t_prom": 6.55,
+     "t_end": 6.85,
+     "peak_level_db": -27.7,
+     "peak_prom_db": 28.3,
+     "established": false,
+     "visible": true
+    }
+   ],
+   "detections": [
+    {
+     "ts": 6.6,
+     "band": 72,
+     "freq_hz": 2837.6,
+     "confidence": 0.71,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 23,
+     "level_db": -31.26,
+     "prominence_db": 21.4,
+     "slope_db_per_s": 53.63
+    }
+   ],
+   "tp": 1,
+   "miss": 0,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [
+    50.5
+   ],
+   "cuts": [
+    {
+     "ts": 6.6,
+     "geq_band": 23,
+     "gain_db": -3.0
+    }
+   ],
+   "passed": true,
+   "latency_budget_ms": 300.0,
+   "wall_s": 0.195
+  },
+  {
+   "scenario": "S22_speech_ringing_then_feedback",
+   "seed": 2,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "lectern_2k8",
+     "freq_hz": 2800.0,
+     "band": 72,
+     "t_onset": 6.0,
+     "t_prom": 6.4,
+     "t_end": 6.75,
+     "peak_level_db": -25.8,
+     "peak_prom_db": 29.6,
+     "established": false,
+     "visible": true
+    }
+   ],
+   "detections": [
+    {
+     "ts": 6.502,
+     "band": 72,
+     "freq_hz": 2826.7,
+     "confidence": 0.7,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 23,
+     "level_db": -29.14,
+     "prominence_db": 23.15,
+     "slope_db_per_s": 43.09
+    }
+   ],
+   "tp": 1,
+   "miss": 0,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [
+    102.0
+   ],
+   "cuts": [
+    {
+     "ts": 6.502,
+     "geq_band": 23,
+     "gain_db": -3.0
+    }
+   ],
+   "passed": true,
+   "latency_budget_ms": 300.0,
+   "wall_s": 0.208
+  },
+  {
+   "scenario": "S22_speech_ringing_then_feedback",
+   "seed": 3,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "lectern_2k8",
+     "freq_hz": 2800.0,
+     "band": 72,
+     "t_onset": 6.0,
+     "t_prom": 6.45,
+     "t_end": 6.9,
+     "peak_level_db": -24.7,
+     "peak_prom_db": 23.8,
+     "established": false,
+     "visible": true
+    }
+   ],
+   "detections": [
+    {
+     "ts": 6.701,
+     "band": 72,
+     "freq_hz": 2826.7,
+     "confidence": 0.72,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 23,
+     "level_db": -27.8,
+     "prominence_db": 19.46,
+     "slope_db_per_s": 46.95
+    }
+   ],
+   "tp": 1,
+   "miss": 0,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [
+    251.4
+   ],
+   "cuts": [
+    {
+     "ts": 6.701,
+     "geq_band": 23,
+     "gain_db": -3.0
+    }
+   ],
+   "passed": true,
+   "latency_budget_ms": 300.0,
+   "wall_s": 0.203
+  },
+  {
+   "scenario": "M1_loud_band_wedge_ring",
+   "seed": 1,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "wedge_2k83",
+     "freq_hz": 2830.6,
+     "band": 72,
+     "t_onset": 5.0,
+     "t_prom": 5.15,
+     "t_end": 5.4,
+     "peak_level_db": -4.0,
+     "peak_prom_db": 31.9,
+     "established": false,
+     "visible": true
+    }
+   ],
+   "detections": [
+    {
+     "ts": 5.248,
+     "band": 72,
+     "freq_hz": 2842.6,
+     "confidence": 0.78,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 23,
+     "level_db": -4.02,
+     "prominence_db": 31.23,
+     "slope_db_per_s": 147.92
+    }
+   ],
+   "tp": 1,
+   "miss": 0,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [
+    97.5
+   ],
+   "cuts": [
+    {
+     "ts": 5.248,
+     "geq_band": 23,
+     "gain_db": -3.0
+    }
+   ],
+   "passed": true,
+   "latency_budget_ms": 300.0,
+   "wall_s": 0.265
+  },
+  {
+   "scenario": "M1_loud_band_wedge_ring",
+   "seed": 2,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "wedge_2k83",
+     "freq_hz": 2830.6,
+     "band": 72,
+     "t_onset": 5.0,
+     "t_prom": 5.15,
+     "t_end": 5.4,
+     "peak_level_db": -4.0,
+     "peak_prom_db": 33.7,
+     "established": false,
+     "visible": true
+    }
+   ],
+   "detections": [
+    {
+     "ts": 5.252,
+     "band": 72,
+     "freq_hz": 2844.3,
+     "confidence": 0.78,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 23,
+     "level_db": -4.23,
+     "prominence_db": 32.26,
+     "slope_db_per_s": 175.72
+    }
+   ],
+   "tp": 1,
+   "miss": 0,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [
+    102.0
+   ],
+   "cuts": [
+    {
+     "ts": 5.252,
+     "geq_band": 23,
+     "gain_db": -3.0
+    }
+   ],
+   "passed": true,
+   "latency_budget_ms": 300.0,
+   "wall_s": 0.265
+  },
+  {
+   "scenario": "M1_loud_band_wedge_ring",
+   "seed": 3,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "wedge_2k83",
+     "freq_hz": 2830.6,
+     "band": 72,
+     "t_onset": 5.0,
+     "t_prom": 5.15,
+     "t_end": 5.35,
+     "peak_level_db": -4.0,
+     "peak_prom_db": 33.8,
+     "established": false,
+     "visible": true
+    }
+   ],
+   "detections": [
+    {
+     "ts": 5.199,
+     "band": 72,
+     "freq_hz": 2850.8,
+     "confidence": 0.78,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 23,
+     "level_db": -7.0,
+     "prominence_db": 30.15,
+     "slope_db_per_s": 193.42
+    }
+   ],
+   "tp": 1,
+   "miss": 0,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [
+    49.3
+   ],
+   "cuts": [
+    {
+     "ts": 5.199,
+     "geq_band": 23,
+     "gain_db": -3.0
+    }
+   ],
+   "passed": true,
+   "latency_budget_ms": 300.0,
+   "wall_s": 0.274
+  },
+  {
+   "scenario": "M2_quiet_music_ringout_two_modes",
+   "seed": 1,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "mode_5k",
+     "freq_hz": 5034.8,
+     "band": 80,
+     "t_onset": 5.0,
+     "t_prom": 5.15,
+     "t_end": 5.35,
+     "peak_level_db": -33.4,
+     "peak_prom_db": 18.8,
+     "established": false,
+     "visible": true
+    },
+    {
+     "ring": 0,
+     "label": "mode_5k",
+     "freq_hz": 5034.8,
+     "band": 80,
+     "t_onset": 9.5,
+     "t_prom": 9.85,
+     "t_end": 10.0,
+     "peak_level_db": -35.7,
+     "peak_prom_db": 14.4,
+     "established": false,
+     "visible": true
+    },
+    {
+     "ring": 0,
+     "label": "mode_5k",
+     "freq_hz": 5034.8,
+     "band": 80,
+     "t_onset": 14.0,
+     "t_prom": 15.6,
+     "t_end": 15.75,
+     "peak_level_db": -33.8,
+     "peak_prom_db": 12.8,
+     "established": false,
+     "visible": true
+    },
+    {
+     "ring": 1,
+     "label": "mode_8k",
+     "freq_hz": 8075.7,
+     "band": 87,
+     "t_onset": 9.5,
+     "t_prom": 9.7,
+     "t_end": 9.95,
+     "peak_level_db": -33.9,
+     "peak_prom_db": 17.3,
+     "established": false,
+     "visible": true
+    },
+    {
+     "ring": 1,
+     "label": "mode_8k",
+     "freq_hz": 8075.7,
+     "band": 87,
+     "t_onset": 14.0,
+     "t_prom": null,
+     "t_end": 15.95,
+     "peak_level_db": -41.6,
+     "peak_prom_db": 9.3,
+     "established": false,
+     "visible": false
+    }
+   ],
+   "detections": [
+    {
+     "ts": 5.202,
+     "band": 80,
+     "freq_hz": 5013.2,
+     "confidence": 0.8,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 25,
+     "level_db": -35.24,
+     "prominence_db": 15.58,
+     "slope_db_per_s": 13.61
+    },
+    {
+     "ts": 9.801,
+     "band": 87,
+     "freq_hz": 8106.0,
+     "confidence": 0.72,
+     "verdict": "TP",
+     "ring": 1,
+     "geq_band": 27,
+     "level_db": -35.98,
+     "prominence_db": 16.38,
+     "slope_db_per_s": 21.74
+    },
+    {
+     "ts": 9.852,
+     "band": 80,
+     "freq_hz": 5001.5,
+     "confidence": 0.7,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 25,
+     "level_db": -38.93,
+     "prominence_db": 14.4,
+     "slope_db_per_s": 29.55
+    },
+    {
+     "ts": 15.598,
+     "band": 80,
+     "freq_hz": 5008.9,
+     "confidence": 0.71,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 25,
+     "level_db": -40.83,
+     "prominence_db": 12.18,
+     "slope_db_per_s": 13.79
+    }
+   ],
+   "tp": 4,
+   "miss": 0,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [
+    51.7,
+    2.3,
+    -2.4,
+    100.9
+   ],
+   "cuts": [
+    {
+     "ts": 5.202,
+     "geq_band": 25,
+     "gain_db": -3.0
+    },
+    {
+     "ts": 9.801,
+     "geq_band": 27,
+     "gain_db": -3.0
+    },
+    {
+     "ts": 9.852,
+     "geq_band": 25,
+     "gain_db": -6.0
+    },
+    {
+     "ts": 15.598,
+     "geq_band": 25,
+     "gain_db": -9.0
+    }
+   ],
+   "passed": true,
+   "latency_budget_ms": 300.0,
+   "wall_s": 0.324
+  },
+  {
+   "scenario": "M2_quiet_music_ringout_two_modes",
+   "seed": 2,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "mode_5k",
+     "freq_hz": 5034.8,
+     "band": 80,
+     "t_onset": 5.0,
+     "t_prom": 5.15,
+     "t_end": 5.4,
+     "peak_level_db": -36.6,
+     "peak_prom_db": 17.3,
+     "established": false,
+     "visible": true
+    },
+    {
+     "ring": 0,
+     "label": "mode_5k",
+     "freq_hz": 5034.8,
+     "band": 80,
+     "t_onset": 9.5,
+     "t_prom": 9.8,
+     "t_end": 10.0,
+     "peak_level_db": -35.4,
+     "peak_prom_db": 14.5,
+     "established": false,
+     "visible": true
+    },
+    {
+     "ring": 0,
+     "label": "mode_5k",
+     "freq_hz": 5034.8,
+     "band": 80,
+     "t_onset": 14.0,
+     "t_prom": null,
+     "t_end": 15.95,
+     "peak_level_db": -45.0,
+     "peak_prom_db": 5.7,
+     "established": false,
+     "visible": false
+    },
+    {
+     "ring": 1,
+     "label": "mode_8k",
+     "freq_hz": 8075.7,
+     "band": 87,
+     "t_onset": 9.5,
+     "t_prom": 9.7,
+     "t_end": 9.95,
+     "peak_level_db": -36.9,
+     "peak_prom_db": 18.0,
+     "established": false,
+     "visible": true
+    },
+    {
+     "ring": 1,
+     "label": "mode_8k",
+     "freq_hz": 8075.7,
+     "band": 87,
+     "t_onset": 14.0,
+     "t_prom": null,
+     "t_end": 15.95,
+     "peak_level_db": -39.8,
+     "peak_prom_db": 12.0,
+     "established": false,
+     "visible": false
+    }
+   ],
+   "detections": [
+    {
+     "ts": 5.252,
+     "band": 80,
+     "freq_hz": 5006.6,
+     "confidence": 0.8,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 25,
+     "level_db": -38.16,
+     "prominence_db": 15.84,
+     "slope_db_per_s": 8.03
+    },
+    {
+     "ts": 9.798,
+     "band": 87,
+     "freq_hz": 8095.5,
+     "confidence": 0.73,
+     "verdict": "TP",
+     "ring": 1,
+     "geq_band": 27,
+     "level_db": -38.7,
+     "prominence_db": 15.97,
+     "slope_db_per_s": 14.86
+    },
+    {
+     "ts": 9.847,
+     "band": 80,
+     "freq_hz": 5012.8,
+     "confidence": 0.7,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 25,
+     "level_db": -39.14,
+     "prominence_db": 14.25,
+     "slope_db_per_s": 36.77
+    }
+   ],
+   "tp": 3,
+   "miss": 0,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [
+    102.0,
+    47.2,
+    98.0
+   ],
+   "cuts": [
+    {
+     "ts": 5.252,
+     "geq_band": 25,
+     "gain_db": -3.0
+    },
+    {
+     "ts": 9.798,
+     "geq_band": 27,
+     "gain_db": -3.0
+    },
+    {
+     "ts": 9.847,
+     "geq_band": 25,
+     "gain_db": -6.0
+    }
+   ],
+   "passed": true,
+   "latency_budget_ms": 300.0,
+   "wall_s": 0.262
+  },
+  {
+   "scenario": "M2_quiet_music_ringout_two_modes",
+   "seed": 3,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "mode_5k",
+     "freq_hz": 5034.8,
+     "band": 80,
+     "t_onset": 5.0,
+     "t_prom": 5.2,
+     "t_end": 5.4,
+     "peak_level_db": -36.7,
+     "peak_prom_db": 18.0,
+     "established": false,
+     "visible": true
+    },
+    {
+     "ring": 0,
+     "label": "mode_5k",
+     "freq_hz": 5034.8,
+     "band": 80,
+     "t_onset": 9.5,
+     "t_prom": 9.8,
+     "t_end": 9.95,
+     "peak_level_db": -36.3,
+     "peak_prom_db": 13.3,
+     "established": false,
+     "visible": true
+    },
+    {
+     "ring": 0,
+     "label": "mode_5k",
+     "freq_hz": 5034.8,
+     "band": 80,
+     "t_onset": 14.0,
+     "t_prom": null,
+     "t_end": 15.95,
+     "peak_level_db": -43.8,
+     "peak_prom_db": 6.3,
+     "established": false,
+     "visible": false
+    },
+    {
+     "ring": 1,
+     "label": "mode_8k",
+     "freq_hz": 8075.7,
+     "band": 87,
+     "t_onset": 9.5,
+     "t_prom": 9.65,
+     "t_end": 9.9,
+     "peak_level_db": -34.3,
+     "peak_prom_db": 17.2,
+     "established": false,
+     "visible": true
+    },
+    {
+     "ring": 1,
+     "label": "mode_8k",
+     "freq_hz": 8075.7,
+     "band": 87,
+     "t_onset": 14.0,
+     "t_prom": 15.4,
+     "t_end": 15.55,
+     "peak_level_db": -37.2,
+     "peak_prom_db": 13.1,
+     "established": false,
+     "visible": true
+    }
+   ],
+   "detections": [
+    {
+     "ts": 5.247,
+     "band": 80,
+     "freq_hz": 4999.4,
+     "confidence": 0.75,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 25,
+     "level_db": -38.63,
+     "prominence_db": 15.25,
+     "slope_db_per_s": 7.82
+    },
+    {
+     "ts": 9.749,
+     "band": 87,
+     "freq_hz": 8100.7,
+     "confidence": 0.8,
+     "verdict": "TP",
+     "ring": 1,
+     "geq_band": 27,
+     "level_db": -36.4,
+     "prominence_db": 14.85,
+     "slope_db_per_s": 12.99
+    },
+    {
+     "ts": 9.8,
+     "band": 80,
+     "freq_hz": 5011.2,
+     "confidence": 0.7,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 25,
+     "level_db": -39.38,
+     "prominence_db": 12.49,
+     "slope_db_per_s": 31.98
+    },
+    {
+     "ts": 15.4,
+     "band": 87,
+     "freq_hz": 8121.2,
+     "confidence": 0.74,
+     "verdict": "TP",
+     "ring": 1,
+     "geq_band": 27,
+     "level_db": -41.26,
+     "prominence_db": 13.09,
+     "slope_db_per_s": 8.2
+    }
+   ],
+   "tp": 4,
+   "miss": 0,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [
+    47.4,
+    -0.4,
+    98.6,
+    -0.1
+   ],
+   "cuts": [
+    {
+     "ts": 5.247,
+     "geq_band": 25,
+     "gain_db": -3.0
+    },
+    {
+     "ts": 9.749,
+     "geq_band": 27,
+     "gain_db": -3.0
+    },
+    {
+     "ts": 9.8,
+     "geq_band": 25,
+     "gain_db": -6.0
+    },
+    {
+     "ts": 15.4,
+     "geq_band": 27,
+     "gain_db": -6.0
+    }
+   ],
+   "passed": true,
+   "latency_budget_ms": 300.0,
+   "wall_s": 0.264
+  },
+  {
+   "scenario": "M3_jazz_trio_lav_ring_400Hz",
+   "seed": 1,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "lav_412",
+     "freq_hz": 415.9,
+     "band": 44,
+     "t_onset": 4.0,
+     "t_prom": 5.05,
+     "t_end": 5.25,
+     "peak_level_db": -30.9,
+     "peak_prom_db": 14.1,
+     "established": false,
+     "visible": true
+    }
+   ],
+   "detections": [
+    {
+     "ts": 5.049,
+     "band": 44,
+     "freq_hz": 409.9,
+     "confidence": 0.7,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 14,
+     "level_db": -32.09,
+     "prominence_db": 12.96,
+     "slope_db_per_s": 17.55
+    }
+   ],
+   "tp": 1,
+   "miss": 0,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [
+    -1.1
+   ],
+   "cuts": [
+    {
+     "ts": 5.049,
+     "geq_band": 14,
+     "gain_db": -3.0
+    }
+   ],
+   "passed": true,
+   "latency_budget_ms": 300.0,
+   "wall_s": 0.374
+  },
+  {
+   "scenario": "M3_jazz_trio_lav_ring_400Hz",
+   "seed": 2,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "lav_412",
+     "freq_hz": 415.9,
+     "band": 44,
+     "t_onset": 4.0,
+     "t_prom": 4.95,
+     "t_end": 5.35,
+     "peak_level_db": -28.6,
+     "peak_prom_db": 18.6,
+     "established": false,
+     "visible": true
+    }
+   ],
+   "detections": [
+    {
+     "ts": 5.1,
+     "band": 44,
+     "freq_hz": 409.4,
+     "confidence": 0.7,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 14,
+     "level_db": -30.16,
+     "prominence_db": 16.1,
+     "slope_db_per_s": 18.68
+    }
+   ],
+   "tp": 1,
+   "miss": 0,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [
+    150.1
+   ],
+   "cuts": [
+    {
+     "ts": 5.1,
+     "geq_band": 14,
+     "gain_db": -3.0
+    }
+   ],
+   "passed": true,
+   "latency_budget_ms": 300.0,
+   "wall_s": 0.386
+  },
+  {
+   "scenario": "M3_jazz_trio_lav_ring_400Hz",
+   "seed": 3,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "lav_412",
+     "freq_hz": 415.9,
+     "band": 44,
+     "t_onset": 4.0,
+     "t_prom": 4.8,
+     "t_end": 5.2,
+     "peak_level_db": -32.1,
+     "peak_prom_db": 16.5,
+     "established": false,
+     "visible": true
+    }
+   ],
+   "detections": [
+    {
+     "ts": 5.002,
+     "band": 44,
+     "freq_hz": 406.3,
+     "confidence": 0.71,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 14,
+     "level_db": -33.45,
+     "prominence_db": 15.27,
+     "slope_db_per_s": 14.59
+    }
+   ],
+   "tp": 1,
+   "miss": 0,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [
+    201.9
+   ],
+   "cuts": [
+    {
+     "ts": 5.002,
+     "geq_band": 14,
+     "gain_db": -3.0
+    }
+   ],
+   "passed": true,
+   "latency_budget_ms": 300.0,
+   "wall_s": 0.383
+  },
+  {
+   "scenario": "X7_plateaued_ring_under_music_from_t0",
+   "seed": 1,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "ring_1k68_plateau",
+     "freq_hz": 1683.1,
+     "band": 64,
+     "t_onset": 0.0,
+     "t_prom": 0.0,
+     "t_end": 0.4,
+     "peak_level_db": -30.0,
+     "peak_prom_db": 23.1,
+     "established": true,
+     "visible": true
+    }
+   ],
+   "detections": [
+    {
+     "ts": 0.199,
+     "band": 64,
+     "freq_hz": 1663.7,
+     "confidence": 0.7,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 20,
+     "level_db": -29.94,
+     "prominence_db": 21.21,
+     "slope_db_per_s": 0.34
+    }
+   ],
+   "tp": 1,
+   "miss": 0,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [
+    198.8
+   ],
+   "cuts": [
+    {
+     "ts": 0.199,
+     "geq_band": 20,
+     "gain_db": -3.0
+    }
+   ],
+   "passed": true,
+   "latency_budget_ms": 1000.0,
+   "wall_s": 0.308
+  },
+  {
+   "scenario": "X7_plateaued_ring_under_music_from_t0",
+   "seed": 2,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "ring_1k68_plateau",
+     "freq_hz": 1683.1,
+     "band": 64,
+     "t_onset": 0.0,
+     "t_prom": 0.0,
+     "t_end": 0.4,
+     "peak_level_db": -30.0,
+     "peak_prom_db": 22.3,
+     "established": true,
+     "visible": true
+    }
+   ],
+   "detections": [
+    {
+     "ts": 0.2,
+     "band": 64,
+     "freq_hz": 1662.2,
+     "confidence": 0.7,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 20,
+     "level_db": -30.26,
+     "prominence_db": 20.58,
+     "slope_db_per_s": -1.11
+    }
+   ],
+   "tp": 1,
+   "miss": 0,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [
+    200.3
+   ],
+   "cuts": [
+    {
+     "ts": 0.2,
+     "geq_band": 20,
+     "gain_db": -3.0
+    }
+   ],
+   "passed": true,
+   "latency_budget_ms": 1000.0,
+   "wall_s": 0.333
+  },
+  {
+   "scenario": "X7_plateaued_ring_under_music_from_t0",
+   "seed": 3,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "ring_1k68_plateau",
+     "freq_hz": 1683.1,
+     "band": 64,
+     "t_onset": 0.0,
+     "t_prom": 0.0,
+     "t_end": 0.4,
+     "peak_level_db": -30.0,
+     "peak_prom_db": 24.9,
+     "established": true,
+     "visible": true
+    }
+   ],
+   "detections": [
+    {
+     "ts": 0.202,
+     "band": 64,
+     "freq_hz": 1663.0,
+     "confidence": 0.7,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 20,
+     "level_db": -29.91,
+     "prominence_db": 23.09,
+     "slope_db_per_s": 0.72
+    }
+   ],
+   "tp": 1,
+   "miss": 0,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [
+    201.8
+   ],
+   "cuts": [
+    {
+     "ts": 0.202,
+     "geq_band": 20,
+     "gain_db": -3.0
+    }
+   ],
+   "passed": true,
+   "latency_budget_ms": 1000.0,
+   "wall_s": 0.341
+  },
+  {
+   "scenario": "X8_slow_ring_midband_under_chords",
+   "seed": 1,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "slow_1k29",
+     "freq_hz": 1280.7,
+     "band": 60,
+     "t_onset": 1.0,
+     "t_prom": 7.25,
+     "t_end": 7.9,
+     "peak_level_db": -37.3,
+     "peak_prom_db": 15.4,
+     "established": false,
+     "visible": true
+    }
+   ],
+   "detections": [
+    {
+     "ts": 7.752,
+     "band": 60,
+     "freq_hz": 1273.6,
+     "confidence": 0.7,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 19,
+     "level_db": -37.76,
+     "prominence_db": 13.38,
+     "slope_db_per_s": 2.66
+    }
+   ],
+   "tp": 1,
+   "miss": 0,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [
+    502.1
+   ],
+   "cuts": [
+    {
+     "ts": 7.752,
+     "geq_band": 19,
+     "gain_db": -3.0
+    }
+   ],
+   "passed": true,
+   "latency_budget_ms": 1000.0,
+   "wall_s": 0.449
+  },
+  {
+   "scenario": "X8_slow_ring_midband_under_chords",
+   "seed": 2,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "slow_1k29",
+     "freq_hz": 1280.7,
+     "band": 60,
+     "t_onset": 1.0,
+     "t_prom": 5.3,
+     "t_end": 7.55,
+     "peak_level_db": -33.5,
+     "peak_prom_db": 21.2,
+     "established": false,
+     "visible": true
+    }
+   ],
+   "detections": [
+    {
+     "ts": 7.3,
+     "band": 60,
+     "freq_hz": 1235.8,
+     "confidence": 0.7,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 19,
+     "level_db": -34.03,
+     "prominence_db": 19.02,
+     "slope_db_per_s": 1.22
+    }
+   ],
+   "tp": 1,
+   "miss": 0,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [
+    2000.0
+   ],
+   "cuts": [
+    {
+     "ts": 7.3,
+     "geq_band": 19,
+     "gain_db": -3.0
+    }
+   ],
+   "passed": false,
+   "latency_budget_ms": 1000.0,
+   "wall_s": 0.478
+  },
+  {
+   "scenario": "X8_slow_ring_midband_under_chords",
+   "seed": 3,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "slow_1k29",
+     "freq_hz": 1280.7,
+     "band": 60,
+     "t_onset": 1.0,
+     "t_prom": 7.85,
+     "t_end": 10.5,
+     "peak_level_db": -31.8,
+     "peak_prom_db": 21.0,
+     "established": false,
+     "visible": true
+    }
+   ],
+   "detections": [
+    {
+     "ts": 10.352,
+     "band": 60,
+     "freq_hz": 1280.9,
+     "confidence": 0.7,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 19,
+     "level_db": -32.49,
+     "prominence_db": 20.97,
+     "slope_db_per_s": 1.79
+    }
+   ],
+   "tp": 1,
+   "miss": 0,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [
+    2501.6
+   ],
+   "cuts": [
+    {
+     "ts": 10.352,
+     "geq_band": 19,
+     "gain_db": -3.0
+    }
+   ],
+   "passed": false,
+   "latency_budget_ms": 1000.0,
+   "wall_s": 0.493
+  },
+  {
+   "scenario": "X9_ring_rta_midpoint_525Hz_speech",
+   "seed": 1,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "lav_525_mid",
+     "freq_hz": 525.6,
+     "band": 48,
+     "t_onset": 3.0,
+     "t_prom": 3.35,
+     "t_end": 4.5,
+     "peak_level_db": -24.2,
+     "peak_prom_db": 27.2,
+     "established": false,
+     "visible": true
+    }
+   ],
+   "detections": [
+    {
+     "ts": 4.249,
+     "band": 48,
+     "freq_hz": 525.6,
+     "confidence": 0.8,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 15,
+     "level_db": -28.07,
+     "prominence_db": 24.0,
+     "slope_db_per_s": 11.28
+    }
+   ],
+   "tp": 1,
+   "miss": 0,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [
+    898.8
+   ],
+   "cuts": [
+    {
+     "ts": 4.249,
+     "geq_band": 15,
+     "gain_db": -3.0
+    }
+   ],
+   "passed": false,
+   "latency_budget_ms": 300.0,
+   "wall_s": 0.246
+  },
+  {
+   "scenario": "X9_ring_rta_midpoint_525Hz_speech",
+   "seed": 2,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "lav_525_mid",
+     "freq_hz": 525.6,
+     "band": 48,
+     "t_onset": 3.0,
+     "t_prom": 3.3,
+     "t_end": 4.65,
+     "peak_level_db": -20.0,
+     "peak_prom_db": 34.5,
+     "established": false,
+     "visible": true
+    }
+   ],
+   "detections": [
+    {
+     "ts": 4.4,
+     "band": 47,
+     "freq_hz": 525.5,
+     "confidence": 0.7,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 15,
+     "level_db": -23.61,
+     "prominence_db": 31.03,
+     "slope_db_per_s": 8.27
+    }
+   ],
+   "tp": 1,
+   "miss": 0,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [
+    1099.7
+   ],
+   "cuts": [
+    {
+     "ts": 4.4,
+     "geq_band": 15,
+     "gain_db": -3.0
+    }
+   ],
+   "passed": false,
+   "latency_budget_ms": 300.0,
+   "wall_s": 0.253
+  },
+  {
+   "scenario": "X9_ring_rta_midpoint_525Hz_speech",
+   "seed": 3,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "lav_525_mid",
+     "freq_hz": 525.6,
+     "band": 48,
+     "t_onset": 3.0,
+     "t_prom": 3.75,
+     "t_end": 5.1,
+     "peak_level_db": -19.8,
+     "peak_prom_db": 32.4,
+     "established": false,
+     "visible": true
+    }
+   ],
+   "detections": [
+    {
+     "ts": 4.852,
+     "band": 48,
+     "freq_hz": 525.6,
+     "confidence": 0.8,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 15,
+     "level_db": -23.73,
+     "prominence_db": 24.41,
+     "slope_db_per_s": 13.3
+    }
+   ],
+   "tp": 1,
+   "miss": 0,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [
+    1101.8
+   ],
+   "cuts": [
+    {
+     "ts": 4.852,
+     "geq_band": 15,
+     "gain_db": -3.0
+    }
+   ],
+   "passed": false,
+   "latency_budget_ms": 300.0,
+   "wall_s": 0.249
+  },
+  {
+   "scenario": "X10_two_rings_exact_octave",
+   "seed": 1,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "ring_1587",
+     "freq_hz": 1587.0,
+     "band": 63,
+     "t_onset": 2.0,
+     "t_prom": 2.4,
+     "t_end": 2.6,
+     "peak_level_db": -40.0,
+     "peak_prom_db": 16.6,
+     "established": false,
+     "visible": true
+    },
+    {
+     "ring": 1,
+     "label": "ring_3174",
+     "freq_hz": 3174.0,
+     "band": 73,
+     "t_onset": 2.3,
+     "t_prom": 2.75,
+     "t_end": 2.95,
+     "peak_level_db": -38.9,
+     "peak_prom_db": 17.8,
+     "established": false,
+     "visible": true
+    }
+   ],
+   "detections": [
+    {
+     "ts": 2.448,
+     "band": 63,
+     "freq_hz": 1569.2,
+     "confidence": 0.7,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 20,
+     "level_db": -43.81,
+     "prominence_db": 14.45,
+     "slope_db_per_s": 41.77
+    },
+    {
+     "ts": 2.798,
+     "band": 73,
+     "freq_hz": 3145.1,
+     "confidence": 0.7,
+     "verdict": "TP",
+     "ring": 1,
+     "geq_band": 23,
+     "level_db": -43.02,
+     "prominence_db": 15.6,
+     "slope_db_per_s": 40.63
+    }
+   ],
+   "tp": 2,
+   "miss": 0,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [
+    48.5,
+    48.1
+   ],
+   "cuts": [
+    {
+     "ts": 2.448,
+     "geq_band": 20,
+     "gain_db": -3.0
+    },
+    {
+     "ts": 2.798,
+     "geq_band": 23,
+     "gain_db": -3.0
+    }
+   ],
+   "passed": true,
+   "latency_budget_ms": 300.0,
+   "wall_s": 0.111
+  },
+  {
+   "scenario": "X10_two_rings_exact_octave",
+   "seed": 2,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "ring_1587",
+     "freq_hz": 1587.0,
+     "band": 63,
+     "t_onset": 2.0,
+     "t_prom": 2.4,
+     "t_end": 2.65,
+     "peak_level_db": -36.2,
+     "peak_prom_db": 19.0,
+     "established": false,
+     "visible": true
+    },
+    {
+     "ring": 1,
+     "label": "ring_3174",
+     "freq_hz": 3174.0,
+     "band": 73,
+     "t_onset": 2.3,
+     "t_prom": 2.7,
+     "t_end": 2.95,
+     "peak_level_db": -38.0,
+     "peak_prom_db": 20.7,
+     "established": false,
+     "visible": true
+    }
+   ],
+   "detections": [
+    {
+     "ts": 2.503,
+     "band": 63,
+     "freq_hz": 1573.1,
+     "confidence": 0.7,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 20,
+     "level_db": -40.22,
+     "prominence_db": 18.42,
+     "slope_db_per_s": 47.57
+    },
+    {
+     "ts": 2.802,
+     "band": 73,
+     "freq_hz": 3151.4,
+     "confidence": 0.7,
+     "verdict": "TP",
+     "ring": 1,
+     "geq_band": 23,
+     "level_db": -42.25,
+     "prominence_db": 20.44,
+     "slope_db_per_s": 41.49
+    }
+   ],
+   "tp": 2,
+   "miss": 0,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [
+    102.7,
+    101.8
+   ],
+   "cuts": [
+    {
+     "ts": 2.503,
+     "geq_band": 20,
+     "gain_db": -3.0
+    },
+    {
+     "ts": 2.802,
+     "geq_band": 23,
+     "gain_db": -3.0
+    }
+   ],
+   "passed": true,
+   "latency_budget_ms": 300.0,
+   "wall_s": 0.111
+  },
+  {
+   "scenario": "X10_two_rings_exact_octave",
+   "seed": 3,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "ring_1587",
+     "freq_hz": 1587.0,
+     "band": 63,
+     "t_onset": 2.0,
+     "t_prom": 2.35,
+     "t_end": 2.65,
+     "peak_level_db": -34.4,
+     "peak_prom_db": 21.1,
+     "established": false,
+     "visible": true
+    },
+    {
+     "ring": 1,
+     "label": "ring_3174",
+     "freq_hz": 3174.0,
+     "band": 73,
+     "t_onset": 2.3,
+     "t_prom": 2.7,
+     "t_end": 3.0,
+     "peak_level_db": -36.7,
+     "peak_prom_db": 20.7,
+     "established": false,
+     "visible": true
+    }
+   ],
+   "detections": [
+    {
+     "ts": 2.498,
+     "band": 63,
+     "freq_hz": 1571.3,
+     "confidence": 0.7,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 20,
+     "level_db": -38.89,
+     "prominence_db": 17.02,
+     "slope_db_per_s": 44.21
+    },
+    {
+     "ts": 2.85,
+     "band": 73,
+     "freq_hz": 3147.9,
+     "confidence": 0.7,
+     "verdict": "TP",
+     "ring": 1,
+     "geq_band": 23,
+     "level_db": -40.56,
+     "prominence_db": 17.98,
+     "slope_db_per_s": 41.08
+    }
+   ],
+   "tp": 2,
+   "miss": 0,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [
+    148.2,
+    150.4
+   ],
+   "cuts": [
+    {
+     "ts": 2.498,
+     "geq_band": 20,
+     "gain_db": -3.0
+    },
+    {
+     "ts": 2.85,
+     "geq_band": 23,
+     "gain_db": -3.0
+    }
+   ],
+   "passed": true,
+   "latency_budget_ms": 300.0,
+   "wall_s": 0.108
+  },
+  {
+   "scenario": "X11_amp_clipped_howl_minus12dBFS",
+   "seed": 1,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "howl_905_ampclip",
+     "freq_hz": 897.8,
+     "band": 55,
+     "t_onset": 4.0,
+     "t_prom": 4.2,
+     "t_end": 5.3,
+     "peak_level_db": -12.0,
+     "peak_prom_db": 22.3,
+     "established": false,
+     "visible": true
+    }
+   ],
+   "detections": [
+    {
+     "ts": 5.049,
+     "band": 55,
+     "freq_hz": 891.2,
+     "confidence": 0.7,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 17,
+     "level_db": -11.82,
+     "prominence_db": 17.95,
+     "slope_db_per_s": 0.62
+    }
+   ],
+   "tp": 1,
+   "miss": 0,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [
+    848.9
+   ],
+   "cuts": [
+    {
+     "ts": 5.049,
+     "geq_band": 17,
+     "gain_db": -3.0
+    }
+   ],
+   "passed": false,
+   "latency_budget_ms": 300.0,
+   "wall_s": 0.226
+  },
+  {
+   "scenario": "X11_amp_clipped_howl_minus12dBFS",
+   "seed": 2,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "howl_905_ampclip",
+     "freq_hz": 897.8,
+     "band": 55,
+     "t_onset": 4.0,
+     "t_prom": 4.2,
+     "t_end": 4.55,
+     "peak_level_db": -12.0,
+     "peak_prom_db": 21.7,
+     "established": false,
+     "visible": true
+    }
+   ],
+   "detections": [
+    {
+     "ts": 4.3,
+     "band": 55,
+     "freq_hz": 892.6,
+     "confidence": 0.7,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 17,
+     "level_db": -12.19,
+     "prominence_db": 17.34,
+     "slope_db_per_s": 66.83
+    }
+   ],
+   "tp": 1,
+   "miss": 0,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [
+    99.9
+   ],
+   "cuts": [
+    {
+     "ts": 4.3,
+     "geq_band": 17,
+     "gain_db": -3.0
+    }
+   ],
+   "passed": true,
+   "latency_budget_ms": 300.0,
+   "wall_s": 0.226
+  },
+  {
+   "scenario": "X11_amp_clipped_howl_minus12dBFS",
+   "seed": 3,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "howl_905_ampclip",
+     "freq_hz": 897.8,
+     "band": 55,
+     "t_onset": 4.0,
+     "t_prom": 4.2,
+     "t_end": 5.3,
+     "peak_level_db": -12.0,
+     "peak_prom_db": 24.7,
+     "established": false,
+     "visible": true
+    }
+   ],
+   "detections": [
+    {
+     "ts": 5.049,
+     "band": 55,
+     "freq_hz": 891.7,
+     "confidence": 0.7,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 17,
+     "level_db": -12.18,
+     "prominence_db": 22.95,
+     "slope_db_per_s": -0.99
+    }
+   ],
+   "tp": 1,
+   "miss": 0,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [
+    848.8
+   ],
+   "cuts": [
+    {
+     "ts": 5.049,
+     "geq_band": 17,
+     "gain_db": -3.0
+    }
+   ],
+   "passed": false,
+   "latency_budget_ms": 300.0,
+   "wall_s": 0.227
+  },
+  {
+   "scenario": "X12a_master_drop20_raise_channel",
+   "seed": 1,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "ring_2k05",
+     "freq_hz": 2048.3,
+     "band": 67,
+     "t_onset": 0.0,
+     "t_prom": 0.0,
+     "t_end": 0.4,
+     "peak_level_db": -12.0,
+     "peak_prom_db": 40.5,
+     "established": true,
+     "visible": true
+    }
+   ],
+   "detections": [
+    {
+     "ts": 0.199,
+     "band": 67,
+     "freq_hz": 2043.3,
+     "confidence": 0.7,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 21,
+     "level_db": -12.0,
+     "prominence_db": 37.96,
+     "slope_db_per_s": -0.78
+    }
+   ],
+   "tp": 1,
+   "miss": 0,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [
+    198.8
+   ],
+   "cuts": [
+    {
+     "ts": 0.199,
+     "geq_band": 21,
+     "gain_db": -3.0
+    }
+   ],
+   "passed": true,
+   "latency_budget_ms": 300.0,
+   "wall_s": 0.299
+  },
+  {
+   "scenario": "X12a_master_drop20_raise_channel",
+   "seed": 2,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "ring_2k05",
+     "freq_hz": 2048.3,
+     "band": 67,
+     "t_onset": 0.0,
+     "t_prom": 0.0,
+     "t_end": 0.4,
+     "peak_level_db": -12.0,
+     "peak_prom_db": 42.6,
+     "established": true,
+     "visible": true
+    }
+   ],
+   "detections": [
+    {
+     "ts": 0.2,
+     "band": 67,
+     "freq_hz": 2043.2,
+     "confidence": 0.7,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 21,
+     "level_db": -11.99,
+     "prominence_db": 38.76,
+     "slope_db_per_s": 0.11
+    }
+   ],
+   "tp": 1,
+   "miss": 0,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [
+    200.3
+   ],
+   "cuts": [
+    {
+     "ts": 0.2,
+     "geq_band": 21,
+     "gain_db": -3.0
+    }
+   ],
+   "passed": true,
+   "latency_budget_ms": 300.0,
+   "wall_s": 0.303
+  },
+  {
+   "scenario": "X12a_master_drop20_raise_channel",
+   "seed": 3,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "ring_2k05",
+     "freq_hz": 2048.3,
+     "band": 67,
+     "t_onset": 0.0,
+     "t_prom": 0.0,
+     "t_end": 0.4,
+     "peak_level_db": -12.0,
+     "peak_prom_db": 41.7,
+     "established": true,
+     "visible": true
+    }
+   ],
+   "detections": [
+    {
+     "ts": 0.202,
+     "band": 67,
+     "freq_hz": 2043.3,
+     "confidence": 0.7,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 21,
+     "level_db": -11.68,
+     "prominence_db": 38.22,
+     "slope_db_per_s": 0.68
+    }
+   ],
+   "tp": 1,
+   "miss": 0,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [
+    201.8
+   ],
+   "cuts": [
+    {
+     "ts": 0.202,
+     "geq_band": 21,
+     "gain_db": -3.0
+    }
+   ],
+   "passed": true,
+   "latency_budget_ms": 300.0,
+   "wall_s": 0.311
+  },
+  {
+   "scenario": "X12b_master_drop20_raise_busmaster",
+   "seed": 1,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "ring_2k05",
+     "freq_hz": 2048.3,
+     "band": 67,
+     "t_onset": 0.0,
+     "t_prom": 0.0,
+     "t_end": 0.4,
+     "peak_level_db": -12.0,
+     "peak_prom_db": 40.3,
+     "established": true,
+     "visible": true
+    }
+   ],
+   "detections": [
+    {
+     "ts": 0.199,
+     "band": 67,
+     "freq_hz": 2043.3,
+     "confidence": 0.7,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 21,
+     "level_db": -12.13,
+     "prominence_db": 37.8,
+     "slope_db_per_s": -0.96
+    }
+   ],
+   "tp": 1,
+   "miss": 0,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [
+    198.8
+   ],
+   "cuts": [
+    {
+     "ts": 0.199,
+     "geq_band": 21,
+     "gain_db": -3.0
+    }
+   ],
+   "passed": true,
+   "latency_budget_ms": 300.0,
+   "wall_s": 0.3
+  },
+  {
+   "scenario": "X12b_master_drop20_raise_busmaster",
+   "seed": 2,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "ring_2k05",
+     "freq_hz": 2048.3,
+     "band": 67,
+     "t_onset": 0.0,
+     "t_prom": 0.0,
+     "t_end": 0.4,
+     "peak_level_db": -12.0,
+     "peak_prom_db": 42.1,
+     "established": true,
+     "visible": true
+    }
+   ],
+   "detections": [
+    {
+     "ts": 0.2,
+     "band": 67,
+     "freq_hz": 2043.2,
+     "confidence": 0.7,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 21,
+     "level_db": -11.93,
+     "prominence_db": 38.81,
+     "slope_db_per_s": 0.54
+    }
+   ],
+   "tp": 1,
+   "miss": 0,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [
+    200.3
+   ],
+   "cuts": [
+    {
+     "ts": 0.2,
+     "geq_band": 21,
+     "gain_db": -3.0
+    }
+   ],
+   "passed": true,
+   "latency_budget_ms": 300.0,
+   "wall_s": 0.323
+  },
+  {
+   "scenario": "X12b_master_drop20_raise_busmaster",
+   "seed": 3,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "ring_2k05",
+     "freq_hz": 2048.3,
+     "band": 67,
+     "t_onset": 0.0,
+     "t_prom": 0.0,
+     "t_end": 0.4,
+     "peak_level_db": -12.0,
+     "peak_prom_db": 41.4,
+     "established": true,
+     "visible": true
+    }
+   ],
+   "detections": [
+    {
+     "ts": 0.202,
+     "band": 67,
+     "freq_hz": 2043.3,
+     "confidence": 0.7,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 21,
+     "level_db": -11.88,
+     "prominence_db": 38.43,
+     "slope_db_per_s": 0.53
+    }
+   ],
+   "tp": 1,
+   "miss": 0,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [
+    201.8
+   ],
+   "cuts": [
+    {
+     "ts": 0.202,
+     "geq_band": 21,
+     "gain_db": -3.0
+    }
+   ],
+   "passed": true,
+   "latency_budget_ms": 300.0,
+   "wall_s": 0.312
+  },
+  {
+   "scenario": "X13_decay16_jazz_lav_ring",
+   "seed": 1,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "lav_412",
+     "freq_hz": 415.9,
+     "band": 44,
+     "t_onset": 4.0,
+     "t_prom": 5.15,
+     "t_end": 5.4,
+     "peak_level_db": -28.4,
+     "peak_prom_db": 13.2,
+     "established": false,
+     "visible": true
+    }
+   ],
+   "detections": [
+    {
+     "ts": 5.151,
+     "band": 44,
+     "freq_hz": 411.3,
+     "confidence": 0.7,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 14,
+     "level_db": -29.78,
+     "prominence_db": 12.5,
+     "slope_db_per_s": 22.69
+    }
+   ],
+   "tp": 1,
+   "miss": 0,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [
+    0.6
+   ],
+   "cuts": [
+    {
+     "ts": 5.151,
+     "geq_band": 14,
+     "gain_db": -3.0
+    }
+   ],
+   "passed": true,
+   "latency_budget_ms": 600.0,
+   "wall_s": 0.338
+  },
+  {
+   "scenario": "X13_decay16_jazz_lav_ring",
+   "seed": 2,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "lav_412",
+     "freq_hz": 415.9,
+     "band": 44,
+     "t_onset": 4.0,
+     "t_prom": 5.2,
+     "t_end": 5.45,
+     "peak_level_db": -31.2,
+     "peak_prom_db": 12.9,
+     "established": false,
+     "visible": true
+    }
+   ],
+   "detections": [
+    {
+     "ts": 5.202,
+     "band": 44,
+     "freq_hz": 407.0,
+     "confidence": 0.71,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 14,
+     "level_db": -32.3,
+     "prominence_db": 12.05,
+     "slope_db_per_s": 11.34
+    }
+   ],
+   "tp": 1,
+   "miss": 0,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [
+    2.2
+   ],
+   "cuts": [
+    {
+     "ts": 5.202,
+     "geq_band": 14,
+     "gain_db": -3.0
+    }
+   ],
+   "passed": true,
+   "latency_budget_ms": 600.0,
+   "wall_s": 0.345
+  },
+  {
+   "scenario": "X13_decay16_jazz_lav_ring",
+   "seed": 3,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "lav_412",
+     "freq_hz": 415.9,
+     "band": 44,
+     "t_onset": 4.0,
+     "t_prom": 5.0,
+     "t_end": 5.35,
+     "peak_level_db": -31.0,
+     "peak_prom_db": 15.3,
+     "established": false,
+     "visible": true
+    }
+   ],
+   "detections": [
+    {
+     "ts": 5.102,
+     "band": 44,
+     "freq_hz": 409.4,
+     "confidence": 0.7,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 14,
+     "level_db": -32.13,
+     "prominence_db": 14.27,
+     "slope_db_per_s": 14.32
+    }
+   ],
+   "tp": 1,
+   "miss": 0,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [
+    101.6
+   ],
+   "cuts": [
+    {
+     "ts": 5.102,
+     "geq_band": 14,
+     "gain_db": -3.0
+    }
+   ],
+   "passed": true,
+   "latency_budget_ms": 600.0,
+   "wall_s": 0.349
+  },
+  {
+   "scenario": "X14_peakhold_loud_band_wedge_ring",
+   "seed": 1,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "wedge_2k83",
+     "freq_hz": 2830.6,
+     "band": 72,
+     "t_onset": 5.0,
+     "t_prom": 5.15,
+     "t_end": 5.5,
+     "peak_level_db": -4.0,
+     "peak_prom_db": 26.9,
+     "established": false,
+     "visible": true
+    }
+   ],
+   "detections": [
+    {
+     "ts": 5.352,
+     "band": 72,
+     "freq_hz": 2842.7,
+     "confidence": 0.7,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 23,
+     "level_db": -3.91,
+     "prominence_db": 26.86,
+     "slope_db_per_s": 65.42
+    }
+   ],
+   "tp": 1,
+   "miss": 0,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [
+    202.3
+   ],
+   "cuts": [
+    {
+     "ts": 5.352,
+     "geq_band": 23,
+     "gain_db": -3.0
+    }
+   ],
+   "passed": true,
+   "latency_budget_ms": 300.0,
+   "wall_s": 0.249
+  },
+  {
+   "scenario": "X14_peakhold_loud_band_wedge_ring",
+   "seed": 2,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "wedge_2k83",
+     "freq_hz": 2830.6,
+     "band": 72,
+     "t_onset": 5.0,
+     "t_prom": 5.2,
+     "t_end": 5.4,
+     "peak_level_db": -4.0,
+     "peak_prom_db": 28.3,
+     "established": false,
+     "visible": true
+    }
+   ],
+   "detections": [
+    {
+     "ts": 5.252,
+     "band": 72,
+     "freq_hz": 2846.7,
+     "confidence": 0.78,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 23,
+     "level_db": -4.05,
+     "prominence_db": 27.79,
+     "slope_db_per_s": 175.89
+    }
+   ],
+   "tp": 1,
+   "miss": 0,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [
+    52.0
+   ],
+   "cuts": [
+    {
+     "ts": 5.252,
+     "geq_band": 23,
+     "gain_db": -3.0
+    }
+   ],
+   "passed": true,
+   "latency_budget_ms": 300.0,
+   "wall_s": 0.246
+  },
+  {
+   "scenario": "X14_peakhold_loud_band_wedge_ring",
+   "seed": 3,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "wedge_2k83",
+     "freq_hz": 2830.6,
+     "band": 72,
+     "t_onset": 5.0,
+     "t_prom": 5.15,
+     "t_end": 5.5,
+     "peak_level_db": -4.0,
+     "peak_prom_db": 28.6,
+     "established": false,
+     "visible": true
+    }
+   ],
+   "detections": [
+    {
+     "ts": 5.35,
+     "band": 72,
+     "freq_hz": 2842.6,
+     "confidence": 0.7,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 23,
+     "level_db": -3.96,
+     "prominence_db": 28.45,
+     "slope_db_per_s": 55.28
+    }
+   ],
+   "tp": 1,
+   "miss": 0,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [
+    200.1
+   ],
+   "cuts": [
+    {
+     "ts": 5.35,
+     "geq_band": 23,
+     "gain_db": -3.0
+    }
+   ],
+   "passed": true,
+   "latency_budget_ms": 300.0,
+   "wall_s": 0.247
+  },
+  {
+   "scenario": "X16_wedge_ring_315Hz_loud_band",
+   "seed": 1,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "wedge_318",
+     "freq_hz": 318.0,
+     "band": 40,
+     "t_onset": 6.0,
+     "t_prom": 6.1,
+     "t_end": 6.45,
+     "peak_level_db": -3.0,
+     "peak_prom_db": 19.9,
+     "established": false,
+     "visible": true
+    }
+   ],
+   "detections": [
+    {
+     "ts": 6.253,
+     "band": 40,
+     "freq_hz": 314.0,
+     "confidence": 0.7,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 13,
+     "level_db": -2.82,
+     "prominence_db": 16.34,
+     "slope_db_per_s": 11.62
+    }
+   ],
+   "tp": 1,
+   "miss": 0,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [
+    152.6
+   ],
+   "cuts": [
+    {
+     "ts": 6.253,
+     "geq_band": 13,
+     "gain_db": -3.0
+    }
+   ],
+   "passed": true,
+   "latency_budget_ms": 300.0,
+   "wall_s": 0.313
+  },
+  {
+   "scenario": "X16_wedge_ring_315Hz_loud_band",
+   "seed": 2,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "wedge_318",
+     "freq_hz": 318.0,
+     "band": 40,
+     "t_onset": 6.0,
+     "t_prom": 6.1,
+     "t_end": 6.65,
+     "peak_level_db": -3.0,
+     "peak_prom_db": 23.2,
+     "established": false,
+     "visible": true
+    }
+   ],
+   "detections": [
+    {
+     "ts": 6.303,
+     "band": 40,
+     "freq_hz": 313.0,
+     "confidence": 0.7,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 13,
+     "level_db": -2.95,
+     "prominence_db": 22.43,
+     "slope_db_per_s": 9.04
+    }
+   ],
+   "tp": 1,
+   "miss": 0,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [
+    203.0
+   ],
+   "cuts": [
+    {
+     "ts": 6.303,
+     "geq_band": 13,
+     "gain_db": -3.0
+    }
+   ],
+   "passed": true,
+   "latency_budget_ms": 300.0,
+   "wall_s": 0.313
+  },
+  {
+   "scenario": "X16_wedge_ring_315Hz_loud_band",
+   "seed": 3,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "wedge_318",
+     "freq_hz": 318.0,
+     "band": 40,
+     "t_onset": 6.0,
+     "t_prom": 6.1,
+     "t_end": 6.55,
+     "peak_level_db": -3.0,
+     "peak_prom_db": 21.0,
+     "established": false,
+     "visible": true
+    }
+   ],
+   "detections": [
+    {
+     "ts": 6.201,
+     "band": 40,
+     "freq_hz": 315.1,
+     "confidence": 0.7,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 13,
+     "level_db": -2.79,
+     "prominence_db": 19.6,
+     "slope_db_per_s": 18.85
+    }
+   ],
+   "tp": 1,
+   "miss": 0,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [
+    100.7
+   ],
+   "cuts": [
+    {
+     "ts": 6.201,
+     "geq_band": 13,
+     "gain_db": -3.0
+    }
+   ],
+   "passed": true,
+   "latency_budget_ms": 300.0,
+   "wall_s": 0.31
+  },
+  {
+   "scenario": "X17_ring_122Hz_acoustic_guitar_body",
+   "seed": 1,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "wedge_122",
+     "freq_hz": 121.3,
+     "band": 26,
+     "t_onset": 6.4,
+     "t_prom": 6.7,
+     "t_end": 13.95,
+     "peak_level_db": -12.0,
+     "peak_prom_db": 40.4,
+     "established": false,
+     "visible": true
+    }
+   ],
+   "detections": [],
+   "tp": 0,
+   "miss": 1,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [],
+   "cuts": [],
+   "passed": false,
+   "latency_budget_ms": 600.0,
+   "wall_s": 0.347
+  },
+  {
+   "scenario": "X17_ring_122Hz_acoustic_guitar_body",
+   "seed": 2,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "wedge_122",
+     "freq_hz": 121.3,
+     "band": 26,
+     "t_onset": 6.4,
+     "t_prom": 6.4,
+     "t_end": 13.95,
+     "peak_level_db": -12.0,
+     "peak_prom_db": 37.8,
+     "established": false,
+     "visible": true
+    }
+   ],
+   "detections": [],
+   "tp": 0,
+   "miss": 1,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [],
+   "cuts": [],
+   "passed": false,
+   "latency_budget_ms": 600.0,
+   "wall_s": 0.336
+  },
+  {
+   "scenario": "X17_ring_122Hz_acoustic_guitar_body",
+   "seed": 3,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "wedge_122",
+     "freq_hz": 121.3,
+     "band": 26,
+     "t_onset": 6.4,
+     "t_prom": 6.4,
+     "t_end": 13.95,
+     "peak_level_db": -12.0,
+     "peak_prom_db": 38.0,
+     "established": false,
+     "visible": true
+    }
+   ],
+   "detections": [],
+   "tp": 0,
+   "miss": 1,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [],
+   "cuts": [],
+   "passed": false,
+   "latency_budget_ms": 600.0,
+   "wall_s": 0.333
+  },
+  {
+   "scenario": "X19_handheld_ring_stalls_and_hops",
+   "seed": 1,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "handheld_2k35",
+     "freq_hz": 2354.5,
+     "band": 69,
+     "t_onset": 2.0,
+     "t_prom": 2.2,
+     "t_end": 2.75,
+     "peak_level_db": -22.6,
+     "peak_prom_db": 27.2,
+     "established": false,
+     "visible": true
+    }
+   ],
+   "detections": [
+    {
+     "ts": 2.448,
+     "band": 69,
+     "freq_hz": 2347.0,
+     "confidence": 0.8,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 22,
+     "level_db": -24.56,
+     "prominence_db": 25.51,
+     "slope_db_per_s": 20.02
+    }
+   ],
+   "tp": 1,
+   "miss": 0,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [
+    248.5
+   ],
+   "cuts": [
+    {
+     "ts": 2.448,
+     "geq_band": 22,
+     "gain_db": -3.0
+    }
+   ],
+   "passed": true,
+   "latency_budget_ms": 300.0,
+   "wall_s": 0.174
+  },
+  {
+   "scenario": "X19_handheld_ring_stalls_and_hops",
+   "seed": 2,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "handheld_2k35",
+     "freq_hz": 2348.1,
+     "band": 69,
+     "t_onset": 2.0,
+     "t_prom": 2.45,
+     "t_end": 3.0,
+     "peak_level_db": -28.1,
+     "peak_prom_db": 23.1,
+     "established": false,
+     "visible": true
+    }
+   ],
+   "detections": [
+    {
+     "ts": 2.85,
+     "band": 69,
+     "freq_hz": 2337.7,
+     "confidence": 0.7,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 22,
+     "level_db": -29.7,
+     "prominence_db": 21.86,
+     "slope_db_per_s": 29.23
+    }
+   ],
+   "tp": 1,
+   "miss": 0,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [
+    400.3
+   ],
+   "cuts": [
+    {
+     "ts": 2.85,
+     "geq_band": 22,
+     "gain_db": -3.0
+    }
+   ],
+   "passed": false,
+   "latency_budget_ms": 300.0,
+   "wall_s": 0.174
+  },
+  {
+   "scenario": "X19_handheld_ring_stalls_and_hops",
+   "seed": 3,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "handheld_2k35",
+     "freq_hz": 2346.7,
+     "band": 69,
+     "t_onset": 2.0,
+     "t_prom": 2.6,
+     "t_end": 2.8,
+     "peak_level_db": -35.3,
+     "peak_prom_db": 15.7,
+     "established": false,
+     "visible": true
+    }
+   ],
+   "detections": [
+    {
+     "ts": 2.651,
+     "band": 69,
+     "freq_hz": 2334.4,
+     "confidence": 0.7,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 22,
+     "level_db": -36.7,
+     "prominence_db": 15.73,
+     "slope_db_per_s": 26.37
+    }
+   ],
+   "tp": 1,
+   "miss": 0,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [
+    51.3
+   ],
+   "cuts": [
+    {
+     "ts": 2.651,
+     "geq_band": 22,
+     "gain_db": -3.0
+    }
+   ],
+   "passed": true,
+   "latency_budget_ms": 300.0,
+   "wall_s": 0.173
+  },
+  {
+   "scenario": "X21_reverberant_area_mic_slow_ring",
+   "seed": 1,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "area_642_reverb",
+     "freq_hz": 641.8,
+     "band": 50,
+     "t_onset": 3.0,
+     "t_prom": 3.9,
+     "t_end": 4.55,
+     "peak_level_db": -20.3,
+     "peak_prom_db": 17.3,
+     "established": false,
+     "visible": true
+    }
+   ],
+   "detections": [
+    {
+     "ts": 4.198,
+     "band": 50,
+     "freq_hz": 629.0,
+     "confidence": 0.73,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 16,
+     "level_db": -21.46,
+     "prominence_db": 17.26,
+     "slope_db_per_s": 9.24
+    }
+   ],
+   "tp": 1,
+   "miss": 0,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [
+    298.2
+   ],
+   "cuts": [
+    {
+     "ts": 4.198,
+     "geq_band": 16,
+     "gain_db": -3.0
+    }
+   ],
+   "passed": true,
+   "latency_budget_ms": 600.0,
+   "wall_s": 0.425
+  },
+  {
+   "scenario": "X21_reverberant_area_mic_slow_ring",
+   "seed": 2,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "area_642_reverb",
+     "freq_hz": 642.9,
+     "band": 50,
+     "t_onset": 3.0,
+     "t_prom": 4.2,
+     "t_end": 4.85,
+     "peak_level_db": -20.1,
+     "peak_prom_db": 14.7,
+     "established": false,
+     "visible": true
+    }
+   ],
+   "detections": [
+    {
+     "ts": 4.498,
+     "band": 50,
+     "freq_hz": 623.0,
+     "confidence": 0.7,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 16,
+     "level_db": -21.91,
+     "prominence_db": 11.8,
+     "slope_db_per_s": 7.65
+    }
+   ],
+   "tp": 1,
+   "miss": 0,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [
+    298.2
+   ],
+   "cuts": [
+    {
+     "ts": 4.498,
+     "geq_band": 16,
+     "gain_db": -3.0
+    }
+   ],
+   "passed": true,
+   "latency_budget_ms": 600.0,
+   "wall_s": 0.428
+  },
+  {
+   "scenario": "X21_reverberant_area_mic_slow_ring",
+   "seed": 3,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "area_642_reverb",
+     "freq_hz": 641.8,
+     "band": 50,
+     "t_onset": 3.0,
+     "t_prom": 4.2,
+     "t_end": 5.2,
+     "peak_level_db": -20.5,
+     "peak_prom_db": 16.0,
+     "established": false,
+     "visible": true
+    }
+   ],
+   "detections": [
+    {
+     "ts": 4.803,
+     "band": 50,
+     "freq_hz": 626.5,
+     "confidence": 0.7,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 16,
+     "level_db": -21.75,
+     "prominence_db": 13.6,
+     "slope_db_per_s": 8.27
+    }
+   ],
+   "tp": 1,
+   "miss": 0,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [
+    602.7
+   ],
+   "cuts": [
+    {
+     "ts": 4.803,
+     "geq_band": 16,
+     "gain_db": -3.0
+    }
+   ],
+   "passed": false,
+   "latency_budget_ms": 600.0,
+   "wall_s": 0.427
+  },
+  {
+   "scenario": "X22_kick_mic_sub_ring_65Hz",
+   "seed": 1,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "kick_sub_65",
+     "freq_hz": 64.6,
+     "band": 17,
+     "t_onset": 5.9,
+     "t_prom": 6.3,
+     "t_end": 13.95,
+     "peak_level_db": -10.0,
+     "peak_prom_db": 39.6,
+     "established": false,
+     "visible": true
+    }
+   ],
+   "detections": [],
+   "tp": 0,
+   "miss": 1,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [],
+   "cuts": [],
+   "passed": false,
+   "latency_budget_ms": 1000.0,
+   "wall_s": 0.214
+  },
+  {
+   "scenario": "X22_kick_mic_sub_ring_65Hz",
+   "seed": 2,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "kick_sub_65",
+     "freq_hz": 64.6,
+     "band": 17,
+     "t_onset": 5.95,
+     "t_prom": 6.1,
+     "t_end": 13.95,
+     "peak_level_db": -10.0,
+     "peak_prom_db": 39.7,
+     "established": false,
+     "visible": true
+    }
+   ],
+   "detections": [],
+   "tp": 0,
+   "miss": 1,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [],
+   "cuts": [],
+   "passed": false,
+   "latency_budget_ms": 1000.0,
+   "wall_s": 0.211
+  },
+  {
+   "scenario": "X22_kick_mic_sub_ring_65Hz",
+   "seed": 3,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "kick_sub_65",
+     "freq_hz": 64.6,
+     "band": 17,
+     "t_onset": 5.95,
+     "t_prom": 6.0,
+     "t_end": 13.95,
+     "peak_level_db": -10.0,
+     "peak_prom_db": 38.7,
+     "established": false,
+     "visible": true
+    }
+   ],
+   "detections": [],
+   "tp": 0,
+   "miss": 1,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [],
+   "cuts": [],
+   "passed": false,
+   "latency_budget_ms": 1000.0,
+   "wall_s": 0.222
+  },
+  {
+   "scenario": "X23_ringout_quiet_room_two_modes",
+   "seed": 1,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "mode_630",
+     "freq_hz": 625.0,
+     "band": 50,
+     "t_onset": 13.5,
+     "t_prom": 13.6,
+     "t_end": 13.95,
+     "peak_level_db": -35.1,
+     "peak_prom_db": 23.8,
+     "established": false,
+     "visible": true
+    },
+    {
+     "ring": 1,
+     "label": "mode_2k52",
+     "freq_hz": 2520.0,
+     "band": 70,
+     "t_onset": 10.5,
+     "t_prom": 10.6,
+     "t_end": 10.95,
+     "peak_level_db": -59.1,
+     "peak_prom_db": 15.4,
+     "established": false,
+     "visible": true
+    }
+   ],
+   "detections": [
+    {
+     "ts": 7.851,
+     "band": 50,
+     "freq_hz": 623.7,
+     "confidence": 0.8,
+     "verdict": "EARLY",
+     "ring": 0,
+     "geq_band": 16,
+     "level_db": -49.93,
+     "prominence_db": 16.19,
+     "slope_db_per_s": 9.8
+    },
+    {
+     "ts": 10.7,
+     "band": 70,
+     "freq_hz": 2506.1,
+     "confidence": 0.8,
+     "verdict": "TP",
+     "ring": 1,
+     "geq_band": 22,
+     "level_db": -59.94,
+     "prominence_db": 13.34,
+     "slope_db_per_s": 11.8
+    },
+    {
+     "ts": 13.801,
+     "band": 50,
+     "freq_hz": 624.4,
+     "confidence": 0.8,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 16,
+     "level_db": -41.32,
+     "prominence_db": 22.57,
+     "slope_db_per_s": 27.47
+    }
+   ],
+   "tp": 2,
+   "miss": 0,
+   "fp": 0,
+   "early": 1,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [
+    201.4,
+    99.8
+   ],
+   "cuts": [
+    {
+     "ts": 7.851,
+     "geq_band": 16,
+     "gain_db": -3.0
+    },
+    {
+     "ts": 10.7,
+     "geq_band": 22,
+     "gain_db": -3.0
+    },
+    {
+     "ts": 13.801,
+     "geq_band": 16,
+     "gain_db": -6.0
+    }
+   ],
+   "passed": true,
+   "latency_budget_ms": 300.0,
+   "wall_s": 0.173
+  },
+  {
+   "scenario": "X23_ringout_quiet_room_two_modes",
+   "seed": 2,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "mode_630",
+     "freq_hz": 625.0,
+     "band": 50,
+     "t_onset": 13.5,
+     "t_prom": 13.5,
+     "t_end": 13.95,
+     "peak_level_db": -33.4,
+     "peak_prom_db": 26.1,
+     "established": false,
+     "visible": true
+    },
+    {
+     "ring": 1,
+     "label": "mode_2k52",
+     "freq_hz": 2520.0,
+     "band": 70,
+     "t_onset": 10.5,
+     "t_prom": 10.6,
+     "t_end": 10.9,
+     "peak_level_db": -58.8,
+     "peak_prom_db": 14.6,
+     "established": false,
+     "visible": true
+    }
+   ],
+   "detections": [
+    {
+     "ts": 7.848,
+     "band": 50,
+     "freq_hz": 625.0,
+     "confidence": 0.7,
+     "verdict": "EARLY",
+     "ring": 0,
+     "geq_band": 16,
+     "level_db": -52.13,
+     "prominence_db": 16.21,
+     "slope_db_per_s": 12.4
+    },
+    {
+     "ts": 10.651,
+     "band": 70,
+     "freq_hz": 2496.5,
+     "confidence": 0.7,
+     "verdict": "TP",
+     "ring": 1,
+     "geq_band": 22,
+     "level_db": -60.04,
+     "prominence_db": 12.68,
+     "slope_db_per_s": 7.25
+    },
+    {
+     "ts": 13.8,
+     "band": 50,
+     "freq_hz": 624.7,
+     "confidence": 0.8,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 16,
+     "level_db": -39.36,
+     "prominence_db": 24.82,
+     "slope_db_per_s": 35.8
+    }
+   ],
+   "tp": 2,
+   "miss": 0,
+   "fp": 0,
+   "early": 1,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [
+    300.3,
+    50.6
+   ],
+   "cuts": [
+    {
+     "ts": 7.848,
+     "geq_band": 16,
+     "gain_db": -3.0
+    },
+    {
+     "ts": 10.651,
+     "geq_band": 22,
+     "gain_db": -3.0
+    },
+    {
+     "ts": 13.8,
+     "geq_band": 16,
+     "gain_db": -6.0
+    }
+   ],
+   "passed": false,
+   "latency_budget_ms": 300.0,
+   "wall_s": 0.173
+  },
+  {
+   "scenario": "X23_ringout_quiet_room_two_modes",
+   "seed": 3,
+   "closed_loop": true,
+   "episodes": [
+    {
+     "ring": 0,
+     "label": "mode_630",
+     "freq_hz": 625.0,
+     "band": 50,
+     "t_onset": 9.0,
+     "t_prom": 9.0,
+     "t_end": 9.45,
+     "peak_level_db": -34.0,
+     "peak_prom_db": 31.1,
+     "established": false,
+     "visible": true
+    },
+    {
+     "ring": 0,
+     "label": "mode_630",
+     "freq_hz": 625.0,
+     "band": 50,
+     "t_onset": 13.5,
+     "t_prom": 13.6,
+     "t_end": 13.85,
+     "peak_level_db": -37.6,
+     "peak_prom_db": 21.7,
+     "established": false,
+     "visible": true
+    },
+    {
+     "ring": 1,
+     "label": "mode_2k52",
+     "freq_hz": 2520.0,
+     "band": 70,
+     "t_onset": 10.5,
+     "t_prom": 10.7,
+     "t_end": 11.05,
+     "peak_level_db": -58.0,
+     "peak_prom_db": 15.0,
+     "established": false,
+     "visible": true
+    }
+   ],
+   "detections": [
+    {
+     "ts": 9.298,
+     "band": 50,
+     "freq_hz": 624.8,
+     "confidence": 0.8,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 16,
+     "level_db": -37.18,
+     "prominence_db": 27.83,
+     "slope_db_per_s": 38.31
+    },
+    {
+     "ts": 10.801,
+     "band": 70,
+     "freq_hz": 2503.1,
+     "confidence": 0.8,
+     "verdict": "TP",
+     "ring": 1,
+     "geq_band": 22,
+     "level_db": -58.95,
+     "prominence_db": 13.71,
+     "slope_db_per_s": 13.75
+    },
+    {
+     "ts": 13.7,
+     "band": 50,
+     "freq_hz": 628.0,
+     "confidence": 0.7,
+     "verdict": "TP",
+     "ring": 0,
+     "geq_band": 16,
+     "level_db": -43.86,
+     "prominence_db": 19.48,
+     "slope_db_per_s": 16.16
+    }
+   ],
+   "tp": 3,
+   "miss": 0,
+   "fp": 0,
+   "early": 0,
+   "tail": 0,
+   "harm": 0,
+   "fp_geq_bands": [],
+   "latencies_ms": [
+    298.3,
+    99.9,
+    101.5
+   ],
+   "cuts": [
+    {
+     "ts": 9.298,
+     "geq_band": 16,
+     "gain_db": -3.0
+    },
+    {
+     "ts": 10.801,
+     "geq_band": 22,
+     "gain_db": -3.0
+    },
+    {
+     "ts": 13.7,
+     "geq_band": 16,
+     "gain_db": -6.0
+    }
+   ],
+   "passed": true,
+   "latency_budget_ms": 300.0,
+   "wall_s": 0.177
+  }
+ ]
+}

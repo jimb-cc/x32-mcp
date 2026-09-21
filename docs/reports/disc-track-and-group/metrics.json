@@ -1,0 +1,95 @@
+{
+ "informed_open": {
+  "scenarios": 61,
+  "pass": 53,
+  "events": 117,
+  "tp": 117,
+  "miss": 0,
+  "fp": 0,
+  "early": 5,
+  "tail": 0,
+  "harm": 0,
+  "worst_latency_ms": 2501.6,
+  "failing": [
+   "S3_ring_during_music",
+   "S11b_two_rings_near_octave",
+   "S12_acoustic_guitar_wedge_ring_196Hz",
+   "X8_slow_ring_midband_under_chords",
+   "X9_ring_rta_midpoint_525Hz_speech",
+   "X11_amp_clipped_howl_minus12dBFS",
+   "X19_handheld_ring_stalls_and_hops",
+   "X21_reverberant_area_mic_slow_ring"
+  ]
+ },
+ "informed_closed": {
+  "scenarios": 32,
+  "pass": 24,
+  "events": 116,
+  "tp": 116,
+  "miss": 0,
+  "fp": 0,
+  "early": 3,
+  "tail": 0,
+  "harm": 0,
+  "worst_latency_ms": 2501.6,
+  "failing": [
+   "S3_ring_during_music",
+   "S11b_two_rings_near_octave",
+   "S12_acoustic_guitar_wedge_ring_196Hz",
+   "X8_slow_ring_midband_under_chords",
+   "X9_ring_rta_midpoint_525Hz_speech",
+   "X11_amp_clipped_howl_minus12dBFS",
+   "X19_handheld_ring_stalls_and_hops",
+   "X21_reverberant_area_mic_slow_ring"
+  ]
+ },
+ "blind_open": {
+  "scenarios": 61,
+  "pass": 51,
+  "events": 117,
+  "tp": 111,
+  "miss": 6,
+  "fp": 0,
+  "early": 2,
+  "tail": 0,
+  "harm": 0,
+  "worst_latency_ms": 2501.6,
+  "failing": [
+   "S3_ring_during_music",
+   "S11b_two_rings_near_octave",
+   "S12_acoustic_guitar_wedge_ring_196Hz",
+   "X8_slow_ring_midband_under_chords",
+   "X9_ring_rta_midpoint_525Hz_speech",
+   "X11_amp_clipped_howl_minus12dBFS",
+   "X17_ring_122Hz_acoustic_guitar_body",
+   "X19_handheld_ring_stalls_and_hops",
+   "X21_reverberant_area_mic_slow_ring",
+   "X22_kick_mic_sub_ring_65Hz"
+  ]
+ },
+ "blind_closed": {
+  "scenarios": 32,
+  "pass": 21,
+  "events": 117,
+  "tp": 111,
+  "miss": 6,
+  "fp": 0,
+  "early": 2,
+  "tail": 0,
+  "harm": 0,
+  "worst_latency_ms": 2501.6,
+  "failing": [
+   "S3_ring_during_music",
+   "S11b_two_rings_near_octave",
+   "S12_acoustic_guitar_wedge_ring_196Hz",
+   "X8_slow_ring_midband_under_chords",
+   "X9_ring_rta_midpoint_525Hz_speech",
+   "X11_amp_clipped_howl_minus12dBFS",
+   "X17_ring_122Hz_acoustic_guitar_body",
+   "X19_handheld_ring_stalls_and_hops",
+   "X21_reverberant_area_mic_slow_ring",
+   "X22_kick_mic_sub_ring_65Hz",
+   "X23_ringout_quiet_room_two_modes"
+  ]
+ }
+}
