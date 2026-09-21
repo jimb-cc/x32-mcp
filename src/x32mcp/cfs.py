@@ -888,7 +888,9 @@ class CfsManager:
         nc = NotchController(cfg, self._geq_hz, self._policy.validate_notch, budget=budget, existing=existing)
         writer = _DeskGeqWriter(self._desk, self._policy, bus_int, ins.fx_slot, ins.side, existing)
         cfg = await self._calibrate_floor(cfg)
-        det = FeedbackDetector(cfg, self._band_hz)
+        # ring_out: the detector knows the server owns the gain (active probe, see detector.note_gain_step);
+        # feedback_watch: a human does
+        det = FeedbackDetector(cfg, self._band_hz, mode="ringout" if mode is CfsMode.RINGOUT else "watch")
         start = float(pf.master_db)
         ses = _Session(
             session_id=self._new_id(mode.value, t), mode=mode, target=t, bus=bus_label(t), bus_int=bus_int, bus_name=pf.bus_name,
@@ -1191,8 +1193,13 @@ class CfsManager:
                 ses.master_db = after
                 reason = f"master clamped at {format_db(after)} dB"
                 break
+            prev_master = ses.master_db
             ses.master_db = after
             ses.max_master_db = max(ses.max_master_db, after)
+            # tell the discriminator about our own gain step: a line whose level answers it super-linearly is
+            # loop-gain dependent (loop brief §1.5) — the free active probe of a ring-out
+            if math.isfinite(after) and math.isfinite(prev_master) and after != prev_master:
+                ses.det.note_gain_step(after - prev_master, ses.last_ts if ses.last_ts is not None else self._clock())
             await self._stage(ses, "RAISE")
             await self._dwell(ses, ses.dwell_ms / 1000.0)
         await self._finalize_levels(ses, reason)

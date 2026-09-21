@@ -1187,6 +1187,9 @@ class FeedbackDetector:
                     t.coast = 0
                     if k - t.kf[-1] > 10:
                         t.grow_start = len(t.levels)   # a gap this long (0.5 s) breaks a ramp
+                    if t.est and not t.feedback and k - t.kf[-1] > 3:
+                        t.est = False                  # an established howl does not disappear for 150 ms; whatever
+                        t.birth = "static"             # re-appears here was not the line that was there at arm
                     break
             if t is None:
                 t = Candidate(band=b, first_ts=ts, born_frame=k, centroid=c)
