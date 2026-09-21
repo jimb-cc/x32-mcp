@@ -150,6 +150,7 @@ class DetectorConfig:
     confirm_frames: int = 5              # K1: stationarity / loud / strong-prominence confirmation (250 ms)
     watch_confirm_frames: int = 15       # K2: clean window for TIER B in watch mode (750 ms)
     centroid_tol_bands: float = 0.35     # |centroid - window median| beyond this is an outlier
+    centroid_mad_bands: float = 0.15     # median |centroid - median| above this = the line swings (vibrato >= +-25 c)
     stationary_outlier_frac: float = 0.25
     glide_bands: float = 0.75            # window median drifted this far from the birth centroid => moved
     strong_prominence_db: float = 18.0   # TIER A for at_arm/slow lines (with steadiness)
@@ -175,7 +176,7 @@ class DetectorConfig:
     arm_frames: int = 4                  # tracks born within this many frames of start are "at_arm"
     assoc_tol_bands: float = 0.6         # frame-to-frame centroid match radius (a new strong line >= 1 band away
                                          # from a note must start its OWN track, not inherit the note's history)
-    max_gap_frames: int = 3              # a track survives this many consecutive frames without its peak (masking
+    max_gap_frames: int = 5              # a track survives this many consecutive frames without its peak (masking
                                          # transients: a crash or snare hides a line for 100-150 ms)
     history_frames: int = 48             # per-track history cap
     backfill_frames: int = 16            # frame ring buffer for pre-birth back-fill (0.8 s)
@@ -801,11 +802,17 @@ class FeedbackDetector:
         used_p: set[int] = set()
         # pass 1: strict radius; pass 2: leftovers within a band (wide vibrato swings the centroid by up to ±0.6
         # band; that is still ONE line and must stay one track, or its family/motion record is lost)
-        for radius in (cfg.assoc_tol_bands, 1.0):
+        for radius in (cfg.assoc_tol_bands, 0.85):
+            second = radius > cfg.assoc_tol_bands
             pairs: list[tuple[float, int, int]] = []
             for ti, t in enumerate(self._tracks):
                 if ti in used_t:
                     continue
+                if second:
+                    rc = t.centroids[-6:]
+                    if len(rc) < 3 or (max(rc) - min(rc)) < 0.3:
+                        continue      # the wide radius is only for lines that visibly swing (vibrato); a steady
+                                      # line must not annex a new neighbour a semitone away
                 last_cp = t.cpows[-1] if t.cpows else -128.0
                 for pi, pk in enumerate(peaks):
                     if pi in used_p:
@@ -864,6 +871,10 @@ class FeedbackDetector:
         if len(pre) < 3:
             c.onset = "at_arm"
             return
+        if len(c.centroids) >= 3 and abs(c.centroids[2] - c.centroids[0]) >= 0.4:
+            c.onset = "adult"         # arrived sliding in pitch (portamento/scoop, or born on a moving partial):
+            return                    # a loop mode does not glide; if a ring later takes this band over, its own
+                                      # ramp re-qualifies the track
         seq = pre + c.levels[:3]
         npre = len(pre)
         floor_ref = _median_small(list(pre))          # robust floor: the bed under the line fluctuates by dB
@@ -1019,8 +1030,12 @@ class FeedbackDetector:
             return True, c.centroid
         m = _median_small(list(cs))
         tol = cfg.centroid_tol_bands
-        out = sum(1 for x in cs if abs(x - m) > tol)
-        ok = out <= cfg.stationary_outlier_frac * len(cs) and abs(cs[-1] - m) <= cfg.glide_bands
+        dev = [abs(x - m) for x in cs]
+        out = sum(1 for x in dev if x > tol)
+        mad = _median_small(list(dev))
+        # outliers (a neighbour partial yanking the interpolation for a frame) are tolerated; a systematic swing
+        # (vibrato, even +-30 cents) shows in the median absolute deviation
+        ok = out <= cfg.stationary_outlier_frac * len(cs) and mad <= cfg.centroid_mad_bands and abs(cs[-1] - m) <= cfg.glide_bands
         return ok, m
 
     def _comoving(self, c: Candidate) -> bool | None:
@@ -1096,15 +1111,15 @@ class FeedbackDetector:
         fam_ratio = (sum(1 for f in famwin if f) / len(famwin)) if famwin else 0.0
         if len(famwin) >= 8 and sum(1 for f in famwin[-10:] if f) >= 6:
             c.fam_lineage = True
-        elif c.fam_lineage and fno - c.last_family_frame > 3 * cfg.family_window_frames:
-            c.fam_lineage = False       # lineage memory (a note decaying to a sine) fades after ~3 s without family
+        elif c.fam_lineage and fno - c.last_family_frame > 2 * cfg.family_window_frames:
+            c.fam_lineage = False       # lineage memory (a note decaying to a sine) fades after ~2 s without family
         family = fam_ratio >= cfg.family_ratio or c.fam_lineage or (c.frames <= 3 and c.fam and c.fam[-1])
         fam_recent = any(c.fam[-3:]) if c.fam else False
 
         stat_k1, med_c = self._stationary(c, K1)
         stat_k2, med_k2 = self._stationary(c, K2)
         glide = False
-        if c.frames <= 3 * K2 and abs(med_c - c.birth_centroid) > cfg.glide_bands:
+        if c.frames <= K2 and abs(med_c - c.birth_centroid) > cfg.glide_bands:
             glide = True                                   # portamento / scoop at birth
         elif len(c.centroids) >= 2 * K2:
             prev = _median_small(list(c.centroids[-2 * K2:-K2]))
@@ -1154,7 +1169,7 @@ class FeedbackDetector:
         # a fresh ramp re-qualifies a line whose earlier life looked like programme (chord tone's band taken
         # over by a ring; kick re-triggering the band of an LF loop): behaviour NOW wins over lineage,
         # except for a family visible NOW.
-        if ramp_ok and n_inc >= cfg.ramp_strong_frames and rise >= 10.0 and not fam_recent:
+        if ramp_ok and n_inc >= cfg.ramp_strong_frames and rise >= 8.0 and not fam_recent:
             # >= 300 ms of solitary exponential growth: whatever shared this band before (a chord tone, a vocal
             # partial, a kick), what is growing NOW has no family and was seen to grow from below -> judge it on
             # its own record from here on
@@ -1184,6 +1199,12 @@ class FeedbackDetector:
                 vm = sum(llv) / n_
                 res = math.sqrt(sum((v - vm - wslope * (t - tm)) ** 2 for t, v in zip(lts, llv)) / n_)
                 slow_rise = res <= 0.8
+        if slow_rise and c.onset == "adult" and not fam_recent and not family \
+                and wslope * (lts[-1] - lts[0]) >= 4.0:
+            # >= 1.2 s of steady, solitary, dB-linear creep upward: a marginal loop (e/tau of a few dB/s), not
+            # the note whose band this track was born on (notes do not crescendo like that without partials or
+            # vibrato) -> judge it on its own record
+            c.onset = "slow"
 
         # short-window slope for reporting
         sl = c.cpows[-10:]
@@ -1219,20 +1240,26 @@ class FeedbackDetector:
         if clip:
             family = False       # the desk's clip flag: a howl at full scale grows odd harmonics; nothing narrow that
                                  # loud is left alone because of them (loop brief §2.2, analyser brief §4.3)
-        base = in_win and level_ok and prom_ok and narrow_ok and age_ok and not family and stat_k1 and not glide
+        base = in_win and level_ok and prom_ok and narrow_ok and age_ok and not family and stat_k1
+        settled = base and not glide          # steady-state tiers also want no recent pitch step
         musical = family or moving_recent or comove_recent
         c.state = "musical" if musical else ("candidate" if (prom_ok and level_ok) else "track")
 
         tier = ""
         if base:
+            span_k = max(K1, min(K2, n_inc + 1))
             if clip:
                 tier = "A:clip"
-            elif loud and c.frames >= K1 and not moving_recent:
+            elif loud and c.frames >= K1 and not moving_recent and settled:
                 tier = "A:loud"
-            elif ramp_strong:
+            elif ramp_strong and self._stationary(c, span_k)[0]:
+                # stationary over the ramp itself; how the peak got here before the ramp (a neighbour's line the
+                # ring has since swallowed) is not held against it
                 tier = "A:ramp"
-            elif probe_strong and not moving_recent:
+            elif probe_strong and not moving_recent and settled:
                 tier = "A:probe"
+            elif not settled:
+                tier = ""
             elif (c.onset == "at_arm" and prom_now >= cfg.strong_prominence_db and c.frames >= K1 and steady_level_ok
                   and steady and not musical and not decay_recent and not probe_linear
                   and _median_small(list(proms)) >= cfg.strong_prominence_db):
