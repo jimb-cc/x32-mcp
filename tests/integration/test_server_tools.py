@@ -757,3 +757,44 @@ async def test_main_configures_stderr_so_unicode_log_records_survive(tmp_path):
     assert out.returncode == 0, out.stderr
     assert "Logging error" not in out.stderr, out.stderr
     assert "fader −6.0 dB → −4.0 dB CFS²" in out.stderr, out.stderr
+
+
+async def test_tokens_bind_what_the_user_was_shown(app, fakedesk, tmp_path):
+    """A confirmation executes what its summary described. Reproduced red-team findings: the
+    restore/patch tokens bound a path (not the file shown), ring_out_system(plan=None) bound
+    {'plan': None} and re-derived the bus list at redeem time, ring_out did not bind the open-mic
+    list the user is asked to check, and NaN stage arguments passed the dance."""
+    # restore_snapshot: editing the snapshot file between the calls voids the token
+    snap = await srv.snapshot_desk("t")
+    tok = assert_pending(await srv.restore_snapshot(snap["id"]))
+    p = Path(snap["path"])
+    p.write_text(p.read_text().replace('"label": "t"', '"label": "t2"'))
+    assert_err(await srv.restore_snapshot(snap["id"], confirm_token=tok), "BAD_TOKEN")
+    # apply_patch_plan(include_source): same for the patch file
+    plan = tmp_path / "patches" / "band.yaml"
+    plan.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy(EXAMPLE, plan)
+    tok = assert_pending(await srv.apply_patch_plan(str(plan), include_source=True))
+    plan.write_text(plan.read_text().replace("Ray", "NotRay", 1))
+    assert_err(await srv.apply_patch_plan(str(plan), include_source=True, confirm_token=tok), "BAD_TOKEN")
+    # ring_out_system(plan=None): a bus that becomes valid between the calls voids the token
+    tok1 = assert_pending(await srv.setup_ringout_eqs([1]))
+    assert (await srv.setup_ringout_eqs([1], confirm_token=tok1))["ok"]
+    pend = await srv.ring_out_system()
+    tok = assert_pending(pend)
+    assert pend["stages"] == [{"bus": 1}]
+    tok2 = assert_pending(await srv.setup_ringout_eqs([1, 2]))
+    assert (await srv.setup_ringout_eqs([1, 2], confirm_token=tok2))["ok"]
+    assert_err(await srv.ring_out_system(confirm_token=tok), "BAD_TOKEN")
+    # ring_out_system stage arguments are validated before a token is minted
+    assert_err(await srv.ring_out_system({"stages": [{"bus": 1, "target_gain_db": float("nan")}]}), "BAD_ARGUMENT")
+    assert_err(await srv.ring_out_system({"stages": [{"bus": 1, "step_db": "lots"}]}), "BAD_ARGUMENT")
+    # ring_out: the open-mic set is part of what was confirmed
+    for ch in (1, 2):
+        fset(app, fakedesk, f"/ch/{ch:02d}/mix/01/level", -20.0)
+    fset(app, fakedesk, "/bus/01/mix/fader", -20.0)
+    pend = await srv.ring_out(1, target_gain_db=-19.0, dwell_ms=10)
+    tok = assert_pending(pend)
+    assert "Ch 1" in pend["action_summary"] and "Ch 2" in pend["action_summary"]
+    fset(app, fakedesk, "/ch/03/mix/01/level", -10.0)  # a third mic is opened onto the bus after the user said yes
+    assert_err(await srv.ring_out(1, target_gain_db=-19.0, dwell_ms=10, confirm_token=tok), "BAD_TOKEN")

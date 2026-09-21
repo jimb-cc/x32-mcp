@@ -57,6 +57,7 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import functools
+import hashlib
 import json
 import logging
 import math
@@ -328,6 +329,15 @@ def _tool(timeout: float | None = DEFAULT_TOOL_TIMEOUT_S) -> Callable[[Callable[
     return deco
 
 
+def _file_digest(path: Any) -> str:
+    """sha256 of a file's bytes — bound into confirmation payloads so the second call executes the
+    file the user was shown, not whatever is at that path by then."""
+    try:
+        return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    except OSError as e:
+        raise DeskError("NOT_FOUND", f"cannot read {path}: {e}") from None
+
+
 def _confirm(action: str, summary: str, payload: dict[str, Any], confirm_token: str | None, **extra: Any) -> dict[str, Any] | None:
     """The Tier-2 dance: show-mode check, then ``policy.guard``. Returns the pending envelope
     on the first call, ``None`` once a valid token was consumed (raises on a bad one)."""
@@ -391,6 +401,19 @@ async def _name(desk: Desk, t: Target) -> str:
     except Exception:
         return ""
 
+
+
+def _finite_arg(value: Any, name: str) -> float:
+    """A finite float argument (rejects NaN/inf, bools and non-numbers) — BAD_ARGUMENT otherwise."""
+    if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+        raise DeskError("BAD_ARGUMENT", f"{name} must be a number, got {value!r}")
+    try:
+        f = float(value)
+    except ValueError:
+        raise DeskError("BAD_ARGUMENT", f"{name} must be a number, got {value!r}") from None
+    if not math.isfinite(f):
+        raise DeskError("BAD_ARGUMENT", f"{name} must be a finite number, got {value!r}")
+    return f
 
 def _int_arg(v: Any, what: str, lo: int, hi: int) -> int:
     if isinstance(v, bool) or not isinstance(v, (int, float)) or (isinstance(v, float) and not v.is_integer()):
@@ -1132,7 +1155,7 @@ async def recall_scene(scene: str | int, confirm_token: str | None = None) -> di
     if not slot["has_data"]:
         raise DeskError("BAD_ARGUMENT", f"scene slot {slot['index']} is empty", index=slot["index"])
     cur = await desk.current_scene()
-    payload = {"index": int(slot["index"])}
+    payload = {"index": int(slot["index"]), "name": str(slot.get("name") or "")}
     summary = (
         f"Recall scene {slot['index']} '{slot['name']}' (currently loaded: {cur['index']} '{cur['name']}'); "
         "this replaces every setting on the desk"
@@ -1248,7 +1271,7 @@ async def restore_snapshot(id: str, scope: str | None = None, confirm_token: str
     changes = await asyncio.wait_for(_diff(desk, snap, scope), timeout=DUMP_TIMEOUT_S)
     sections = len({c.section for c in changes})
     preview = describe_changes(changes[:15]) + (f"\n… {len(changes) - 15} more" if len(changes) > 15 else "")
-    payload = {"id": snap.id, "scope": scope}
+    payload = {"id": snap.id, "scope": scope, "snapshot_sha256": _file_digest(snap.path)}
     summary = (
         f"Restore snapshot {snap.id}" + (f" ({snap.label})" if snap.label else "") + f" from {snap.created}"
         + (f", scope {scope}" if scope else " (whole desk)") + f": {len(changes)} setting(s) in {sections} section(s) would change"
@@ -1323,7 +1346,8 @@ async def apply_patch_plan(file: str, include_source: bool = False, confirm_toke
     plan = _patches.load_patch_plan(path, descriptor=a.descriptor)
     if include_source:
         rows = [r for r in plan.rows if r.source is not None]
-        payload = {"file": str(path), "include_source": True}
+        payload = {"file": str(path), "include_source": True, "plan_sha256": _file_digest(path),
+                   "sources": [[int(r.channel), str(r.source)] for r in rows]}
         summary = (
             f"Apply patch plan {path.name}" + (f" ('{plan.band}')" if plan.band else "") + f": label {len(plan.rows)} channel(s) AND patch "
             f"{len(rows)} input source(s): " + ", ".join(f"ch {r.channel} {_ARROW} {r.source}" for r in rows[:12])
@@ -1759,6 +1783,8 @@ async def ring_out(
     payload = {
         "bus": _prov.bus_label(t), "target_gain_db": None if target_gain_db is None else float(target_gain_db),
         "step_db": step, "dwell_ms": dwell, "notch_budget": budget, "patch_file": patch_file,
+        # what the user is actually asked to confirm: the live mics this run will drive into feedback
+        "open_mics": [int(m.ch) for m in pf.included_mics],
     }
     ins = pf.geq.insert
     summary = (
@@ -1798,7 +1824,9 @@ async def ring_out_system(plan: dict[str, Any] | None = None, confirm_token: str
         stages = [{"bus": k} for k, s in status.items() if s.ok]
         if not stages:
             raise CfsError("NO_STAGES", "nothing to ring out: no bus (or Main LR) has a validated ring-out GEQ; run setup_ringout_eqs first")
-        cfs_plan: dict[str, Any] | None = None
+        # The resolved list IS the plan: it is bound into the token below and handed to CFS² as-is,
+        # so the confirmed run cannot silently grow to buses that became valid after the preview.
+        cfs_plan: dict[str, Any] | None = {"stages": [dict(st) for st in stages]}
     else:
         raw = plan.get("stages") if isinstance(plan, dict) else None
         if not isinstance(raw, list) or not raw:
@@ -1814,8 +1842,10 @@ async def ring_out_system(plan: dict[str, Any] | None = None, confirm_token: str
                 item["notch_budget"] = _int_arg(item["notch_budget"], "notch_budget", 1, 12)
             if item.get("dwell_ms") is not None:
                 item["dwell_ms"] = _int_arg(item["dwell_ms"], "dwell_ms", 0, 60_000)
+            if item.get("target_gain_db") is not None:
+                item["target_gain_db"] = _finite_arg(item["target_gain_db"], "target_gain_db")
             if item.get("step_db") is not None:
-                step = float(item["step_db"])
+                step = _finite_arg(item["step_db"], "step_db")
                 if not 0 < step <= a.policy.relative_limit_db:
                     raise DeskError("BAD_ARGUMENT", f"step_db must be > 0 and <= {a.policy.relative_limit_db:g}, got {item['step_db']!r}")
                 item["step_db"] = step
@@ -1824,7 +1854,7 @@ async def ring_out_system(plan: dict[str, Any] | None = None, confirm_token: str
             stages.append(item)
         cfs_plan = {"stages": stages}
     labels = ", ".join(_bus_target(s["bus"]).label for s in stages)
-    payload = {"plan": _jsonable(plan)}
+    payload = {"plan": _jsonable(plan), "stages": [_prov.bus_label(_bus_target(s["bus"])) for s in stages]}
     summary = (
         f"System ring-out of {len(stages)} stage(s) in order: {labels} — each bus master is raised to its target "
         "(default 0 dB) with automatic GEQ notches, then backed off 3 dB; one confirmation covers the whole run. "

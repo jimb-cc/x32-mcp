@@ -23,7 +23,12 @@ Decisions where DESIGN.md is silent:
   deleted on every outcome (success, bad, expired). :meth:`Policy.guard` stores the action *and*
   the payload with the token and rejects the token (``BAD_TOKEN``) when the second call names a
   different action or a different payload, so a token can only ever execute the request whose
-  summary the user saw. Expired tokens are swept on every mint/consume.
+  summary the user saw. Payloads are compared canonically (type-exact: ``True`` is not ``1``), a
+  token minted without an action cannot satisfy a guard that names one, minting a new token for an
+  action revokes older unconfirmed tokens for the same action (one live summary per action), and at
+  most 64 tokens are outstanding. Expired tokens are swept on every mint/consume. Callers bind into
+  the payload whatever the summary showed that the arguments alone do not pin down (file digests,
+  the resolved stage list, the open-mic set).
 * **Show mode** blocks ``scene_recall``, ``scene_save``, ``setup_ringout_eqs``, ``ring_out`` and
   ``ring_out_system`` (tool-name spellings ``recall_scene``/``save_scene`` are accepted as aliases);
   ``restore_snapshot`` is allowed — it is the undo. ``force`` bypasses the relative limit even in
@@ -43,6 +48,7 @@ soft and reported through :class:`Clamped` (``reason`` ``CLAMPED_TO_LIMIT``), ne
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import math
 import secrets
@@ -70,6 +76,7 @@ log = logging.getLogger(__name__)
 
 FADER_FLOOR_DB = -90.0  # below this the fader is at its bottom stop = -oo (scales_params.md §2.4)
 _MIN_RAMP_DELTA_DB = 0.05  # moves smaller than this are one step: the desk grid is coarser anyway
+_MAX_OUTSTANDING_TOKENS = 64
 _EPS = 1e-9
 
 SHOW_MODE_BLOCKED: frozenset[str] = frozenset({
@@ -151,6 +158,11 @@ class _Token:
     payload: dict[str, Any]
     minted: float
     expires_at: float
+
+
+def _canonical(payload: Any) -> str:
+    """Type-exact, order-independent rendering of a token payload for comparison."""
+    return json.dumps(payload, sort_keys=True, default=str, allow_nan=True)
 
 
 def _num(value: Any, what: str) -> float:
@@ -315,6 +327,16 @@ class Policy:
         to ``action``. Returns the envelope the tool should hand back."""
         now = self._clock()
         self._sweep_tokens(now)
+        if action is not None:
+            # One live summary per action: minting a new one revokes whatever the user was shown before
+            # and did not confirm, so a declined (or superseded) request cannot be replayed later.
+            stale = [t for t, tok in self._tokens.items() if tok.action == action]
+            for t in stale:
+                del self._tokens[t]
+            if stale:
+                log.info("confirmation for %s re-issued: %d earlier unconfirmed token(s) revoked", action, len(stale))
+        while len(self._tokens) >= _MAX_OUTSTANDING_TOKENS:  # bounded memory whatever a client does
+            del self._tokens[next(iter(self._tokens))]
         token = secrets.token_urlsafe(8)
         while token in self._tokens:  # astronomically unlikely, but single-use must stay single-use
             token = secrets.token_urlsafe(8)
@@ -336,10 +358,10 @@ class Policy:
             raise PolicyError("BAD_TOKEN", "unknown or already used confirm_token; call again without a token to get a new one")
         if now - tok.minted >= self.confirm_token_ttl_s:
             raise PolicyError("TOKEN_EXPIRED", f"confirm_token expired after {self.confirm_token_ttl_s:g} s; call again without a token")
-        if expected_action is not None and tok.action is not None and tok.action != expected_action:
+        if expected_action is not None and tok.action != expected_action:
             raise PolicyError(
                 "BAD_TOKEN",
-                f"confirm_token was issued for {tok.action!r}, not {expected_action!r}; call again without a token",
+                f"confirm_token was issued for {tok.action or 'an unnamed action'!r}, not {expected_action!r}; call again without a token",
             )
         self._events.publish("policy.confirmed", action=tok.action or expected_action, summary=tok.summary)
         return tok.payload
@@ -353,7 +375,7 @@ class Policy:
         if confirm_token is None or confirm_token == "":
             return self.require_confirmation(summary, payload, action=action)
         stored = self.consume_token(confirm_token, expected_action=action)
-        if stored != dict(payload):
+        if _canonical(stored) != _canonical(dict(payload)):  # not ==: True == 1 == 1.0 in Python, not in a summary
             raise PolicyError(
                 "BAD_TOKEN",
                 f"confirm_token was issued for a different {action} request; call again without a token",
