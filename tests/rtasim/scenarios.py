@@ -800,6 +800,46 @@ def _x20(seed, st):
     return Scene(12.0, sources=[room_noise(-74.0), music_bed(-62.0, lfo_db=0.5, seed=seed), hum, whine, sp])
 
 
+@scenario("X21_reverberant_area_mic_slow_ring", "choir/area condenser in the reverberant field: tau_eff 70 ms loop at 642 Hz (band 50 +45 c) with 0.8 dB "
+          "excess -> only 11 dB/s, hopping -130 c at t=7 (large reverberant hop), sat -20, under a sung SATB-ish chord pad (voice "
+          "timbre, vibrato) + bed -50", "ONE FEEDBACK event; detect <= 600 ms", 14.0,
+          tags=("feedback", "music", "slow", "hop", "reverberant", "examiner"), latency_budget_ms=600.0)
+def _x21(seed, st):
+    choir = ChordPad(chords=[["D3", "A3", "D4", "F#4"], ["G3", "B3", "D4", "G4"], ["A3", "C#4", "E4", "A4"], ["D3", "F#3", "A3", "D4"]],
+                     t_start=0.3, t_end=13.7, chord_s=3.2, level_db=-33.0, timbre="voice", attack_s=0.12, release_db_per_s=40.0,
+                     vib_rate_hz=5.4, vib_cents=45.0, vib_delay_s=0.4, drift_cents=10.0, flutter_db=1.2, timbre_jitter_db=4.0,
+                     strum_s=0.05, seed=seed)
+    ring = FeedbackRing(freq_hz=band_centre_hz(50, 45.0), excess_db=0.8, tau_loop_s=0.070, t_on=3.0, start_db=-66.0, sat_db=-20.0,
+                        hop_at_s=7.0, hop_cents=-130.0, freq_drift_cents=8.0, wander_db=0.5, excess_wander_db=0.15, label="area_642_reverb")
+    return Scene(14.0, sources=[room_noise(), music_bed(-50.0, seed=seed), choir], rings=[ring])
+
+
+@scenario("X22_kick_mic_sub_ring_65Hz", "GENUINE LF feedback: kick-drum mic into a drum-fill sub, loop at 64.6 Hz (band 17 +30 c), tau 25 ms (sub DSP + box "
+          "group delay); -2 dB (rings on every kick) until t=6, then +0.5 dB -> 20 dB/s to -10; kick 62 Hz pattern + bass line + "
+          "bed. tau_a at band 17 ~ 110 ms.", "FEEDBACK at 65 Hz from t=6; detect <= 1 s; requires LF opt-in — a design that hard-floors "
+          "at 100 Hz fails here", 14.0, tags=("feedback", "music", "lf", "mixture", "examiner"), latency_budget_ms=1000.0, lf_optin=True)
+def _x22(seed, st):
+    kick = DrumPattern(t_start=0.4, t_end=13.6, bpm=100.0, pattern="rock", level_db=-28.0, seed=seed, kick_hz=62.0)
+    bass = BassLine(notes=["E1", "G1", "A1", "B1"], t_start=0.4, t_end=13.6, note_s=0.5, gap_s=0.1, level_db=-38.0, seed=seed)
+    ring = FeedbackRing(freq_hz=band_centre_hz(17, 30.0), excess_db=-2.0, excess_points=((0.0, -2.0), (5.5, -2.0), (6.0, 0.5)),
+                        tau_loop_s=0.025, t_on=0.0, start_db=-80.0, sat_db=-10.0, excite_coupling_db=-3.0, label="kick_sub_65")
+    return Scene(14.0, sources=[room_noise(), music_bed(-56.0, tilt=-1.8, lfo_db=1.5, seed=seed), kick, bass], rings=[ring])
+
+
+@scenario("X23_ringout_quiet_room_two_modes", "ring_out as intended: NO programme, room noise only (-56 @ 25 Hz ... -80 @ 1 kHz, all through the open mic: "
+          "coupling 0 dB); master +1 dB / 1.5 s x9 from t=1.5; latent modes 630 Hz (band 50, e -5.4, tau 10 ms) and 2520 Hz (e -6.7): "
+          "they cross on the 6th and 7th steps (t=9.0, 10.5); before that each band over-responds to the steps",
+          "FEEDBACK 630 Hz on 9.0 and 2520 Hz on 10.5; detect <= 300 ms after visibility; EARLY (probe) detections welcome; 0 FP", 16.0,
+          tags=("feedback", "ring_out", "probe", "examiner"), mode="ring_out")
+def _x23(seed, st):
+    master = CommonModeGain.ring_out_steps(t_first=1.5, dwell_s=1.5, step_db=1.0, n_steps=9)
+    a = FeedbackRing(freq_hz=band_centre_hz(50, 0.0), excess_db=-5.4, tau_loop_s=0.010, t_on=0.0, start_db=-90.0, sat_db=-8.0,
+                     excite_coupling_db=0.0, label="mode_630")
+    b = FeedbackRing(freq_hz=2520.0, excess_db=-6.7, tau_loop_s=0.010, t_on=0.0, start_db=-90.0, sat_db=-8.0,
+                     excite_coupling_db=0.0, label="mode_2k52")
+    return Scene(16.0, sources=[room_noise(-74.0)], rings=[a, b], master=master, prog_coupling=1.0)
+
+
 # ==================================================================================================
 # rendering + cache
 # ==================================================================================================

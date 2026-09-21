@@ -21,7 +21,7 @@ from rtasim import SCENARIOS, evaluate
 from rtasim.harness import run_one
 
 DEFAULT_REPORT_DIR = ("/private/tmp/claude-502/-Users-jimb-code-studio-intel-demo/d5626e47-bee8-4335-aa3f-27a50ae21455/"
-                      "scratchpad/reports/corpus-critic")
+                      "scratchpad/reports/corpus-critic/pytest")
 
 
 def _report_dir(tmp_path_factory) -> Path:
