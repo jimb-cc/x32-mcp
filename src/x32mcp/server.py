@@ -1067,7 +1067,10 @@ async def panic() -> dict[str, Any]:
     (no ramp, no confirmation, never blocked by show mode or rate limits). Use when the user says
     stop / kill it / mute everything. It also cancels any fader ramp, restore or ring-out this server
     was running. The muted outputs are LATCHED: unmute/restore_snapshot refuse them until the user
-    confirms the emergency is over via clear_panic (or re-opens Main LR with set_main_mute). Tier 1."""
+    confirms the emergency is over via clear_panic (or re-opens Main LR with set_main_mute). It silences
+    the 24 mix masters, i.e. outputs tapped POST-fader; feeds taken from direct outs (P16/personal
+    monitors, recording splits), AES50/card routing from input blocks, PRE-tapped physical outs and the
+    monitor/phones bus are NOT touched — say so and tell the user to pull those on the console. Tier 1."""
     desk = _desk()
     res = await desk.panic()
     delivered = res.get("delivered")
@@ -1083,7 +1086,8 @@ async def panic() -> dict[str, Any]:
     return _ok(
         f"PANIC: {res['count']} mutes sent in {res['elapsed_ms']} ms ({delivered}){tail}"
         + (f"; {res['cancelled_ramps']} running fader ramp(s) cancelled" if res.get("cancelled_ramps") else "")
-        + ". Outputs stay latched until clear_panic is confirmed.",
+        + ". Outputs stay latched until clear_panic is confirmed. Note: direct-out/P16/AES50/card feeds, PRE-tapped outs and"
+          " monitor/phones are not affected by bus mutes — check those on the console.",
         **res,
     )
 

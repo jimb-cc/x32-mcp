@@ -631,8 +631,11 @@ the connection is degraded it still fires the datagrams, reports `delivered: "un
 sends them again the moment the desk answers. The muted outputs are **latched**: `unmute` and
 `restore_snapshot` refuse them (`PANIC_LATCHED`) until the operator confirms `clear_panic` — which
 unmutes nothing, it only lifts the latch — or re-opens a main through the confirmed
-`set_main_mute`. It is a backstop; the reflex at a gig is X32-Edit or the physical mute (see
-[`docs/GIG_CHECKLIST.md`](docs/GIG_CHECKLIST.md)).
+`set_main_mute`. What it silences is the 24 **mix masters** — everything tapped post-fader from a
+bus, matrix or main. It does not touch feeds that bypass those masters: direct-out taps (P16 personal
+monitors, record/broadcast splits), AES50/card outputs routed from input blocks, physical outs set to a
+PRE/EQ tap, the monitor/phones bus and talkback. Know which of those your rig has. It is a backstop; the
+reflex at a gig is X32-Edit or the physical mute (see [`docs/GIG_CHECKLIST.md`](docs/GIG_CHECKLIST.md)).
 
 **Snapshot before write.** The first Tier-1/2 write of a session first dumps the whole desk to
 `snapshots/<timestamp>-auto-pre-write.json` (a few seconds on a real desk; every later write is
