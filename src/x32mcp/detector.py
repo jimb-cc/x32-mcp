@@ -518,6 +518,7 @@ class FeedbackDetector:
         self._tss: list[float] = []
         self._k0 = 0                           # frame index of self._vals[0]
         self._steps: list[_Step] = []
+        self._recent_step_k: int | None = None   # frame of the last upward master step the server told us about
         self._cuts: list[tuple[float, float, float]] = []
         self.frames_seen: int = 0
         self.last_ts: float | None = None
@@ -770,10 +771,15 @@ class FeedbackDetector:
             u = track_near(j)
             if u is None:
                 return False
-            kb = max(t.kf[0], u.kf[0]) + 2           # skip the frames where the younger is still half in the bed
+            # onset first: a partial cannot appear later than its level deficit divided by the swell rate
+            tt0 = [(x, y) for x, y in zip(t.kf, t.levels)][-6:]
+            rate0 = max(_ls_slope([float(x) for x, _ in tt0], [y for _, y in tt0]) if len(tt0) >= 3 else 0.0, 0.05)
+            if abs(u.kf[0] - t.kf[0]) > max(2.0, abs(t.levels[-1] - u.levels[-1]) / rate0 + 2.0):
+                return False
+            kb = max(t.kf[0], u.kf[0]) + 1           # skip the frame where the younger is still half in the bed
             tt = [(x, y) for x, y in zip(t.kf, t.levels) if x >= kb]
             uu = [(x, y) for x, y in zip(u.kf, u.levels) if x >= kb]
-            if len(tt) < 5 or len(uu) < 5:
+            if len(tt) < 4 or len(uu) < 4:
                 return True                          # too early to tell them apart: hold the veto a few frames
             slope_t = _ls_slope([float(x) for x, _ in tt], [y for _, y in tt])   # dB/frame
             slope_u = _ls_slope([float(x) for x, _ in uu], [y for _, y in uu])
@@ -784,10 +790,6 @@ class FeedbackDetector:
                 if lt0 is not None and lu0 is not None and k - kb >= 3:
                     if abs((t.levels[-1] - u.levels[-1]) - (lt0 - lu0)) > cfg.family_ratio_tol_db:
                         return False
-            deficit = abs(t.levels[-1] - u.levels[-1])
-            rate = max(slope_t, 0.05)
-            if abs(u.kf[0] - t.kf[0]) > max(2.0, deficit / rate + 2.0):
-                return False
             return True
 
         ups = [j for j in partners[:n_up] if comoved(j)]
@@ -852,6 +854,74 @@ class FeedbackDetector:
         # ---- SLOW: least-squares ramp sustained over >= max(growth_slow_frames, settle) intervals --------
         avail = n - 1 - gs
         m_min = max(cfg.growth_slow_frames, settle)
+        step_k = self._recent_step_k
+
+        def ramp(ts: Sequence[float], raw: Sequence[float], kfs: Sequence[int], vs: Sequence[float],
+                 i0: int, m: int) -> tuple[bool, float, float]:
+            """One candidate window, one smoothed series: is it a sustained dB-linear climb?"""
+            s, c0 = _ls_fit(ts, vs)
+            if s < cfg.growth_slow_min_db_per_s:
+                return False, 0.0, s
+            T = ts[-1] - ts[0]
+            rise = min(s * T, max(vs[-2:]) - min(vs[:2]))
+            # common-mode reference over the same span, 5-frame medians at each end (the median of ~60 noise-like
+            # bands still wanders by ~0.5 dB frame to frame)
+            r_lo = max(0, i0 - 2)
+            dref = median(t.ref_list[-5:]) - median(t.ref_list[r_lo:r_lo + 5])
+            net = rise - max(0.0, dref)
+            # the longer a fixed-frequency, family-less line has climbed dB-linearly, the less rise it takes to
+            # exclude wander (±0.5 dB) and expressive swells (≈1 dB over a note): 6 dB inside 1 s, 4 dB over >= 2 s
+            need_total = cfg.growth_slow_total_db if T < 1.0 else max(cfg.growth_slow_total_long_db,
+                                                                      cfg.growth_slow_total_db - (T - 1.0) * 2.0)
+            if step_k is not None and 0 <= kfs[0] - step_k <= 8:
+                # a ramp that starts within 0.4 s of the server's own gain step is time-locked to it: that is the
+                # moment a latent loop crosses threshold (loop brief §4.3 "certain" tier)
+                need_total = cfg.growth_slow_total_long_db
+            if net < need_total:
+                return False, net, s
+            # linear in dB: residuals small against the rise
+            resid = [v - (c0 + s * x) for x, v in zip(ts, vs)]
+            if max(abs(r) for r in resid) > max(1.5, 0.25 * rise):
+                return False, net, s
+            # onset guard on the RAW series: one frame step carrying most of the rise *and holding* is an
+            # instrument onset (a transient spike that falls back is not, and is what the smoothing removed)
+            span = max(rise, raw[-1] - raw[0], 1e-6)
+            for i in range(len(raw) - 1):
+                st = (raw[i + 1] - raw[i]) / max(1, kfs[i + 1] - kfs[i])   # per frame (a masked gap is not a step)
+                if st > cfg.pop_step_frac * span and min(raw[i + 1:i + 4]) > raw[i] + 0.45 * span:
+                    return False, net, s
+            # exponential growth is spread evenly over the frames; a ratchet of re-plucked strings or repeated
+            # syllables piling into one band climbs in a few discrete steps with flats between
+            fsteps = sorted(((b - a) / max(1, kb - ka) for a, b, ka, kb in zip(vs, vs[1:], kfs, kfs[1:])), reverse=True)
+            if len(fsteps) >= 5 and sum(x for x in fsteps[:2] if x > 0) > 0.5 * max(rise, 1e-6):
+                return False, net, s
+            # sustained: every third of the window rising (not an attack that has already flattened, not the
+            # concave step response of a slow analyser band, not a fader ramp that has ended) ...
+            h = max(2, len(vs) // 3)
+            s1 = _ls_slope(ts[: h + 1], vs[: h + 1])
+            s2 = _ls_slope(ts[h: 2 * h + 1], vs[h: 2 * h + 1])
+            s3 = _ls_slope(ts[-(h + 1):], vs[-(h + 1):])
+            if s3 < 0.4 * s or s2 < 0.15 * s or s1 < 0.15 * s:
+                return False, net, s
+            # ... and each half carrying its share of the climb (a 2-4 frame analyser-limited LF onset followed by a
+            # flat note fits a line tolerably but puts the whole rise in one place)
+            mid = len(vs) // 2
+            vmid = median(vs[max(0, mid - 1): mid + 2])
+            h1 = vmid - median(vs[:3])
+            h2 = median(vs[-3:]) - vmid
+            if h1 < max(0.75, 0.25 * rise) or h2 < max(0.75, 0.3 * rise):
+                return False, net, s
+            if prior_max is not None and lv[-1] < prior_max + 3.0:
+                return False, net, s   # climbing back to where it already was (tremolo, beating, a sag) is not growth
+            # rise time: a dB-linear ramp takes ~65 % of the window to go from 25 % to 90 % of its climb; the step
+            # response of a slow analyser band (or an attack) does it in a few frames wherever it sits in the window
+            base = median(vs[:3])
+            i25 = next((i for i, v in enumerate(vs) if v >= base + 0.25 * rise), len(vs) - 1)
+            i90 = next((i for i, v in enumerate(vs) if v >= base + 0.9 * rise), len(vs) - 1)
+            if (i90 - i25) < 0.4 * m:
+                return False, net, s
+            return True, net, s
+
         if avail >= m_min:
             tried: set[int] = set()
             for m in (m_min, 8, 12, 20, 40, cfg.growth_window_frames, avail):
@@ -861,73 +931,20 @@ class FeedbackDetector:
                 i0 = n - 1 - m
                 ts = t.ts_list[i0:]
                 raw = lv[i0:]
-                # 3-point median: a one-frame transient on top of the line is not part of its envelope
-                vs = [raw[0]] + [sorted(raw[i - 1:i + 2])[1] for i in range(1, len(raw) - 1)] + [raw[-1]]
-                s, c0 = _ls_fit(ts, vs)
-                if s < cfg.growth_slow_min_db_per_s:
-                    continue
-                T = ts[-1] - ts[0]
-                if t.kf[-1] - t.kf[i0] > m + max(2, m // 4) or T <= 0:
-                    continue         # a line above the bed is there every frame; a patchy history is not one ramp
-                rise = min(s * T, median(vs[-3:]) - median(vs[:3]) + 1.0)
-                rr = t.ref_list[i0:]
-                dref = median(rr[-3:]) - median(rr[:3])
-                net = rise - max(0.0, dref)
-                # the longer a fixed-frequency, family-less line has climbed dB-linearly, the less rise it takes to
-                # exclude wander (±0.5 dB) and expressive swells (≈1 dB over a note): 6 dB inside 1 s, 4 dB over ≥ 2 s
-                need_total = cfg.growth_slow_total_db if T < 1.0 else max(cfg.growth_slow_total_long_db,
-                                                                          cfg.growth_slow_total_db - (T - 1.0) * 2.0)
-                if net < need_total:
-                    continue
-                # linear in dB: residuals small against the rise, no single step carrying it (that is an onset)
-                resid = [v - (c0 + s * x) for x, v in zip(ts, vs)]
-                if max(abs(r) for r in resid) > max(1.5, 0.25 * rise):
-                    continue
-                # onset guard on the RAW series: one frame step carrying most of the rise *and holding* is an
-                # instrument onset (a transient spike that falls back is not, and is what the median removed)
-                span = max(rise, raw[-1] - raw[0], 1e-6)
-                popped = False
                 kfs = t.kf[i0:]
-                for i in range(len(raw) - 1):
-                    st = (raw[i + 1] - raw[i]) / max(1, kfs[i + 1] - kfs[i])   # per frame (a masked gap is not a step)
-                    if st > cfg.pop_step_frac * span:
-                        after = raw[i + 1:i + 4]
-                        if min(after) > raw[i] + 0.45 * span:
-                            popped = True
-                            break
-                if popped:
-                    continue
-                # exponential growth is spread evenly over the frames; a ratchet of re-plucked strings or repeated
-                # syllables piling into one band climbs in a few discrete steps with flats between
-                fsteps = sorted(((b - a) / max(1, kb - ka) for a, b, ka, kb in zip(vs, vs[1:], kfs, kfs[1:])), reverse=True)
-                if len(fsteps) >= 5 and sum(x for x in fsteps[:2] if x > 0) > 0.5 * max(rise, 1e-6):
-                    continue
-                # sustained: every third of the window rising (not an attack that has already flattened, not the
-                # concave step response of a slow analyser band, not a fader ramp that has ended) ...
-                h = max(2, len(vs) // 3)
-                s1 = _ls_slope(ts[: h + 1], vs[: h + 1])
-                s2 = _ls_slope(ts[h: 2 * h + 1], vs[h: 2 * h + 1])
-                s3 = _ls_slope(ts[-(h + 1):], vs[-(h + 1):])
-                if s3 < 0.4 * s or s2 < 0.15 * s or s1 < 0.15 * s:
-                    continue
-                # ... and each half carrying its share of the climb (a 2-4 frame analyser-limited LF onset followed by
-                # a flat note fits a line tolerably but puts the whole rise in one place)
-                mid = len(vs) // 2
-                vmid = median(vs[max(0, mid - 1): mid + 2])
-                h1 = vmid - median(vs[:3])
-                h2 = median(vs[-3:]) - vmid
-                if h1 < max(0.75, 0.25 * rise) or h2 < max(0.75, 0.3 * rise):
-                    continue
-                if prior_max is not None and lv[-1] < prior_max + 3.0:
-                    continue         # climbing back to where it already was (tremolo, chorus beating, a sag) is not growth
-                # rise time: a dB-linear ramp takes ~65 % of the window to go from 25 % to 90 % of its climb; the step
-                # response of a slow analyser band (or an attack) does it in a few frames wherever it sits in the window
-                base = median(vs[:3])
-                i25 = next((i for i, v in enumerate(vs) if v >= base + 0.25 * rise), len(vs) - 1)
-                i90 = next((i for i, v in enumerate(vs) if v >= base + 0.9 * rise), len(vs) - 1)
-                if (i90 - i25) < 0.4 * m:
-                    continue
-                return "slow", net, s, i0
+                if kfs[-1] - kfs[0] > m + max(2, m // 4) or ts[-1] <= ts[0]:
+                    continue         # a line above the bed is there every frame; a patchy history is not one ramp
+                # two smoothings of the same history: a 3-point median (a one-frame transient on top of the line is
+                # not part of its envelope) and a trailing 3-point minimum — the line's *own* level is the lower
+                # envelope of the band, because programme sharing the band can only ever add power to it
+                med3 = [raw[0]] + [sorted(raw[i - 1:i + 2])[1] for i in range(1, len(raw) - 1)] + [raw[-1]]
+                ok, net, s_ = ramp(ts, raw, kfs, med3, i0, m)
+                if ok:
+                    return "slow", net, s_, i0
+                low3 = [min(raw[max(0, i - 2):i + 1]) for i in range(len(raw))]
+                ok, net, s_ = ramp(ts, raw, kfs, low3, i0, m)
+                if ok:
+                    return "slow", net, s_, i0
         return "", 0.0, slope_report, gs
 
     # -- probe ----------------------------------------------------------------------------------
@@ -940,6 +957,8 @@ class FeedbackDetector:
         for st in self._steps:
             if st.k is None and ts_now >= st.ts - 1e-9:
                 st.k = k
+                if st.delta_db > 0:
+                    self._recent_step_k = k
         N = cfg.probe_window_frames
         settle = cfg.probe_settle_frames
         for idx, st in enumerate(self._steps):
@@ -969,6 +988,8 @@ class FeedbackDetector:
             d = st.delta_db
             sgn = 1.0 if d > 0 else -1.0
             expected = sgn * max(sgn * dref, sgn * d, 0.0)   # the larger of "spectrum moved" and "1 dB per dB"
+            nwin = b1 - b0 + 1
+            refs_0 = [self._refs[kk - self._k0] for kk in range(b0 - nwin, b0) if 0 <= kk - self._k0 < len(self._refs)]
             for t in self._cands:
                 if t.born_frame > st.k - cfg.probe_min_history_frames:
                     continue
@@ -979,13 +1000,24 @@ class FeedbackDetector:
                 if max(after) - min(after) > 12.0 or max(before) - min(before) > 12.0:
                     continue   # a note changed under the window: not a level comparison
                 exc = sgn * ((median(after) - median(before)) - expected)
+                # control: how much does this line move across a window boundary with NO step? (a room mode driven by
+                # a bass line, or any programme line, jumps by whole notes; a stationary or noise-excited line does
+                # not). The response counts only if it clearly exceeds that null movement.
+                earlier = [lv for kk, lv in zip(t.kf, t.levels) if b0 - nwin <= kk < b0]
+                if len(earlier) >= 3 and len(refs_0) >= 3:
+                    null = abs((median(before) - median(earlier)) - (median(refs_b) - median(refs_0)))
+                    significant = abs(exc) >= 2.0 * null + 1.0
+                else:
+                    significant = False       # too young to have a control window: no verdict either way
                 t.probe_steps += 1
                 t.probe_last_excess_db = exc
-                if exc >= cfg.probe_excess_db:
+                if exc >= cfg.probe_excess_db and significant:
                     t.probe_hits += 1
                     t.probe_linear = 0
-                elif exc <= cfg.probe_linear_db:
+                elif exc <= cfg.probe_linear_db and significant:
                     t.probe_linear += 1
+                    t.probe_hits = 0
+                elif exc <= cfg.probe_linear_db:
                     t.probe_hits = 0
         # forget fully evaluated old steps
         while len(self._steps) > 8 and self._steps[0].done:
@@ -1346,8 +1378,8 @@ class FeedbackDetector:
                     t.musical = "harmonic-family"
                 elif t.frames >= 10 and t.birth == "est" and sum(t.fam_list) >= 0.6 * len(t.fam_list) and len(t.fam_list) >= 10:
                     t.musical = "harmonic-family"   # incl. a steady exact-octave partner (organ 8'+4' voicing)
-            elif t.musical == "sync-onset" and sync < 2 and not any(t.fam_list[-30:]) and len(t.fam_list) >= 30:
-                t.musical = ""
+            elif t.musical == "sync-onset" and sync < 2 and not any(t.fam_list[-10:]) and len(t.fam_list) >= 10:
+                t.musical = ""     # its onset cohort is gone and it shows no family: it was not part of that event
             elif t.musical == "harmonic-family" and not any(t.fam_list[-30:]) and len(t.fam_list) >= 30:
                 t.musical = ""     # 1.5 s without any partner: the line has outlived the note it was taken for
             clip = lp >= cfg.clip_level_db
@@ -1377,7 +1409,7 @@ class FeedbackDetector:
                   and (escape or not family) and not probe_veto and not (t.musical and not escape)):
                 verdict = "loud"
                 reasons = ["loud", "narrow", "stationary", "steady", "no-family" if not family else "near-clip"]
-            elif (kind and narrow and stationary and t.musical != "sync-onset"
+            elif (kind and narrow and stationary
                   and t.prominence_db >= cfg.grow_prominence_db
                   and not self._fc(t, gi0, k, is_peak, vals)):
                 verdict = "grow-" + kind
