@@ -1262,9 +1262,13 @@ async def save_scene(index: int, name: str, notes: str = "", confirm_token: str 
     text = str(name).strip()
     if not text:
         raise DeskError("BAD_ARGUMENT", "name must not be empty")
+    desk.invalidate("/-show/showfile/scene")  # the slot's occupancy is part of what the user confirms: read it fresh
     scenes = await desk.list_scenes()
     slot = scenes[idx]
-    payload = {"index": idx, "name": text, "notes": str(notes)}
+    # "(slot is empty)" vs "OVERWRITES 'Main Show'" is the whole point of the confirmation, so the slot's
+    # state at the time of the summary is bound into the token: if somebody saves into the slot between
+    # the two calls, the confirmed call gets a fresh summary instead of overwriting unseen.
+    payload = {"index": idx, "name": text, "notes": str(notes), "slot_was": {"has_data": bool(slot["has_data"]), "name": slot.get("name") or ""}}
     summary = f"Save the current desk state to scene {idx} as '{text}'" + (
         f" — OVERWRITES the existing scene '{slot['name']}'" if slot["has_data"] else " (slot is empty)"
     )
