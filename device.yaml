@@ -780,35 +780,93 @@ geq:
   insert_sel_enum: insert_sel   # 0 OFF, 1 FX1L, 2 FX1R, … 16 FX8R, 17-22 AUX1-6 (23 entries)
 
 detector:
-  prominence_db: 12
+  # --- qualification (what is a candidate line at all) -----------------------------------------
+  prominence_db: 12          # dB above the median of the +-neighbour_bins neighbours
   neighbour_bins: 3
-  # Candidates quieter than this are ignored. Calibrated UP at arm time to sit
-  # floor_margin_db above the room's measured noise floor (see cfs._calibrate_floor): at M7 this
-  # -60 dB sat 8 dB BELOW the studio's own 48 Hz rumble (-51.7 dB peak), so room noise qualified
-  # as feedback and spent the notch budget before a fader moved. A pub, a field and a studio all
-  # differ, so this is a lower bound, not the answer. floor_margin_db 0 disables calibration.
-  # Candidates quieter than this are ignored. -60 was measured WRONG on real hardware at M7: the
-  # loudest band in a silent studio was -51.7 dB (48 Hz rumble), so the room's own noise floor
-  # cleared the gate by 8 dB and ordinary rumble qualified as feedback, spending the whole notch
-  # budget before a fader moved. -45 sits above that floor and still leaves ~20 dB of headroom
-  # below the -25 dB howl that was actually missed.
-  # NOTE: this is one room. A noisier venue needs it higher, and calibrating it automatically from
-  # a measured floor at arm time is the proper fix (attempted 2026-09-20, backed out unfinished).
-  min_level_db: -45
+  narrow_db: 12              # AND dB above the 2nd loudest of the four +-2/+-3 bands: a line, not a hump (a lone
+                             # sinusoid clears >= 24 dB at +-2 on any plausible 1/10-oct skirt; formant
+                             # humps, cymbal wash, PA response ripple are >= 3 bands wide and do not)
+  # Absolute qualification gate. This used to be the only floor (-60, then -45 after M7) and applied to
+  # every verdict; -45 was fitted to one studio's background *music* (HANDOVER 4b(3)) and hid quiet
+  # rings from the growth test (S10/X23-type late detections). Prominence + narrowness are the spatial
+  # floor now; the level prior lives in sustain_min_level_db where it is physical. Calibrated UP at arm
+  # time by cfs._calibrate_floor when floor_margin_db > 0 (unchanged).
+  min_level_db: -80
   floor_margin_db: 8
   floor_sample_s: 2.0        # time cap
   floor_sample_frames: 40    # enough frames (2 s at 20 fps); whichever comes first
-  persistence_frames: 3
-  growth_min_db_per_s: 6
-  growth_ref_db_per_s: 20
+  # Frequency window (loop-physics brief 3.4). feedback_watch: programme present and a vocal mic's loop
+  # gain is 20-30 dB down below ~150 Hz (far-field mic roll-off x HPF x tops), so LF lines are programme;
+  # ring_out: no programme by contract and a missed LF mode is what a ring-out exists to find -> wider.
+  # lf_feedback_possible (kick/tom/acoustic-pickup mic open on a bus that reaches subs; set per session by
+  # the operator or by cfs from the patch sheet) lowers the edge to lf_window_lo_hz. cfs may narrow the
+  # low edge further to 0.7 x the lowest open-channel HPF. Condensers ring to 10-12 kHz -> 12.5 kHz top.
+  window_lo_hz: 160
+  ringout_window_lo_hz: 100
+  lf_window_lo_hz: 40
+  window_hi_hz: 12500
+  lf_feedback_possible: 0
+  persistence_frames: 3      # minimum age of ANY verdict (150 ms)
+  # --- harmonic family (single frame) -------------------------------------------------------------
+  # A note at band b has partials at b+10 (2f), b+16 (3f), b+20 (4f), b+23 (5f); a loop oscillates at one
+  # frequency and grows partials only when something clips (then >= 10-17 dB under the fundamental).
+  harmonic_presence_db: 6    # a partial is "present" as a local peak this prominent over its own +-3 median
+  harmonic_rel_db: 18        # ... and within this of the candidate's prominence
+  harmonic_tol_bands: 0.5    # ... and its centroid within this of k x the candidate's centroid (sub-band precision)
+  family_min_partials: 2     # of H2..H5 on one frame => family-positive frame (one coincidence is common)
+  single_partial_rel_db: 10  # ... or ONE of H2/H3 within this of the candidate's own prominence AND
+  single_partial_tol_bands: 0.35  # this close to the exact position (organ 8'+4', low flute: one strong exact partial)
+  family_veto_frac: 0.4      # family-positive fraction of the last family_window_frames => musical
+  family_window_frames: 12   # (a note keeps its partials for life; a ring's coincidences in dense music come and go)
+  centroid_wander_bands: 0.75  # centroid range over the sustain window above this => melody/glide/vibrato
+  # --- onset shape ---------------------------------------------------------------------------------
+  # Programme arrives at full level within one analyser rise time (a step); a loop must grow through
+  # every level at excess/loop-delay dB/s (1..500 dB/s, loop brief 1.3) - so there is NO upper slope bound
+  # any more (the old 60 dB/s onset guard threw away half of all real ring-out howls), instead:
+  step_db: 9                 # a single-frame rise this big that does not continue (next frame adds < 30 %
+  step_continue_frac: 0.3    # of it) is a programme onset: the track is marked step_onset
+  step_release_db: 10        # the band remembers that arrival until its level falls this far below it (released)
+  step_regrow_db: 9          # ... or rises this far above it (what is there now grew: it is not the arrival)
+  comove_frames: 6           # a partial counts only if its level tracked the candidate over these frames
+  comove_db: 3               # ... to within this (one envelope); a line merely AT a harmonic offset pulses alone
+  history_frames: 8          # frames of per-band history kept so a step before qualification is seen
+  gap_frames: 2              # non-qualifying frames a track survives (hat hits, threshold flicker)
+  # --- growth lane (fast, never required) ----------------------------------------------------------
+  growth_min_db_per_s: 6     # reference-corrected LS slope (level minus spectrum median: a fader or
+                             # common-mode move is not growth)
+  growth_min_frames: 3       # window samples above ~300 Hz; below, the window must span
+  growth_lf_periods: 2.0     # this many 1/bandwidth (no filter resolving df can fake a ramp that long):
+                             # 3 fr >= 300 Hz, 5 @ 125 Hz, 8 @ 80 Hz, 10 @ 63 Hz, 15 @ 40 Hz
+  growth_rise_db: 6          # corrected rise over the window
+  growth_step_share: 0.7     # no two consecutive intervals may carry more of the rise than this (step)
+  growth_late_share: 0.25    # the later half of the window must carry at least this (smeared step decelerates)
+  growth_min_steps: 3        # and at least this many intervals must each carry >= growth_step_min_share of it
+  growth_step_min_share: 0.1 # (a loop rises continuously; partial frames and neighbour arrivals are lone jumps)
   monotonic_tolerance_db: 1.0
+  growth_ref_db_per_s: 20    # dashboard confidence scaling only
+  # --- sustained lane (plateaued / slow rings; replaces the M7 25 dB override) ---------------------
+  sustain_frames: 6          # 300 ms of: no step onset seen, centroid stable, not decaying, narrow, no family
+  sustain_drop_db: 3         # fall below the window max that disqualifies (struck/plucked notes, RTA release)
+  # The ONE absolute level prior left, and only for this lane: with no onset and no growth observed,
+  # level is the last passive evidence (a -50 dBFS whine present since before arm vs a -30 dBFS
+  # compressor-held howl). -45 = the M7 room number; ring_out resolves quieter lines with the probe.
+  sustain_min_level_db: -45
+  clip_level_db: -6          # a narrow line this close to full scale is cut whatever its family/onset
+  ref_lo_band: 25            # spectrum reference for common-mode correction = median of bands 25..85
+  ref_hi_band: 85
+  # --- ring-out active probe (cfs calls note_gain_step after each master step) --------------------
+  probe_excess_db: 2         # a candidate rising > step + this within probe_window_s is loop-gain dependent
+  probe_window_s: 1.2
+  probe_confirmations: 2     # on this many steps => emitted (reason "probe")
+  # --- reported confidence (dashboard; NOT the decision any more) ---------------------------------
   weights: {prominence: 0.3, persistence: 0.2, growth: 0.5}
-  confidence_threshold: 0.7
-  # Established-feedback override (added after M7, 2026-09-20). Without growth the weighted score
-  # cannot exceed prominence+persistence = 0.5, below the 0.7 threshold, so a howl that has already
-  # plateaued could never be emitted: a 60 dB-prominent 8 kHz ring sat at 0.50 for 15 s on the real
-  # desk. Musical content is harmonically spread, so this much prominence in one band is feedback by
-  # construction. 0 disables the override.
+  confidence_threshold: 0.7  # an emitted detection reports >= this, a mere candidate < this
+  # DEPRECATED, parsed for compatibility: the 60 dB/s onset guard and the M7 established-feedback
+  # override (>= 25 dB for >= 6 frames). The step test and the sustained lane supersede them: a 25 dB,
+  # 6-frame, family-free line with a stable centroid and no step onset is exactly what the sustained lane
+  # emits; one WITH a step onset (whistle, flute, organ, sine lead, bell) is exactly what the override
+  # notched wrongly.
+  growth_max_db_per_s: 60
   override_prominence_db: 25
   override_persistence_frames: 6
   band_tolerance: 1
