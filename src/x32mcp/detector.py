@@ -130,6 +130,9 @@ class DetectorConfig:
                                          # prominent (presence-as-peak, not energy: the bed has energy everywhere)
     family_tol_bands: float = 0.5        # a partner must sit within this of the exact harmonic position (60 c):
                                          # integer-ratio partials land exactly; an unrelated line a band away does not
+    family_ratio_tol_db: float = 3.0     # partials of one source keep their level ratio (dB) within this while the
+                                         # note swells or decays (shared envelope; per-partial flutter ≲ 1-2 dB);
+                                         # two independent lines growing at their own excess/τ do not
     family_partials: int = 2             # ≥ this many of H2..H5 present ⇒ musical note (one coincident partner
                                          # happens between unrelated rings ~20 % of the time, two < 1 %, [A §4.3])
     family_veto_frac: float = 0.4        # fraction of recent frames with a family that makes a line musical
@@ -152,7 +155,8 @@ class DetectorConfig:
     growth_slow_frames: int = 5          # minimum ramp length for the least-squares path (≥ persistence)
     growth_slow_min_db_per_s: float = 1.5  # marginal loops grow at excess/τ down to ~1 dB/s (§1.3 table);
                                          # below this a "ramp" is air-movement wander
-    growth_slow_total_db: float = 6.0    # net dB a slow ramp must have climbed (≫ ±0.5 dB loop-gain wander)
+    growth_slow_total_db: float = 6.0    # net dB a slow ramp must have climbed within 1 s (≫ ±0.5 dB loop-gain wander)
+    growth_slow_total_long_db: float = 4.0  # ... and over >= 2 s (a marginal loop at 2 dB/s: e ≈ 0.02 dB, τ 11 ms)
     growth_drop_tol_db: float = 3.0      # a fall this far below the ramp's maximum restarts the ramp (a real
                                          # decay); smaller dips are band noise at 15-20 dB SNR
     growth_window_frames: int = 60       # longest ramp considered (3 s)
@@ -165,7 +169,7 @@ class DetectorConfig:
     pop_step_frac: float = 0.55          # one frame step carrying more than this share of a rise = an onset
     # --- absolute level rules ----------------------------------------------------------------
     loud_level_db: float = -10.0         # a lone stationary sinusoid within 10 dB of full scale (P8)
-    loud_frames: int = 4
+    loud_frames: int = 3               # 150 ms of it: no percussive transient is that narrow for that long
     clip_level_db: float = -0.5          # /meters/15 reads exactly 0.00 when the tap clipped (meters.md §4.2)
     # --- frequency window (prior; soft) ------------------------------------------------------
     lf_edge_hz: float = 0.0              # hard floor (0 = none). Per-session: 0.7 × the open mics' HPF (§3.4)
@@ -658,18 +662,47 @@ class FeedbackDetector:
                     partners.extend([jf, jo])
         return n_up, sub, partners
 
-    def _octave_below(self, c: float, is_peak: Sequence[bool], vals: Sequence[float]) -> bool:
-        """A peak within ``family_tol_bands`` of exactly one octave below ``c`` (the line would be its 2nd harmonic)."""
+    def _octave_below_band(self, c: float, is_peak: Sequence[bool], vals: Sequence[float]) -> int | None:
+        """The peak band within ``family_tol_bands`` of exactly one octave below ``c`` (the line would be its 2nd
+        harmonic), or None."""
         x = c - 10.0
         if x < 1.0:
-            return False
+            return None
         r = int(round(x))
         for j in (r, r - 1, r + 1):
             if 0 <= j < len(is_peak) and is_peak[j]:
                 cj, _ = self._centroid(vals, j)
                 if abs(cj - x) <= self.cfg.family_tol_bands:
-                    return True
-        return False
+                    return j
+        return None
+
+    def _independent(self, t: Candidate, j: int) -> bool:
+        """True when band ``j`` (a would-be partial partner) swung by >= 8 dB over the track's recent life while the
+        track's own level stayed within 3 dB: a note came or went under a line that did not care."""
+        m = min(len(t.kf), 40)
+        if m < 8:
+            return False
+        n = len(self.band_hz)
+        lv = t.levels[-m:]
+        if max(lv) - min(lv) > 3.0:
+            return False
+        lo = hi = None
+        lo_row = None
+        for kk in t.kf[-m:]:
+            i = kk - self._k0
+            if i < 0 or i >= len(self._vals):
+                continue
+            row = self._vals[i]
+            v = max(row[jj] for jj in (j - 1, j, j + 1) if 0 <= jj < n)
+            if lo is None or v < lo:
+                lo, lo_row = v, row
+            hi = v if hi is None or v > hi else hi
+        if lo is None or hi - lo < 8.0:
+            return False
+        # ... and at its quietest the partner was actually gone (not a steady partial with a passing note on top)
+        k3 = self.cfg.neighbour_bins
+        neigh = [lo_row[jj] for jj in range(max(0, j - k3), min(n, j + k3 + 1)) if jj != j]
+        return lo_row[j] - median(neigh) < self.cfg.family_prominence_db
 
     def _family_comoving(self, t: Candidate, start_idx: int, k: int, is_peak: Sequence[bool],
                          vals: Sequence[float]) -> bool:
@@ -693,12 +726,19 @@ class FeedbackDetector:
         if n_up < cfg.family_partials and not sub and not octave_up and jb is None:
             return False
         k_start = t.kf[start_idx]
-        rise = t.levels[-1] - t.levels[start_idx]
-        if rise < cfg.growth_slow_total_db or k_start < self._k0:
+        lv = t.levels
+        a = lv[start_idx:start_idx + 3]
+        rise = median(lv[-3:]) - median(a) if len(a) >= 2 and len(lv) >= 3 else lv[-1] - lv[start_idx]
+        if rise < 0.75 * cfg.growth_slow_total_db or k_start < self._k0:
             # cannot judge co-movement: presence of a full family decides, a lone octave partner does not
             return n_up >= cfg.family_partials or sub
-        row0 = self._vals[k_start - self._k0]
+        i0 = max(0, k_start - 6 - self._k0)          # partners that climbed out of the bed a little earlier count
+        rows0 = self._vals[i0:i0 + 3]
+        rows1 = self._vals[-3:]
         nb = len(vals)
+
+        def lvl(rows: Sequence[Sequence[float]], j: int) -> float:
+            return median(max(r[jj] for jj in (j - 1, j, j + 1) if 0 <= jj < nb) for r in rows)
 
         def track_near(j: int) -> Candidate | None:
             best = None
@@ -712,23 +752,39 @@ class FeedbackDetector:
             xs = [x for x in xs if x is not None]
             return max(xs) if xs else None
 
-        def comoved(j: int) -> bool:
-            d = max(vals[jj] - row0[jj] for jj in (j - 1, j, j + 1) if 0 <= jj < nb)
-            if not (0.5 * rise <= d <= 2.0 * rise + 3.0):
+        def comoved(j: int, lone: bool = False) -> bool:
+            d = lvl(rows1, j) - lvl(rows0, j)
+            # a weaker partial climbs out of the bed later than the fundamental, so its visible rise is smaller:
+            # ask for half the candidate's rise or a clear 4 dB, whichever is less
+            if not (min(0.5 * rise - 2.0, 4.0) <= d <= 2.0 * rise + 3.0):
                 return False
-            # partials of one note keep their level ratio (±jitter) from the frame the younger line appeared;
-            # two independent lines that happen to sit an octave apart do not (X: one had already risen while
-            # the other's band sat still). Only where both analyser bands settle within a frame (>~300 Hz):
-            # at LF the slower band's lag distorts the early ratio.
+            if not lone:
+                return True
+            # A lone exact-octave partner (no 3f/4f/5f) is the < 1 % coincidence for two rings but the norm for
+            # two-partial timbres (analyser brief §4.3: "require >= 2 partners or H2^H3"). It vetoes growth only when
+            # it is indistinguishable from one swelling source: the two keep their level ratio and dB slope (shared
+            # envelope) and the younger appeared no later than its level deficit explains.
             u = track_near(j)
-            if u is not None and self._settle_frames[min(u.band, t.band)] <= 3:
-                kb = max(t.kf[0], u.kf[0])
+            if u is None:
+                return False
+            kb = max(t.kf[0], u.kf[0]) + 2           # skip the frames where the younger is still half in the bed
+            tt = [(x, y) for x, y in zip(t.kf, t.levels) if x >= kb]
+            uu = [(x, y) for x, y in zip(u.kf, u.levels) if x >= kb]
+            if len(tt) < 5 or len(uu) < 5:
+                return True                          # too early to tell them apart: hold the veto a few frames
+            slope_t = _ls_slope([float(x) for x, _ in tt], [y for _, y in tt])   # dB/frame
+            slope_u = _ls_slope([float(x) for x, _ in uu], [y for _, y in uu])
+            if slope_t > 0.15 and not (0.85 <= slope_u / slope_t <= 1.18):
+                return False
+            if self._settle_frames[min(u.band, t.band)] <= 3:
                 lt0, lu0 = level_near(t.band, kb), level_near(u.band, kb)
                 if lt0 is not None and lu0 is not None and k - kb >= 3:
-                    r_now = t.levels[-1] - u.levels[-1]
-                    r_then = lt0 - lu0
-                    if abs(r_now - r_then) > 4.0:
+                    if abs((t.levels[-1] - u.levels[-1]) - (lt0 - lu0)) > cfg.family_ratio_tol_db:
                         return False
+            deficit = abs(t.levels[-1] - u.levels[-1])
+            rate = max(slope_t, 0.05)
+            if abs(u.kf[0] - t.kf[0]) > max(2.0, deficit / rate + 2.0):
+                return False
             return True
 
         ups = [j for j in partners[:n_up] if comoved(j)]
@@ -738,9 +794,9 @@ class FeedbackDetector:
             subs = partners[n_up:]
             if subs and all(comoved(j) for j in subs):
                 return True
-        if octave_up and partners[0] in ups:
+        if octave_up and comoved(partners[0], lone=True):
             return True
-        if jb is not None and comoved(jb):
+        if jb is not None and comoved(jb, lone=True):
             return True
         return False
 
@@ -801,13 +857,17 @@ class FeedbackDetector:
                 if s < cfg.growth_slow_min_db_per_s:
                     continue
                 T = ts[-1] - ts[0]
-                if t.kf[-1] - t.kf[i0] > m + max(3, m // 4) or T <= 0:
-                    continue         # the track was lost and re-found inside this window: not one ramp
+                if t.kf[-1] - t.kf[i0] > m + max(4, m) or T <= 0:
+                    continue         # more frames missing than present: not one observable ramp
                 rise = min(s * T, median(vs[-3:]) - median(vs[:3]) + 1.0)
                 rr = t.ref_list[i0:]
                 dref = median(rr[-3:]) - median(rr[:3])
                 net = rise - max(0.0, dref)
-                if net < cfg.growth_slow_total_db:
+                # the longer a fixed-frequency, family-less line has climbed dB-linearly, the less rise it takes to
+                # exclude wander (±0.5 dB) and expressive swells (≈1 dB over a note): 6 dB inside 1 s, 4 dB over ≥ 2 s
+                need_total = cfg.growth_slow_total_db if T < 1.0 else max(cfg.growth_slow_total_long_db,
+                                                                          cfg.growth_slow_total_db - (T - 1.0) * 2.0)
+                if net < need_total:
                     continue
                 # linear in dB: residuals small against the rise, no single step carrying it (that is an onset)
                 resid = [v - (c0 + s * x) for x, v in zip(ts, vs)]
@@ -817,14 +877,20 @@ class FeedbackDetector:
                 # instrument onset (a transient spike that falls back is not, and is what the median removed)
                 span = max(rise, raw[-1] - raw[0], 1e-6)
                 popped = False
+                kfs = t.kf[i0:]
                 for i in range(len(raw) - 1):
-                    st = raw[i + 1] - raw[i]
+                    st = (raw[i + 1] - raw[i]) / max(1, kfs[i + 1] - kfs[i])   # per frame (a masked gap is not a step)
                     if st > cfg.pop_step_frac * span:
                         after = raw[i + 1:i + 4]
                         if min(after) > raw[i] + 0.45 * span:
                             popped = True
                             break
                 if popped:
+                    continue
+                # exponential growth is spread evenly over the frames; a ratchet of re-plucked strings or repeated
+                # syllables piling into one band climbs in a few discrete steps with flats between
+                fsteps = sorted(((b - a) / max(1, kb - ka) for a, b, ka, kb in zip(vs, vs[1:], kfs, kfs[1:])), reverse=True)
+                if len(fsteps) >= 5 and sum(x for x in fsteps[:2] if x > 0) > 0.5 * max(rise, 1e-6):
                     continue
                 # sustained: every third of the window rising (not an attack that has already flattened, not the
                 # concave step response of a slow analyser band, not a fader ramp that has ended)
@@ -975,15 +1041,16 @@ class FeedbackDetector:
             if best_j >= 0 and t.cen_list:
                 cl = sorted(t.cen_list[-10:])
                 if abs(clusters[best_j][1] - cl[len(cl) // 2]) > cfg.centroid_tol_bands:
-                    # the line re-appeared a semitone or more away: a hand-held mic re-locking on the neighbouring
-                    # loop candidate keeps its verdict (loop brief §2.3); anything else is a new note that must earn
-                    # its own — it was seen to arrive, so it is no longer "established at arm"
-                    t.hops += 1
-                    t.cen_list.clear()
-                    if not t.feedback:
-                        t.est = False
-                        t.birth = "pop"
-                        t.grow_start = len(t.levels)
+                    # the line re-appeared a semitone or more away. A ring we are already cutting that re-locks on
+                    # the neighbouring loop candidate (hand-held mic, loop brief §2.3) keeps its verdict; anything
+                    # else is a different line that must earn its own history — release the cluster so it is born
+                    # (and back-filled) as a new track, and let this one lapse.
+                    if t.feedback:
+                        t.hops += 1
+                        t.cen_list.clear()
+                    else:
+                        used.discard(best_j)
+                        best_j = -1
             if best_j < 0:
                 t.coast += 1
                 if t.coast <= 1:
@@ -1002,12 +1069,21 @@ class FeedbackDetector:
                 continue
             t = None
             for gi, (kd, g) in enumerate(self._grave):
-                if abs(g.centroid - c) <= 1.0 and abs(g.level_db - lp) <= 6.0:
+                if abs(g.centroid - c) > 1.0 or not g.kf:
+                    continue
+                # where would that line be now?  (a masker — cymbal crash, consonant burst — can hide a growing ring
+                # for a few frames; it re-emerges on the same ramp)
+                expect = g.level_db
+                seg_k = [kk for kk in g.kf[-6:]]
+                if len(seg_k) >= 3 and g.kf[-1] - seg_k[0] >= 2:
+                    sl = _ls_slope([float(x) for x in seg_k], g.levels[-len(seg_k):])   # dB per frame
+                    expect = g.level_db + max(0.0, sl) * (k - g.kf[-1])
+                if abs(expect - lp) <= 6.0 or abs(g.level_db - lp) <= 6.0:
                     t = g
                     del self._grave[gi]
                     t.coast = 0
-                    if t.kf and k - t.kf[-1] > 6:
-                        t.grow_start = len(t.levels)   # a gap this long (0.3 s) breaks a ramp
+                    if k - t.kf[-1] > 10:
+                        t.grow_start = len(t.levels)   # a gap this long (0.5 s) breaks a ramp
                     break
             if t is None:
                 t = Candidate(band=b, first_ts=ts, born_frame=k, centroid=c)
@@ -1063,25 +1139,34 @@ class FeedbackDetector:
         return out
 
     def _backfill(self, t: Candidate, b: int, k: int) -> None:
-        """Give a newborn track the last few frames in which its band was already a rising local maximum above the
-        pre-birth level (the analyser showed the line before it was prominent enough to be promoted to a track):
-        a fast ring in a loud mix shows only 2-4 frames of growth and none of them may be wasted."""
-        if t.pre_level_db is None:
-            return
-        rows: list[tuple[int, float]] = []
+        """Give a newborn track the recent frames in which its band was already a local maximum (the analyser showed
+        the line before it was prominent enough to be promoted to a track): a fast ring in a loud mix shows only 2-4
+        frames of growth and none may be wasted; a slow one may have been creeping up for seconds under the music.
+        The walk back stops at the pre-birth floor (a line that came out of the bed) or where the band stops being a
+        local maximum for more than two frames (masked or absent)."""
         n = len(self.band_hz)
-        for j in range(1, 5):
+        floor = t.pre_level_db
+        rows: list[tuple[int, float]] = []
+        misses = 0
+        for j in range(1, self.HIST):
             kk = k - j
             i = kk - self._k0
             if i < 0 or i >= len(self._vals) - 1:
                 break
             row = self._vals[i]
-            v = row[b]
-            if v < t.pre_level_db + 3.0:
-                break
-            if not (v >= row[b - 1] - 1.0 if b >= 1 else True) or not (v >= row[b + 1] - 1.0 if b + 1 < n else True):
-                break
-            rows.append((kk, v))
+            v = max(row[bb] for bb in (b - 1, b, b + 1) if 0 <= bb < n)
+            vb = row[b]
+            is_max = vb >= v - 1.0
+            above = floor is None or vb >= floor + 3.0
+            if is_max and above and vb > -100.0:
+                rows.append((kk, vb))
+                misses = 0
+            else:
+                misses += 1
+                if misses > 4 or (floor is not None and vb < floor + 3.0):
+                    break
+        if not rows:
+            return
         for kk, v in reversed(rows):
             i = kk - self._k0
             t.kf.append(kk)
@@ -1091,11 +1176,12 @@ class FeedbackDetector:
             t.ref_list.append(self._refs[i])
             t.fam_list.append(False)
             t.fam_strong.append(False)
-        if rows:
-            t.born_frame = rows[-1][0]
-            t.first_ts = self._tss[rows[-1][0] - self._k0]
-            t.frames = len(rows)
-            t.pre_level_db = self._pre_level(b, t.born_frame) if self._pre_level(b, t.born_frame) is not None else t.pre_level_db
+        t.born_frame = rows[-1][0]
+        t.first_ts = self._tss[rows[-1][0] - self._k0]
+        t.frames = len(rows)
+        pl = self._pre_level(b, t.born_frame)
+        if pl is not None:
+            t.pre_level_db = pl
 
     def _extend(self, t: Candidate, k: int, ts: float, band: int, c: float, lp: float, pr: float, nar: float,
                 ref: float, is_peak: Sequence[bool]) -> None:
@@ -1124,11 +1210,18 @@ class FeedbackDetector:
         t.cen_list.append(c)
         t.ref_list.append(ref)
         vals_now = self._vals[-1]
-        n_up, sub, partners = self._family_now(c, is_peak, vals_now)
+        n_up0, sub, partners = self._family_now(c, is_peak, vals_now)
+        # a partner whose level swung by a note's worth while this line did not move is not this line's partial
+        # (the chord changed underneath a ring: "outlasts programme structure", loop brief P12)
+        ups = [j for j in partners[:n_up0] if not self._independent(t, j)]
+        n_up = len(ups)
+        if sub and self._independent(t, partners[n_up0]):
+            sub = False
         # An exact-octave partner (2f or f/2 within family_tol_bands) is family for a *steady* line: two coexisting
         # independent rings land within ±50 c of an octave < 1 % of the time (loop brief §2.3), an organ 8'+4', a
         # flute and every two-partial timbre do it always. Growing lines are judged with co-movement instead.
-        octave = (n_up >= 1 and abs((partners[0] if partners else -99) - (c + 10.0)) <= 1.5) or self._octave_below(c, is_peak, vals_now)
+        jb = self._octave_below_band(c, is_peak, vals_now)
+        octave = (n_up >= 1 and abs(ups[0] - (c + 10.0)) <= 1.5) or (jb is not None and not self._independent(t, jb))
         strong = bool(n_up >= cfg.family_partials or sub)
         t.fam_list.append(strong or octave)
         t.fam_strong.append(strong)
@@ -1212,10 +1305,10 @@ class FeedbackDetector:
                     t.musical = "harmonic-family"
                 elif t.frames >= 10 and t.birth == "est" and sum(t.fam_list) >= 0.6 * len(t.fam_list) and len(t.fam_list) >= 10:
                     t.musical = "harmonic-family"   # incl. a steady exact-octave partner (organ 8'+4' voicing)
-            elif t.musical == "sync-onset" and sync < 2 and fam_frac == 0.0:
+            elif t.musical == "sync-onset" and sync < 2 and not any(t.fam_list[-30:]) and len(t.fam_list) >= 30:
                 t.musical = ""
-            elif t.musical == "harmonic-family" and fam_frac == 0.0 and len(fl) >= 10:
-                t.musical = ""
+            elif t.musical == "harmonic-family" and not any(t.fam_list[-30:]) and len(t.fam_list) >= 30:
+                t.musical = ""     # 1.5 s without any partner: the line has outlived the note it was taken for
             clip = lp >= cfg.clip_level_db
             loud = lp >= cfg.loud_level_db
             escape = lp >= cfg.family_escape_level_db
@@ -1229,7 +1322,7 @@ class FeedbackDetector:
                   and (escape or not family) and not probe_veto and not (t.musical and not escape)):
                 verdict = "loud"
                 reasons = ["loud", "narrow", "stationary", "steady", "no-family" if not family else "near-clip"]
-            elif (kind and narrow and stationary and not t.musical
+            elif (kind and narrow and stationary and t.musical != "sync-onset"
                   and t.prominence_db >= cfg.track_prominence_db + 3.0
                   and not self._fc(t, gi0, k, is_peak, vals)):
                 verdict = "grow-" + kind
