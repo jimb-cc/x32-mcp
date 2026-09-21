@@ -154,13 +154,14 @@ class DetectorConfig:
     stationary_outlier_frac: float = 0.25
     glide_bands: float = 0.75            # window median drifted this far from the birth centroid => moved
     strong_prominence_db: float = 18.0   # TIER A for at_arm/slow lines (with steadiness)
-    loud_level_db: float = -12.0         # a narrow stationary line this close to full scale is cut regardless
+    loud_level_db: float = -10.0         # a narrow stationary line this close to full scale is cut regardless
     clip_level_db: float = -3.0          # RTA 0.0 = "clipping occurred" (meters.md §4.2); a narrow line within 3 dB of
                                          # full scale at a pre-fader bus tap is treated the same (howl or mis-set gain)
     ramp_min_step_db: float = 0.4        # per-frame increment that counts toward a ramp
     ramp_strong_frames: int = 6          # >= this many linear increments and still rising => TIER A
     ramp_strong_rise_db: float = 24.0    # or this much total linear rise from the floor => TIER A
     ramp_moderate_db_per_s: float = 45.0 # a still-rising linear ramp this slow qualifies after 4 increments
+    ramp_fast_db_per_s: float = 100.0    # a linear ramp this fast qualifies after 3 increments and 15 dB
     ramp_linearity: float = 0.5          # second-half mean increment / first-half >= this (analyser-smeared
                                          # onsets decelerate; regeneration is linear in dB)
     decay_db_per_s: float = 3.0          # raw slope <= -this over the decay window => decaying (programme,
@@ -169,7 +170,7 @@ class DetectorConfig:
     plateau_range_db: float = 2.0        # cluster-power range allowed over the TIER B window ("steady")
     ref_lo_band: int = 25                # spectrum reference = median(level[ref_lo..ref_hi])
     ref_hi_band: int = 85
-    comove_ref_range_db: float = 1.5     # reference must move this much before co-movement is judged
+    comove_ref_range_db: float = 1.0     # reference must move this much before co-movement is judged
     comove_window_frames: int = 12
     probe_over_db: float = 2.0           # response - step >= this => loop-gain dependent (ring_out probe)
     probe_settle_s: float = 0.2          # ignore this long after the step (OSC latency + analyser rise)
@@ -1002,9 +1003,12 @@ class FeedbackDetector:
             return (seq[i] - seq[i - 1]) / k
 
         def ref_change_over(span: int) -> float:
+            # rise of the reference's LOWER envelope across the span: a fader/common-mode raise lifts the floor of
+            # the reference; a drum hit or the mix breathing for a few frames does not
             if len(refs) >= span and span >= 2:
                 rseg = refs[-span:]
-                return max(rseg) - rseg[0]
+                k = min(4, max(1, span // 3))
+                return min(rseg[-k:]) - min(rseg[:k])
             return 0.0
 
         # -- (a) increment run -----------------------------------------------------------------------
@@ -1024,6 +1028,13 @@ class FeedbackDetector:
                 continue
             break
         start = i
+        if n_inc >= 3:
+            # a noise blip just before the ramp is not part of it: drop leading increments far below the run's median
+            incs0 = [inc(j) for j in range(start + 1, len(seq))]
+            med0 = sorted(incs0)[len(incs0) // 2]
+            while n_inc > 2 and (inc(start + 1) < 0.4 * med0 or inc(start + 2) < step):
+                start += 1
+                n_inc -= 1
         res_a: tuple[int, float, float, bool, float, bool, bool] = (n_inc, 0.0, 0.0, False, 0.0, False, False)
         if n_inc >= 2:
             run = seq[start:]
@@ -1066,8 +1077,8 @@ class FeedbackDetector:
             xm = sum(xs) / m_
             ym = sum(ys) / m_
             resid = math.sqrt(sum((y - ym - sl * (x - xm)) ** 2 for x, y in zip(xs, ys)) / m_)
-            if resid > max(0.6, 0.06 * rise):
-                continue
+            if resid > max(0.6, (0.12 if m_ >= 12 else 0.06) * rise):
+                continue                                    # (a long fit may carry more band noise per point)
             h = m_ // 2
             s1 = _ls_slope(xs[:h], ys[:h]) if h >= 3 else sl
             s2 = _ls_slope(xs[h:], ys[h:]) if m_ - h >= 3 else sl
@@ -1077,7 +1088,8 @@ class FeedbackDetector:
             if max(incs_b) > 0.5 * rise and rise >= 8.0:
                 continue                                    # one frame carries the rise: a jump, not a ramp
             fit_end = ym + sl * (xs[-1] - xm)
-            still = ys[-1] >= fit_end - max(0.7, 1.5 * resid) and _ls_slope(xs[-4:], ys[-4:]) > 0.25 * sl
+            still = (ys[-1] >= fit_end - max(0.7, 1.5 * resid) and _ls_slope(xs[-4:], ys[-4:]) > 0.25 * sl
+                     and inc(len(seq) - 1) >= 0.3 * sl * fp)
             strict = s2 >= 0.7 * s1
             res_b = (m_ - 1, rise, sl, still, ref_change_over(m_), True, strict)
             break
@@ -1086,6 +1098,32 @@ class FeedbackDetector:
         if not res_a[5] or res_b[0] > res_a[0]:
             return res_b
         return res_a
+
+    def _fast_ramp(self, c: Candidate) -> bool:
+        """Peak-band level (with pre-birth back-fill) rose >= 15 dB over the last <= 5 samples in >= 3 consecutive
+        steps of >= ramp_fast_db_per_s*frame each (>= 150 ms at >= 100 dB/s), none carrying more than half the rise,
+        ending now or one frame ago (the limiter knee). A note onset with a 40-80 ms attack makes at most TWO such
+        steps; regeneration on a short loop with ~1 dB excess makes 3-6 [loop brief §1.3]."""
+        cfg = self.cfg
+        seq = c.pre_band[-4:] + c.levels
+        if len(seq) < 3:
+            return False
+        step = cfg.ramp_fast_db_per_s * cfg.frame_period_s
+        tail = seq[-6:]
+        incs = [b - a for a, b in zip(tail, tail[1:])]
+        # allow the run to end at the last or the second-to-last increment (plateau knee just reached)
+        for end in (len(incs), len(incs) - 1):
+            run: list[float] = []
+            i = end - 1
+            while i >= 0 and incs[i] >= step:
+                run.append(incs[i])
+                i -= 1
+            if len(run) >= 3:
+                rise = sum(run)
+                if rise >= 15.0 and max(run) <= 0.5 * rise:
+                    if end == len(incs) or incs[-1] > -1.0:      # and it did not fall back (a transient would)
+                        return True
+        return False
 
     def _stationary(self, c: Candidate, k: int) -> tuple[bool, float]:
         """Centroid stationarity over the last ``k`` tracked frames: (stationary, window median)."""
@@ -1111,6 +1149,14 @@ class FeedbackDetector:
         xs = c.refs[-w:]           # band for a frame is masking, not co-movement
         if len(ys) < 6:
             return None
+        # leave out frames on which the reference itself carries a broadband transient (drum hit): >= 4 dB over
+        # the window's floor. Co-movement is about the slow common gain, not about hits.
+        xfloor = min(xs)
+        keep = [i for i, x in enumerate(xs) if x - xfloor < 4.0]
+        if len(keep) < 6:
+            return None
+        xs = [xs[i] for i in keep]
+        ys = [ys[i] for i in keep]
         xr = max(xs) - min(xs)
         if xr < cfg.comove_ref_range_db:
             return None
@@ -1208,6 +1254,9 @@ class FeedbackDetector:
         decay_recent = fno - c.last_decay_frame < K2
 
         n_inc, rise, rslope, still, ref_change, linear, strict_linear = getattr(c, "_rs", None) or self._ramp_stats(c)
+        k_l = min(len(c.levels), max(3, n_inc + 1))
+        lvl_slope = _ls_slope(c.ts_list[-k_l:], c.levels[-k_l:]) if k_l >= 3 else rslope   # peak-band rate (the
+        # cluster power understates a fast climb out of the bed)
         ramp_ok = linear and n_inc >= 3 and rise >= 4.0 and ref_change <= 0.5 * rise and rslope >= cfg.growth_min_db_per_s
         if ramp_ok and len(c.cpmin) >= 4:
             # the lower envelope must climb too: vibrato/flutter riding the skirts can fit a rising line through
@@ -1240,9 +1289,14 @@ class FeedbackDetector:
         ramp_strong = ramp_ok and (
             (n_inc >= cfg.ramp_strong_frames and still)                       # >= 300 ms of steady exponential growth
             or (rise >= cfg.ramp_strong_rise_db and n_inc >= 4)              # or a lot of it (fast loop)
-            or (n_inc >= 4 and still and rslope <= cfg.ramp_moderate_db_per_s and strict_linear
+            or (n_inc >= 4 and still and max(rslope, lvl_slope) <= cfg.ramp_moderate_db_per_s and strict_linear
                 and c.prominence_db >= cfg.prominence_db + 2.0)              # or >= 200 ms of it at a rate no
         )                                                                    # note attack is that slow AND that even
+        fast = self._fast_ramp(c)
+        if fast and not (c.fam and any(c.fam[-3:])):
+            ramp_ok = True           # a short loop with ~1 dB excess: >= 3 even steps of >= 5 dB/frame (>= 100 dB/s)
+            ramp_strong = True       # spanning >= 15 dB; a note onset is 1-2 steps, no partial-less attack is that
+                                     # fast AND that even [loop brief §1.3: R = e/tau, 100-250 dB/s on wedges]
         if ramp_strong and c.onset == "adult" and rise < 10.0:
             ramp_strong = False      # a line that arrived as a note must show a substantial climb (>= 10 dB) before
                                      # growth counts: tremolo/chorus/swell on a held note make 4-8 dB pseudo-ramps
@@ -1278,7 +1332,7 @@ class FeedbackDetector:
                 tm = sum(lts) / n_
                 vm = sum(llv) / n_
                 res = math.sqrt(sum((v - vm - wslope * (t - tm)) ** 2 for t, v in zip(lts, llv)) / n_)
-                slow_rise = res <= 0.8
+                slow_rise = res <= 0.8 and not comove_recent
         if slow_rise and c.onset == "adult" and not fam_recent and not family \
                 and wslope * (lts[-1] - lts[0]) >= 4.0:
             # >= 1.2 s of steady, solitary, dB-linear creep upward: a marginal loop (e/tau of a few dB/s), not

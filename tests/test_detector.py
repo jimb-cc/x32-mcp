@@ -267,7 +267,11 @@ def test_two_rings_both_detected(cfg, band_hz):
         t0 = first_crossing(frames, target, cfg.prominence_db)
         i = next(i for i, dd in dets if abs(dd.band - target) <= 1)
         print(f"[d:two] band {target}: crossing at frame {t0}, detected at frame {i}")
-        assert t0 is not None and 0 <= i - t0 <= 6
+        # ``first_crossing`` uses the single-band prominence (median of ±3). The detector also measures the
+        # cluster prominence (power of b-1..b+1 over the ring of bands ±2..±4, analyser brief §3) which sees a
+        # line a few dB earlier while it climbs out of the floor, so a detection may now precede this crossing by
+        # a few frames: earlier is better, later than 6 frames is still a failure.
+        assert t0 is not None and -8 <= i - t0 <= 6
 
 
 # -- (e) noise robustness --------------------------------------------------------------------------
@@ -307,9 +311,12 @@ def test_plateau_and_transient_do_not_detect(cfg, band_hz):
 
 
 def test_vibrato_rejected_with_longer_persistence(d, band_hz):
-    """A held note wobbling ±1 band / ±2 dB at 5 Hz: each rising half-cycle (2 frames at 20 fps) looks like
-    +40 dB/s growth to a 3-frame window, so persistence_frames=3 reports it (known limitation of the
-    DESIGN heuristic). persistence_frames=6 (yaml knob) rejects it while the 15 dB/s ring is still caught."""
+    """A held note wobbling ±1 band / ±2 dB at 5 Hz. The original weighted-sum heuristic reported it at
+    persistence_frames=3 (each rising half-cycle looked like +40 dB/s growth to a 3-frame window) and this test
+    used to assert that false positive. The track/group/classify detector follows the hopping peak as ONE track
+    whose centroid swings by a band (vibrato => programme) and which arrived at full level in one frame (a note
+    onset, not regeneration): it must not be reported at either persistence setting, while the 15 dB/s ring is
+    still caught."""
 
     def stream(src: SyntheticRta, n: int) -> list[list[float]]:
         frames = []
@@ -324,7 +331,7 @@ def test_vibrato_rejected_with_longer_persistence(d, band_hz):
         return frames
 
     cfg3 = DetectorConfig.from_descriptor(d)
-    assert run(cfg3, band_hz, stream(SyntheticRta(band_hz, seed=2, melody=False), 120), "h:vibrato/3") != []
+    assert run(cfg3, band_hz, stream(SyntheticRta(band_hz, seed=2, melody=False), 120), "h:vibrato/3") == []
     cfg6 = DetectorConfig.from_dict({**d.detector, "persistence_frames": 6})
     assert run(cfg6, band_hz, stream(SyntheticRta(band_hz, seed=2, melody=False), 120), "h:vibrato/6") == []
     src = SyntheticRta(band_hz, seed=5, melody=False)
@@ -522,9 +529,15 @@ def test_the_override_needs_real_prominence_not_just_patience(cfg, band_hz):
     assert not fired, f"a modest plateaued peak must not be notched, got {len(fired)}"
 
 
-def test_override_is_disabled_by_zero(band_hz):
-    """override_prominence_db: 0 restores the pre-M7 behaviour, for anyone who wants it back."""
+def test_override_key_is_accepted_but_no_longer_needed(band_hz):
+    """``override_prominence_db`` was the M7 patch on the weighted sum (a threshold bolted onto a threshold).
+    The predicate detector has no weighted sum to patch: an established, solitary, stationary, 60 dB-prominent
+    line at -25 dBFS is feedback by every physical test, whatever the legacy key says. The key still loads (old
+    device.yaml files keep working) and is ignored; this test used to assert that setting it to 0 restored the
+    pre-M7 miss, i.e. it certified the bug."""
     cfg = DetectorConfig(override_prominence_db=0.0)
+    assert cfg.override_prominence_db == 0.0
     det = FeedbackDetector(cfg, band_hz)
-    _, frames = _plateaued_ring(band_hz, 8000.0, prominence_db=60.0, frames=40)
-    assert not [d for vals, ts in frames for d in det.feed(vals, ts)]
+    idx, frames = _plateaued_ring(band_hz, 8000.0, prominence_db=60.0, frames=40)
+    fired = [d for vals, ts in frames for d in det.feed(vals, ts)]
+    assert fired and abs(fired[0].band - idx) <= 1
