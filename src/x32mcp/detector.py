@@ -1,56 +1,75 @@
-"""CFS² feedback detector and notch planner (DESIGN.md §12) — pure Python, no I/O, no asyncio.
+"""CFS² feedback discriminator and notch planner (DESIGN.md §12) — pure Python, no I/O, no asyncio.
 
 Two synchronous, side-effect-free pieces used by ``cfs.py``:
 
 * :class:`FeedbackDetector` consumes one RTA frame at a time (100 dB values from ``/meters/15``,
   band ``i`` centred at ``band_hz[i]`` = ``10000 * 2 ** ((i - 90) / 10)`` Hz, docs/research/meters.md §4.2)
-  and returns :class:`Detection` objects for bands that look like regenerative feedback.
-* :class:`NotchController` turns detections into GEQ band cuts (:class:`Notch`), merging adjacent
-  detections, deepening in ``notch_step_db`` steps to ``notch_max_db`` and respecting a per-session budget.
-  It never writes anything itself; ``cfs`` applies the returned :class:`Notch` through a :class:`GeqWriter`.
+  and returns :class:`Detection` objects for spectral lines that satisfy the physical predicates of
+  regenerative (electro-acoustic) feedback.
+* :class:`NotchController` turns detections into GEQ band cuts (:class:`Notch`); unchanged.
 
 Units and indices at the public boundary
 ----------------------------------------
-* Levels are dB (RTA dB re. full scale, -128 = "no signal"), times are seconds (``time.time()`` style
-  floats), slopes are dB/s.
-* **RTA band indices are 0-based** (``Detection.band`` indexes ``band_hz``; matches the meters.md formula
-  and the dashboard's ``db[]`` array).
-* **GEQ band numbers are 1-based** (``Notch.band`` 1..31 == the ``/fx/N/par/NN`` parameter number,
-  ``geq_band_hz[band - 1]`` is its centre; docs/research/fx_routing_scenes.md §2.3).
+* Levels are dB (RTA dB re. full scale, -128 = "no signal", 0.0 = "clipped"), times are seconds
+  (``time.time()`` style floats), slopes are dB/s.
+* **RTA band indices are 0-based** (``Detection.band``); **GEQ band numbers are 1-based** (``Notch.band``).
+* ``Detection.freq_hz`` is the *interpolated* line frequency (power centroid of the peak band and its two
+  neighbours, ±0.05 band for a clean line) — not the band centre — so the notch planner can pick the
+  right 1/3-octave band for a line that sits between RTA centres (loop brief §2.1/§4.1).
 
-Heuristic (DESIGN §12, thresholds from :class:`DetectorConfig`)
----------------------------------------------------------------
-* ``prominence[i] = level[i] - median(level[i-k .. i+k] without i)``, ``k = neighbour_bins`` (the window is
-  truncated at the spectrum edges). A band *qualifies* when ``prominence >= prominence_db`` and
-  ``level >= min_level_db``. Adjacent qualifying bands are one peak (the loudest of them).
-* Peaks are tracked as :class:`Candidate` streaks; a peak within ``±band_tolerance`` of a candidate's band
-  continues its streak (drift), a frame with no qualifying peak nearby ends it.
-* growth: least-squares slope (dB/s) of level vs time over the candidate's *growth window*;
-  ``growth_score = 0`` if the slope is below ``growth_min_db_per_s`` (plateau / decay), else
-  ``min(1, slope / growth_ref_db_per_s)``.
-* ``confidence = w_p * min(1, prominence / prominence_db) + w_s * min(1, frames / persistence_frames)
-  + w_g * growth_score``; a detection is emitted when ``frames >= persistence_frames`` and
-  ``confidence >= confidence_threshold`` and the band (±band_tolerance) is not in its ``cooldown_s``
-  after a previous emission. A candidate that keeps ringing is re-emitted once per cooldown so the notch
-  can be deepened.
+Why this is not a weighted sum any more (REVIEW_BRIEF §1)
+----------------------------------------------------------
+The old ``0.3·prominence + 0.2·persistence + 0.5·growth`` let surplus in one requirement buy a deficit in
+another and made growth mandatory in practice; both of its failure modes were seen on the real desk
+(HANDOVER §4b). This module replaces it with a small decision procedure over explicit, independently
+testable predicates. Every constant below is a physical quantity with a stated origin; see
+``DetectorConfig`` and the report ``DESIGN.md`` that accompanies this branch.
 
-Decisions where DESIGN is silent or a literal reading is not workable (see tests/test_detector.py):
+The model in one paragraph. A *line* is a local spectral maximum that is narrow (a lone sinusoid leaks
+only through the analyser's own skirts, so it stands ≥10 dB clear of the bands two either side) and
+prominent over the local median. Lines are tracked frame to frame by their power centroid (sub-band
+frequency). For every track the detector knows (a) how it was **born** — already there when the
+detector armed (``est``), popped up at full level inside one analyser rise time (``pop`` = an
+instrument onset), or **grew** dB-linearly out of the bed over several frames (the signature of a loop
+with |L| > 1: growth rate = excess/loop-delay, loop brief §1.3); (b) whether it carries a **harmonic
+family** (partials at +10, +15.85, +20, +23.2 bands present as peaks and co-moving, or it is itself
+somebody's 2nd/3rd harmonic) — musical notes do, a linear loop does not (§2.2); (c) whether its centroid
+is **stationary** (melody moves ≥0.83 band per semitone, vibrato wobbles it; a ring is fixed by geometry,
+§2.3); (d) whether its level is **steady / not decaying** (struck and plucked notes decay, a loop above
+threshold never does); (e) whether its rise is explained by a **common-mode** move of the whole spectrum
+(operator riding a fader) and, in ``ring_out``, how it **responded to the server's own +1 dB master
+steps** (a band within a few dB of threshold over-responds ≥2 dB/dB; programme moves ≤1 dB/dB, §1.5).
+Growth is measured only over windows longer than the analyser band could take to settle
+(``analyser_settle_cycles``/Δf: 3 frames above 300 Hz, 12 frames at 78 Hz, 23 at 39 Hz), which is what
+removes the M7 40/80 Hz false positives: an instant bass onset seen through a 2.7 Hz-wide band *is* a
+0.4 s ramp (analyser brief §1), so no ramp shorter than that is admissible evidence at that frequency.
 
-* **Growth window restarts instead of freezing.** DESIGN says "monotonic iff every step >= -tolerance"
-  over the whole streak. Read literally, one noisy -1.1 dB step would zero the growth score for the rest
-  of the streak while the ring keeps growing. Here a step below ``-monotonic_tolerance_db`` restarts the
-  growth window at the current frame (the persistence count ``frames`` is unaffected), which is the same
-  verdict for that frame and recovers on the next ones. The window is also bounded to
-  ``growth_window_frames`` samples (DESIGN's unbounded streak would grow without limit).
-* **Onset guard** (``growth_max_db_per_s``, extension, default 60 dB/s): a level rising faster than a
-  loop can regenerate (a note onset or a swell: +20 dB in 250 ms = 80 dB/s) restarts the growth window,
-  so a note that swells and then holds is judged on its plateau (growth 0) instead of on its attack.
-  Regenerative feedback in a ring-out grows at a few to ~30 dB/s (``growth_ref_db_per_s`` = 20).
-* Growth needs at least ``persistence_frames`` (>= 2) samples in the window; a 2-sample slope of noisy
-  data is meaningless.
-* ``decay_verify_frames`` (extension, default 2) belongs to the VERIFY stage in ``cfs.py``: the notched
-  band must sit ``decay_verify_db`` below its level at the cut on that many *consecutive* frames. One
-  dipping frame out of the ~30 in ``decay_verify_s`` is RTA noise, not a tamed ring.
+Decision (per track, per frame; first matching rule emits; a track once emitted is re-emitted every
+``cooldown_s`` while it is still present and not decaying so ``cfs`` can deepen the notch):
+
+* ``CLIP``   peak ≥ ``clip_level_db`` (the 0.0 dB clip flag) on a narrow line for ``loud_frames`` frames.
+* ``LOUD``   narrow, family-less (family ignored above ``family_escape_level_db``: a clipping howl grows odd
+             partials), stationary, steady line at ≥ ``loud_level_db`` for ``loud_frames`` frames, above
+             ``lf_strict_hz``. "A lone sinusoid within 10 dB of full scale" (loop brief P8).
+* ``GROW``   narrow, stationary line whose peak level rose dB-linearly — either FAST (≥3 of the last 5
+             frame steps ≥ ``growth_fast_step_db`` summing to ≥ ``growth_fast_total_db``, no single step
+             carrying the rise: that would be an onset) or SLOW (least-squares ramp ≥ ``growth_slow_min_db_per_s``
+             sustained over ≥ max(``growth_slow_frames``, settle(b)) frames, net rise ≥ ``growth_slow_total_db``,
+             both halves rising) — net of any rise of the spectrum reference, with no co-moving family.
+* ``EST``    line already present when the detector armed (no onset observable): narrow, family-less,
+             stationary, steady, not decaying, ≥ ``est_min_level_db`` (a compressor/limiter plateau cannot sit
+             lower at a bus tap with sane gain structure, loop brief §1.4), for ``est_frames`` frames.
+* ``PROBE``  (ring_out, after :meth:`FeedbackDetector.note_gain_step`) a tracked line whose level rose by
+             ≥ ``probe_excess_db`` more than the spectrum did on two consecutive master steps, or by
+             ≥ ``probe_strong_db`` more on one: loop-gain dependent ⇒ regenerative, cut it before it runs away
+             (that is what a human ring-out does). A line that answered two steps with ≤ ``probe_linear_db``
+             excess is tagged stationary/programme and is never cut on ``EST``/``LOUD`` evidence.
+
+A line that *popped* into existence at full level and then sits flat is programme until proven otherwise
+(organ, flute, whistle, sine lead, 808 — the family-less instruments): it is published as a candidate, never
+cut on passive evidence below ``loud_level_db``. This is the one irreducible ambiguity (a ring that reached a
+compressor plateau inside one frame looks the same); the asymmetry is resolved toward not cutting in
+``watch`` (a human is on the fader) and toward the probe in ``ring_out`` (REVIEW_BRIEF Q4).
 
 Only ``logging`` is used for diagnostics (stdout is the MCP transport).
 """
@@ -82,43 +101,112 @@ __all__ = [
 # ---------------------------------------------------------------------------------------------
 
 _WEIGHT_KEYS = {"prominence": "w_prominence", "persistence": "w_persistence", "growth": "w_growth"}
+_HARM_OFFSETS = tuple((k, 10.0 * math.log2(k)) for k in (2, 3, 4, 5))   # H2 +10, H3 +15.85, H4 +20, H5 +23.22 bands
 
 
 @dataclass(frozen=True)
 class DetectorConfig:
     """Detector + notch thresholds; one field per ``device.yaml`` ``detector:`` key.
 
-    The yaml ``weights: {prominence, persistence, growth}`` mapping is flattened into
-    ``w_prominence`` / ``w_persistence`` / ``w_growth``. ``growth_max_db_per_s``,
-    ``growth_window_frames`` and ``decay_verify_frames`` are extensions with defaults (see module
-    docstring).
+    Keys of the old weighted-sum heuristic (``weights``, ``confidence_threshold``, ``growth_ref_db_per_s``,
+    ``growth_max_db_per_s``, ``monotonic_tolerance_db``, ``override_*``) are still accepted so an existing
+    ``device.yaml`` loads; ``confidence_threshold`` is still the value an emitted detection's confidence is
+    guaranteed to reach (dashboard contract), the others are inert. Every new key has a default, so
+    ``DetectorConfig.from_descriptor`` works with a yaml that predates them.
     """
 
-    prominence_db: float = 12.0          # dB above the median of the ±neighbour_bins neighbours
+    # --- line qualification (single frame) ---------------------------------------------------
+    prominence_db: float = 12.0          # dB over the median of the ±neighbour_bins neighbours to *emit*
     neighbour_bins: int = 3              # bands each side used for the median
-    min_level_db: float = -60.0          # ignore candidates quieter than this (RTA dB)
-    persistence_frames: int = 3          # consecutive qualifying frames before a detection
-    growth_min_db_per_s: float = 6.0     # slopes below this score 0 (plateau)
-    growth_ref_db_per_s: float = 20.0    # slope that scores 1.0
-    growth_max_db_per_s: float = 60.0    # faster than this is an onset, not a ring (extension)
-    monotonic_tolerance_db: float = 1.0  # a step below -this restarts the growth window
+    track_prominence_db: float = 6.0     # a local maximum this prominent is *tracked* (history before it matters)
+    narrow_db: float = 8.0               # peak − max(level 2 bands outside its footprint): a lone sinusoid leaks only via the
+                                         # analyser skirts (≥12 dB down at ±2 even for 2nd-order skirts, analyser
+                                         # brief §3); formant humps, cymbal wash and PA ripple are ≥3 bands wide
+    track_min_level_db: float = -100.0   # absolute floor for tracking at all (only excludes the -128 "no signal" region;
+                                         # every absolute gate floats on the RTA gain pref, so prominence, narrowness
+                                         # and the line's own history are the gates, not a level)
+    # --- harmonic family (single frame, accumulated) -----------------------------------------
+    family_prominence_db: float = 6.0    # a partial is "present" when its band (±1) is itself a local peak this
+                                         # prominent (presence-as-peak, not energy: the bed has energy everywhere)
+    family_tol_bands: float = 0.5        # a partner must sit within this of the exact harmonic position (60 c):
+                                         # integer-ratio partials land exactly; an unrelated line a band away does not
+    family_partials: int = 2             # ≥ this many of H2..H5 present ⇒ musical note (one coincident partner
+                                         # happens between unrelated rings ~20 % of the time, two < 1 %, [A §4.3])
+    family_veto_frac: float = 0.4        # fraction of recent frames with a family that makes a line musical
+    family_escape_level_db: float = -6.0 # this close to full scale a howl clips somewhere and grows odd partials
+                                         # (loop brief §2.2): the family test is void, level decides
+    # --- stationarity / steadiness (temporal) ------------------------------------------------
+    centroid_tol_bands: float = 0.6      # centroid excursion over the last 10 frames that still counts as fixed:
+                                         # a semitone step is 0.83 band, vibrato ±50 c swings an edge tone's
+                                         # centroid ±0.3..0.8 band; a ring's centroid noise is < 0.1 band
+    level_unsteady_db: float = 1.5       # sd of frame-to-frame peak steps above which a *plateau* is not one
+                                         # (voice/whistle flutter 1-2 dB + vibrato; a sine through PEAK ≈ 0.1-0.4)
+    decay_tol_db: float = 2.0            # a line this far below its recent (1 s) maximum is decaying/decayed:
+                                         # never (re-)emitted (plucked/struck notes, killed rings, RTA release tails)
+    # --- growth (temporal; the loop signature) -----------------------------------------------
+    analyser_settle_cycles: float = 3.0  # a rise must outlast this many 1/Δf periods of its own band before it is
+                                         # evidence (time-bandwidth bound, any filter bank; 3/Δf = 95 % settled)
+    growth_fast_step_db: float = 2.0     # per-frame step that counts as "rising this frame" (≥40 dB/s)
+    growth_fast_total_db: float = 12.0   # ≥3 such steps within 5 frames summing to this, none carrying > 55 %:
+                                         # exponential growth; an onset is one big step, a swell is < 2 dB/frame
+    growth_slow_frames: int = 5          # minimum ramp length for the least-squares path (≥ persistence)
+    growth_slow_min_db_per_s: float = 1.5  # marginal loops grow at excess/τ down to ~1 dB/s (§1.3 table);
+                                         # below this a "ramp" is air-movement wander
+    growth_slow_total_db: float = 6.0    # net dB a slow ramp must have climbed (≫ ±0.5 dB loop-gain wander)
+    growth_drop_tol_db: float = 3.0      # a fall this far below the ramp's maximum restarts the ramp (a real
+                                         # decay); smaller dips are band noise at 15-20 dB SNR
+    growth_window_frames: int = 60       # longest ramp considered (3 s)
+    # --- birth classes -----------------------------------------------------------------------
+    est_arm_frames: int = 3              # tracks born in the first N frames were "already there at arm"
+    est_frames: int = 5                  # frames of stationarity/steadiness before an established line is emitted
+    est_min_level_db: float = -40.0      # a plateaued howl sits at a limiter/compressor/clip level: -30..0 dBFS at
+                                         # a bus tap with sane gain structure (§1.4); a stationary line below this
+                                         # that was there at arm is hum/HVAC/room tone
+    pop_step_frac: float = 0.55          # one frame step carrying more than this share of a rise = an onset
+    # --- absolute level rules ----------------------------------------------------------------
+    loud_level_db: float = -10.0         # a lone stationary sinusoid within 10 dB of full scale (P8)
+    loud_frames: int = 4
+    clip_level_db: float = -0.5          # /meters/15 reads exactly 0.00 when the tap clipped (meters.md §4.2)
+    # --- frequency window (prior; soft) ------------------------------------------------------
+    lf_edge_hz: float = 0.0              # hard floor (0 = none). Per-session: 0.7 × the open mics' HPF (§3.4)
+    lf_strict_hz: float = 160.0          # below this only GROW (over the long analyser-safe window) or PROBE may
+                                         # emit — never EST/LOUD: LF is where programme fundamentals live and where
+                                         # loop growth is slow enough (τ 15-30 ms) to be watched
+    hf_edge_hz: float = 12500.0          # SM58-class mics die above 10 k; condensers ring to 12-13 k (§3.1)
+    # --- common mode / probe -----------------------------------------------------------------
+    ref_band_lo: int = 25                # spectrum reference = median level of bands 25..85 (110 Hz-7 kHz, where
+    ref_band_hi: int = 85                # the analyser settles within a frame)
+    probe_settle_frames: int = 2         # frames after a master step before the "after" window (write lands + τ_a)
+    probe_window_frames: int = 12        # frames each side of a step compared (medians)
+    probe_excess_db: float = 2.0         # (Δline − Δspectrum) per step that marks loop-gain dependence: a mode 4 dB
+                                         # under threshold answers +3 dB to +1 dB, programme +0..+1 (§1.5)
+    probe_strong_db: float = 4.0         # one step this super-linear is enough (mode within ~2 dB of threshold)
+    probe_linear_db: float = 1.3         # ≤ this on two steps: stationary line / programme / driven resonance
+    probe_min_history_frames: int = 6    # a line must predate the step by this much to be compared across it
+    # --- emission ----------------------------------------------------------------------------
+    persistence_frames: int = 3          # minimum track age for any emission
+    band_tolerance: int = 1              # drift allowed while tracking / cooldown radius (RTA bands)
+    cooldown_s: float = 1.0              # s between emissions for the same line
+    confidence_threshold: float = 0.7    # emitted detections report at least this (dashboard contract)
+    # --- notch planning / VERIFY (cfs.py) — unchanged ----------------------------------------
+    notch_step_db: float = -3.0
+    notch_max_db: float = -9.0
+    notch_budget_default: int = 6
+    merge_adjacent_bands: int = 1
+    decay_verify_db: float = 6.0
+    decay_verify_s: float = 1.5
+    decay_verify_frames: int = 2
+    frame_period_s: float = 0.05
+    mode: str = "watch"                  # "watch" (human owns the gain) | "ringout" (server steps the master)
+    # --- legacy keys of the weighted-sum heuristic (accepted, inert) -------------------------
+    min_level_db: float = -45.0          # the M7 candidate gate: one room's background music (HANDOVER §4b(3))
+    growth_min_db_per_s: float = 6.0
+    growth_ref_db_per_s: float = 20.0
+    growth_max_db_per_s: float = 60.0
+    monotonic_tolerance_db: float = 1.0
     w_prominence: float = 0.3
     w_persistence: float = 0.2
     w_growth: float = 0.5
-    confidence_threshold: float = 0.7
-    band_tolerance: int = 1              # drift allowed while tracking / cooldown radius (RTA bands)
-    cooldown_s: float = 1.0              # s between emissions for the same band
-    notch_step_db: float = -3.0          # per detection (negative)
-    notch_max_db: float = -9.0           # deepest cut (negative, <= notch_step_db)
-    notch_budget_default: int = 6        # distinct GEQ bands per session
-    merge_adjacent_bands: int = 1        # GEQ bands: a detection this close to a notch deepens it
-    decay_verify_db: float = 6.0         # used by cfs.py (VERIFY stage)
-    decay_verify_s: float = 1.5          # used by cfs.py
-    decay_verify_frames: int = 2         # consecutive frames that must show the drop (cfs.py, extension)
-    frame_period_s: float = 0.05         # nominal RTA frame period (informational)
-    growth_window_frames: int = 60       # bound on the growth window (extension)
-    # Established-feedback override (extension, added after M7): a band this far above its
-    # neighbours for this many frames is emitted even with no growth. 0 disables it.
     override_prominence_db: float = 25.0
     override_persistence_frames: int = 6
 
@@ -128,14 +216,26 @@ class DetectorConfig:
                 raise ValueError(f"DetectorConfig: {msg}")
 
         need(self.prominence_db > 0, "prominence_db must be > 0")
-        need(self.override_prominence_db >= 0, "override_prominence_db must be >= 0")
-        need(self.override_persistence_frames >= 1, "override_persistence_frames must be >= 1")
+        need(0 < self.track_prominence_db <= self.prominence_db, "track_prominence_db must be in (0, prominence_db]")
         need(self.neighbour_bins >= 1, "neighbour_bins must be >= 1")
         need(self.persistence_frames >= 1, "persistence_frames must be >= 1")
-        need(self.growth_ref_db_per_s > 0, "growth_ref_db_per_s must be > 0")
-        need(self.growth_max_db_per_s > self.growth_min_db_per_s, "growth_max_db_per_s must exceed growth_min_db_per_s")
-        need(self.monotonic_tolerance_db >= 0, "monotonic_tolerance_db must be >= 0")
-        need(min(self.w_prominence, self.w_persistence, self.w_growth) >= 0, "weights must be >= 0")
+        need(self.narrow_db >= 0, "narrow_db must be >= 0")
+        need(self.family_partials >= 1, "family_partials must be >= 1")
+        need(0.0 < self.family_veto_frac <= 1.0, "family_veto_frac must be in (0, 1]")
+        need(self.analyser_settle_cycles >= 0, "analyser_settle_cycles must be >= 0")
+        need(self.growth_fast_step_db > 0 and self.growth_fast_total_db > 0, "growth_fast_* must be > 0")
+        need(self.growth_slow_frames >= 2, "growth_slow_frames must be >= 2")
+        need(self.growth_slow_min_db_per_s > 0 and self.growth_slow_total_db > 0, "growth_slow_* must be > 0")
+        need(self.growth_drop_tol_db > 0, "growth_drop_tol_db must be > 0")
+        need(self.growth_window_frames >= max(2, self.persistence_frames, self.growth_slow_frames),
+             "growth_window_frames too small")
+        need(self.est_arm_frames >= 0 and self.est_frames >= 1, "est_* frames invalid")
+        need(0.0 < self.pop_step_frac <= 1.0, "pop_step_frac must be in (0, 1]")
+        need(self.loud_frames >= 1, "loud_frames must be >= 1")
+        need(self.clip_level_db <= 0.0 and self.loud_level_db <= 0.0, "level thresholds must be <= 0 dBFS")
+        need(self.lf_edge_hz >= 0 and self.hf_edge_hz > self.lf_edge_hz, "frequency window invalid")
+        need(0 <= self.ref_band_lo < self.ref_band_hi, "ref_band_lo/hi invalid")
+        need(self.probe_settle_frames >= 0 and self.probe_window_frames >= 2, "probe_* frames invalid")
         need(self.band_tolerance >= 0, "band_tolerance must be >= 0")
         need(self.cooldown_s >= 0, "cooldown_s must be >= 0")
         need(self.notch_step_db < 0, "notch_step_db must be negative (cuts only)")
@@ -143,7 +243,11 @@ class DetectorConfig:
         need(self.notch_budget_default >= 0, "notch_budget_default must be >= 0")
         need(self.decay_verify_frames >= 1, "decay_verify_frames must be >= 1")
         need(self.merge_adjacent_bands >= 0, "merge_adjacent_bands must be >= 0")
-        need(self.growth_window_frames >= max(2, self.persistence_frames), "growth_window_frames too small")
+        need(self.mode in ("watch", "ringout"), "mode must be 'watch' or 'ringout'")
+        need(min(self.w_prominence, self.w_persistence, self.w_growth) >= 0, "weights must be >= 0")
+        need(self.override_prominence_db >= 0 and self.override_persistence_frames >= 1, "override_* invalid")
+        need(self.growth_ref_db_per_s > 0 and self.growth_max_db_per_s > self.growth_min_db_per_s
+             and self.monotonic_tolerance_db >= 0, "legacy growth keys invalid")
 
     @property
     def weights(self) -> dict[str, float]:
@@ -166,7 +270,8 @@ class DetectorConfig:
             if key not in known:
                 log.debug("DetectorConfig: ignoring unknown key %r", key)
                 continue
-            kw[key] = int(value) if known[key] == "int" else float(value)
+            typ = known[key]
+            kw[key] = int(value) if typ == "int" else str(value) if typ == "str" else float(value)
         return cls(**kw)
 
     @classmethod
@@ -187,7 +292,8 @@ class DetectorConfig:
 
 @dataclass(frozen=True)
 class Detection:
-    """One feedback verdict. ``band`` is the 0-based RTA band, ``freq_hz`` its centre."""
+    """One feedback verdict. ``band`` is the 0-based RTA band of the peak, ``freq_hz`` the interpolated line
+    frequency, ``reasons`` the predicates that justified it (for the notch report)."""
 
     ts: float
     band: int
@@ -197,6 +303,7 @@ class Detection:
     slope_db_per_s: float
     frames: int
     confidence: float
+    reasons: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -208,21 +315,18 @@ class Detection:
             "slope_db_per_s": self.slope_db_per_s,
             "frames": self.frames,
             "confidence": self.confidence,
+            "reasons": list(self.reasons),
         }
 
 
 @dataclass
 class Candidate:
-    """A tracked peak. ``levels``/``ts_list`` are the growth window (bounded, may restart; see module doc);
-    ``frames`` is the full persistence count since ``first_ts``."""
+    """A tracked spectral line (see module docstring). Histories are per matched frame, oldest first, capped."""
 
     band: int
     first_ts: float
-    frames: int
-    levels: list[float]
-    ts_list: list[float]
-    confidence: float
-    override: bool = False
+    frames: int = 0
+    confidence: float = 0.0
     freq_hz: float = 0.0
     level_db: float = -128.0
     prominence_db: float = 0.0
@@ -230,6 +334,33 @@ class Candidate:
     growth_score: float = 0.0
     last_ts: float = 0.0
     emitted: int = 0
+    # --- new state ---
+    centroid: float = 0.0
+    narrow_db: float = 0.0
+    birth: str = "new"                 # est | pop | grow | static | new
+    est: bool = False
+    born_frame: int = 0
+    pre_level_db: float | None = None  # what this band read just before the line appeared
+    feedback: bool = False             # sticky once emitted
+    musical: str = ""                  # sticky programme verdict (reason) — never emitted afterwards
+    reasons: tuple[str, ...] = ()
+    verdict: str = ""                  # last frame's classification (diagnostic)
+    hops: int = 0
+    coast: int = 0
+    last_emit_ts: float = -1e9
+    probe_hits: int = 0                # consecutive super-linear step responses
+    probe_linear: int = 0              # consecutive linear (≤1 dB/dB) step responses
+    probe_last_excess_db: float = 0.0
+    probe_steps: int = 0
+    kf: list[int] = field(default_factory=list)       # frame index
+    ts_list: list[float] = field(default_factory=list)
+    levels: list[float] = field(default_factory=list)  # peak band level (dB)
+    cen_list: list[float] = field(default_factory=list)
+    ref_list: list[float] = field(default_factory=list)
+    fam_list: list[bool] = field(default_factory=list)   # family incl. a lone exact-octave partner
+    fam_strong: list[bool] = field(default_factory=list) # >= family_partials partners, or somebody's H2/H3/H4
+    grow_start: int = 0                # index into the lists where the current monotone ramp starts
+    diag: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -244,6 +375,13 @@ class Candidate:
             "growth_score": self.growth_score,
             "confidence": self.confidence,
             "emitted": self.emitted,
+            "centroid": round(self.centroid, 2),
+            "narrow_db": round(self.narrow_db, 1),
+            "birth": self.birth,
+            "verdict": self.verdict,
+            "musical": self.musical,
+            "reasons": list(self.reasons),
+            "probe_excess_db": round(self.probe_last_excess_db, 2),
         }
 
 
@@ -261,18 +399,60 @@ def _ls_slope(ts: Sequence[float], vs: Sequence[float]) -> float:
     return sxy / sxx
 
 
-class FeedbackDetector:
-    """Frame-by-frame feedback detector over an RTA stream (see module docstring for the heuristic)."""
+def _ls_fit(ts: Sequence[float], vs: Sequence[float]) -> tuple[float, float]:
+    """(slope, intercept) least squares."""
+    n = len(ts)
+    if n < 2:
+        return 0.0, (vs[0] if vs else 0.0)
+    tm = sum(ts) / n
+    vm = sum(vs) / n
+    sxx = sum((t - tm) ** 2 for t in ts)
+    if sxx <= 0.0:
+        return 0.0, vm
+    s = sum((t - tm) * (v - vm) for t, v in zip(ts, vs)) / sxx
+    return s, vm - s * tm
 
-    def __init__(self, cfg: DetectorConfig, band_hz: Sequence[float]) -> None:
+
+def _sd(xs: Sequence[float]) -> float:
+    n = len(xs)
+    if n < 2:
+        return 0.0
+    m = sum(xs) / n
+    return math.sqrt(sum((x - m) ** 2 for x in xs) / (n - 1))
+
+
+@dataclass
+class _Step:
+    ts: float
+    delta_db: float
+    k: int | None = None       # frame index of the first frame at/after the step
+    done: bool = False
+
+
+class FeedbackDetector:
+    """Frame-by-frame feedback discriminator over an RTA stream (see module docstring)."""
+
+    HIST = 64          # frames of full-spectrum history kept (probe windows, pre-birth baselines, co-movement)
+    GRAVE_FRAMES = 10  # a line reborn within this many frames of dying inherits its history class
+
+    def __init__(self, cfg: DetectorConfig, band_hz: Sequence[float], *, mode: str | None = None) -> None:
         self.cfg = cfg
+        self.mode = (mode or cfg.mode)
+        if self.mode not in ("watch", "ringout"):
+            raise ValueError("mode must be 'watch' or 'ringout'")
         self.band_hz: tuple[float, ...] = tuple(float(h) for h in band_hz)
-        if len(self.band_hz) < 2 * cfg.neighbour_bins + 1:
+        n = len(self.band_hz)
+        if n < 2 * cfg.neighbour_bins + 1:
             raise ValueError("band_hz too short for neighbour_bins")
-        self._cands: list[Candidate] = []
-        self._cooldown: dict[int, float] = {}
-        self.frames_seen: int = 0
-        self.last_ts: float | None = None
+        # per-band constants
+        self._settle_frames: list[int] = []
+        for f in self.band_hz:
+            bw = 0.06932 * f   # 1/10-octave -3 dB bandwidth
+            fr = cfg.analyser_settle_cycles / (bw * cfg.frame_period_s) if bw > 0 else 0.0
+            self._settle_frames.append(max(3, int(math.ceil(fr))))
+        self._ref_lo = min(cfg.ref_band_lo, n - 2)
+        self._ref_hi = min(cfg.ref_band_hi, n - 1)
+        self.reset()
 
     # -- helpers -------------------------------------------------------------------------------
     def prominences(self, values_db: Sequence[float]) -> list[float]:
@@ -287,19 +467,15 @@ class FeedbackDetector:
             out.append(values_db[i] - median(neigh))
         return out
 
-    @staticmethod
-    def _peaks(qualifying: Sequence[int], values: Sequence[float]) -> list[int]:
-        """Collapse runs of adjacent qualifying bands into their loudest band."""
-        peaks: list[int] = []
-        run: list[int] = []
-        for b in qualifying:
-            if run and b != run[-1] + 1:
-                peaks.append(max(run, key=lambda j: values[j]))
-                run = []
-            run.append(b)
-        if run:
-            peaks.append(max(run, key=lambda j: values[j]))
-        return peaks
+    def freq_of(self, centroid: float) -> float:
+        """Interpolated frequency of a (fractional) band position (log-linear between centres)."""
+        n = len(self.band_hz)
+        c = min(max(centroid, 0.0), n - 1.0)
+        i = int(math.floor(c))
+        if i >= n - 1:
+            return self.band_hz[-1]
+        frac = c - i
+        return self.band_hz[i] * (self.band_hz[i + 1] / self.band_hz[i]) ** frac
 
     def _in_cooldown(self, band: int, ts: float) -> bool:
         tol = self.cfg.band_tolerance
@@ -309,64 +485,421 @@ class FeedbackDetector:
                 return True
         return False
 
-    def _extend(self, c: Candidate, band: int, level: float, prom: float, ts: float) -> None:
-        cfg = self.cfg
-        c.frames += 1
-        c.band = band
-        c.freq_hz = self.band_hz[band]
-        c.level_db = level
-        c.prominence_db = prom
-        c.last_ts = ts
-        if c.levels and level - c.levels[-1] < -cfg.monotonic_tolerance_db:
-            # A drop beyond the tolerance breaks the "monotonic rise": restart the growth window here
-            # rather than zeroing growth for the rest of the streak (module docstring).
-            c.levels.clear()
-            c.ts_list.clear()
-        c.levels.append(level)
-        c.ts_list.append(ts)
-        if len(c.levels) > cfg.growth_window_frames:
-            del c.levels[0]
-            del c.ts_list[0]
-
-    def _score(self, c: Candidate) -> None:
-        cfg = self.cfg
-        min_samples = max(2, cfg.persistence_frames)
-        slope = _ls_slope(c.ts_list, c.levels)
-        if len(c.levels) >= min_samples and slope > cfg.growth_max_db_per_s:
-            # Onset guard: nothing regenerative rises this fast; judge what follows, not the attack.
-            del c.levels[:-1]
-            del c.ts_list[:-1]
-            slope = 0.0
-        growth = 0.0
-        if len(c.levels) >= min_samples and slope >= cfg.growth_min_db_per_s:
-            growth = min(1.0, slope / cfg.growth_ref_db_per_s)
-        c.slope_db_per_s = slope
-        c.growth_score = growth
-        c.confidence = (
-            cfg.w_prominence * min(1.0, c.prominence_db / cfg.prominence_db)
-            + cfg.w_persistence * min(1.0, c.frames / cfg.persistence_frames)
-            + cfg.w_growth * growth
-        )
-        # Established-feedback override. Without growth the score above cannot exceed
-        # w_prominence + w_persistence (0.5 by default), which is below the 0.7 threshold — so a
-        # howl that has already reached its plateau can never be emitted, however loud or however
-        # long it runs. Observed at M7 on the real desk: a 60 dB-prominent 8 kHz ring sat at
-        # confidence 0.50 for 15 s while the operator held it.
-        #
-        # The growth test earns its keep on *modest* peaks, where a sustained instrument note and
-        # an early ring look alike. It has nothing to say about a band this far above its
-        # neighbours: musical content is harmonically spread, so tens of dB of prominence in a
-        # single band is feedback by construction. Past `override_prominence_db`, and given more
-        # persistence than the normal path asks for, emit regardless of growth.
-        if (
-            cfg.override_prominence_db > 0.0
-            and c.prominence_db >= cfg.override_prominence_db
-            and c.frames >= cfg.override_persistence_frames
-        ):
-            c.confidence = max(c.confidence, cfg.confidence_threshold)
-            c.override = True
-
     # -- API -----------------------------------------------------------------------------------
+    def note_gain_step(self, delta_db: float, ts: float) -> None:
+        """Tell the detector the server changed the bus master by ``delta_db`` at ``ts`` (ring_out's active
+        probe). Lines whose level answers super-linearly are loop-gain dependent (loop brief §1.5)."""
+        if not math.isfinite(delta_db) or delta_db == 0.0:
+            return
+        self._steps.append(_Step(float(ts), float(delta_db)))
+        if len(self._steps) > 32:
+            del self._steps[0]
+
+    def note_cut(self, band_hz: float, depth_db: float, ts: float) -> None:
+        """Tell the detector a GEQ cut of ``depth_db`` at ``band_hz`` was written at ``ts`` (informational: the
+        bands under the bell are excluded from the spectrum reference for a few frames)."""
+        self._cuts.append((float(ts), float(band_hz), float(depth_db)))
+        if len(self._cuts) > 32:
+            del self._cuts[0]
+
+    def reset(self) -> None:
+        self._cands: list[Candidate] = []
+        self._grave: list[tuple[int, Candidate]] = []
+        self._cooldown: dict[int, float] = {}
+        self._vals: list[list[float]] = []     # last HIST frames
+        self._refs: list[float] = []
+        self._tss: list[float] = []
+        self._k0 = 0                           # frame index of self._vals[0]
+        self._steps: list[_Step] = []
+        self._cuts: list[tuple[float, float, float]] = []
+        self.frames_seen: int = 0
+        self.last_ts: float | None = None
+        self.flags: dict[str, Any] = {}        # diagnostics: analyser misconfiguration hints
+
+    @property
+    def candidates(self) -> list[Candidate]:
+        """Current qualifying lines (prominence ≥ ``prominence_db``; live objects, read-only), lowest band first."""
+        return [c for c in self._cands if c.prominence_db >= self.cfg.prominence_db and c.coast == 0]
+
+    @property
+    def tracks(self) -> list[Candidate]:
+        """Every tracked line including sub-threshold ones (diagnostics)."""
+        return list(self._cands)
+    # -- per-frame machinery ------------------------------------------------------------------
+
+    def _hist_level(self, band: int, k: int) -> float | None:
+        i = k - self._k0
+        if 0 <= i < len(self._vals) and 0 <= band < len(self.band_hz):
+            return self._vals[i][band]
+        return None
+
+    def _pre_level(self, band: int, k: int) -> float | None:
+        """Median of what ``band`` read 2..8 frames before frame ``k`` (where a new line came from)."""
+        xs = [self._hist_level(band, kk) for kk in range(k - 8, k - 1)]
+        xs = [x for x in xs if x is not None]
+        return median(xs) if xs else None
+
+    def _present_since_arm(self, band: int, level: float) -> bool:
+        """True when the stored history reaches back to frame 0 and ``band`` (or a neighbour) has read within
+        6 dB of ``level`` in every frame since: the line was there when the detector armed."""
+        if self._k0 != 0 or not self._vals:
+            return False
+        n = len(self.band_hz)
+        for row in self._vals[:-1]:
+            best = max(row[j] for j in (band - 1, band, band + 1) if 0 <= j < n)
+            if best < level - 6.0:
+                return False
+        return True
+
+    @staticmethod
+    def _narrowness(vals: Sequence[float], i: int) -> float:
+        """How far the peak stands above the *shallower* of its two flanks, where each flank is the lower of the two
+        bands just outside the line's footprint. A lone sinusoid leaks only through the analyser skirts, so at
+        least one of the two bands on each side is ≥12-18 dB down (analyser brief §3) — also when another line
+        sits two bands away (the band between them dips). A broadband hump (formant, cymbal wash, PA ripple) has
+        no dip on either side. A line between two centres reads (-3, -3) in a pair of bands: the footprint is
+        then the pair and the flanks start beyond it."""
+        n = len(vals)
+        lo = hi = i
+        if i + 1 < n and vals[i + 1] >= vals[i] - 4.0 and (i == 0 or vals[i + 1] >= vals[i - 1]):
+            hi = i + 1
+        elif i >= 1 and vals[i - 1] >= vals[i] - 4.0:
+            lo = i - 1
+
+        def flank(a: int, b: int) -> float:
+            xs = [vals[j] for j in (a, b) if 0 <= j < n]
+            return min(xs) if xs else -1e9
+
+        return vals[i] - max(flank(lo - 1, lo - 2), flank(hi + 1, hi + 2))
+
+    @staticmethod
+    def _centroid(vals: Sequence[float], i: int) -> tuple[float, float]:
+        """Power centroid (fractional band) and cluster level (dB) over bands i-1..i+1."""
+        n = len(vals)
+        num = den = 0.0
+        for j in (i - 1, i, i + 1):
+            if 0 <= j < n:
+                p = 10.0 ** (vals[j] / 10.0)
+                num += j * p
+                den += p
+        if den <= 0.0:
+            return float(i), vals[i]
+        return num / den, 10.0 * math.log10(den)
+
+    def _family_now(self, c: float, is_peak: Sequence[bool], vals: Sequence[float]) -> tuple[int, bool, list[int]]:
+        """(number of H2..H5 present as peaks, is-somebody's-harmonic, partner bands found) for a line at
+        fractional band ``c`` in the current frame (presence only; co-movement is judged at decision time).
+        A partner counts only if its own centroid is within ``family_tol_bands`` of the exact harmonic position.
+        ``partners`` lists the H2..H5 bands found first (``n_up`` of them), then the sub-harmonic evidence."""
+        n = len(is_peak)
+        tol = self.cfg.family_tol_bands
+
+        def peak_near(x: float) -> int | None:
+            r = int(round(x))
+            for j in (r, r - 1, r + 1):
+                if 0 <= j < n and is_peak[j]:
+                    cj, _ = self._centroid(vals, j)
+                    if abs(cj - x) <= tol:
+                        return j
+            return None
+
+        partners: list[int] = []
+        found: dict[int, int] = {}
+        n_up = 0
+        for kh, off in _HARM_OFFSETS:
+            if c + off > n - 1.5:
+                break
+            j = peak_near(c + off)
+            if j is not None:
+                n_up += 1
+                partners.append(j)
+                found[kh] = j
+        # Odd-dominant partials (3f, 5f with 2f absent or well below 3f, no 4f) on a line far above the rest of the
+        # spectrum are the signature of symmetric clipping downstream (amp rails, driver excursion: loop brief
+        # §2.2), not of an instrument (whose 2f is at or above 3f) — square-wave synths and clarinets excepted.
+        ic = int(round(c))
+        if (n_up >= 2 and 3 in found and 4 not in found and 0 <= ic < n
+                and (2 not in found or vals[found[2]] < vals[found[3]] - 6.0)
+                and vals[ic] >= self._refs[-1] + 18.0):
+            n_up = 1 if 2 in found else 0
+            partners = [found[2]] if 2 in found else []
+        sub = False
+        # c = 2·f : f at c-10 with another partial of f (3f at c+5.85, 5f at c+13.22; 4f = 2c is ambiguous)
+        if c - 10.0 >= 1.0:
+            jf = peak_near(c - 10.0)
+            if jf is not None:
+                jo = peak_near(c + 5.85)
+                if jo is None:
+                    jo = peak_near(c + 13.22)
+                if jo is not None:
+                    sub = True
+                    partners.extend([jf, jo])
+        # c = 3·f : f at c-15.85 with 2f (c-5.85), 4f (c+4.15) or 5f (c+7.37)
+        if not sub and c - 15.85 >= 1.0:
+            jf = peak_near(c - 15.85)
+            if jf is not None:
+                jo = peak_near(c - 5.85)
+                if jo is None:
+                    jo = peak_near(c + 4.15)
+                if jo is None:
+                    jo = peak_near(c + 7.37)
+                if jo is not None:
+                    sub = True
+                    partners.extend([jf, jo])
+        # c = 4·f : f at c-20 with 2f (c-10) or 3f (c-4.15)
+        if not sub and c - 20.0 >= 1.0:
+            jf = peak_near(c - 20.0)
+            if jf is not None:
+                jo = peak_near(c - 10.0)
+                if jo is None:
+                    jo = peak_near(c - 4.15)
+                if jo is not None:
+                    sub = True
+                    partners.extend([jf, jo])
+        return n_up, sub, partners
+
+    def _octave_below(self, c: float, is_peak: Sequence[bool], vals: Sequence[float]) -> bool:
+        """A peak within ``family_tol_bands`` of exactly one octave below ``c`` (the line would be its 2nd harmonic)."""
+        x = c - 10.0
+        if x < 1.0:
+            return False
+        r = int(round(x))
+        for j in (r, r - 1, r + 1):
+            if 0 <= j < len(is_peak) and is_peak[j]:
+                cj, _ = self._centroid(vals, j)
+                if abs(cj - x) <= self.cfg.family_tol_bands:
+                    return True
+        return False
+
+    def _family_comoving(self, t: Candidate, start_idx: int, k: int, is_peak: Sequence[bool],
+                         vals: Sequence[float]) -> bool:
+        """Family test for a *growing* line. A note's partials share one envelope: they rise by the same number of
+        dB (ratio within [0.5, 2]) and their tracks were born within one analyser rise time of each other. A
+        programme line that merely sits at a harmonic position does not follow a ring up, and a second ring an
+        octave away starts at its own time and grows at its own rate (loop brief §2.3)."""
+        cfg = self.cfg
+        n_up, sub, partners = self._family_now(t.centroid, is_peak, vals)
+        octave_up = n_up >= 1 and abs(partners[0] - (t.centroid + 10.0)) <= 1.5
+        jb = None
+        if not sub:
+            x = t.centroid - 10.0
+            r = int(round(x))
+            for j in (r, r - 1, r + 1):
+                if 1 <= j < len(vals) and is_peak[j]:
+                    cj, _ = self._centroid(vals, j)
+                    if abs(cj - x) <= cfg.family_tol_bands:
+                        jb = j
+                        break
+        if n_up < cfg.family_partials and not sub and not octave_up and jb is None:
+            return False
+        k_start = t.kf[start_idx]
+        rise = t.levels[-1] - t.levels[start_idx]
+        if rise < cfg.growth_slow_total_db or k_start < self._k0:
+            # cannot judge co-movement: presence of a full family decides, a lone octave partner does not
+            return n_up >= cfg.family_partials or sub
+        row0 = self._vals[k_start - self._k0]
+        nb = len(vals)
+
+        def track_near(j: int) -> Candidate | None:
+            best = None
+            for u in self._cands:
+                if u is not t and abs(u.centroid - j) <= 1.0 and (best is None or abs(u.centroid - j) < abs(best.centroid - j)):
+                    best = u
+            return best
+
+        def level_near(band: int, kk: int) -> float | None:
+            xs = [self._hist_level(b, kk) for b in (band - 1, band, band + 1)]
+            xs = [x for x in xs if x is not None]
+            return max(xs) if xs else None
+
+        def comoved(j: int) -> bool:
+            d = max(vals[jj] - row0[jj] for jj in (j - 1, j, j + 1) if 0 <= jj < nb)
+            if not (0.5 * rise <= d <= 2.0 * rise + 3.0):
+                return False
+            # partials of one note keep their level ratio (±jitter) from the frame the younger line appeared;
+            # two independent lines that happen to sit an octave apart do not (X: one had already risen while
+            # the other's band sat still). Only where both analyser bands settle within a frame (>~300 Hz):
+            # at LF the slower band's lag distorts the early ratio.
+            u = track_near(j)
+            if u is not None and self._settle_frames[min(u.band, t.band)] <= 3:
+                kb = max(t.kf[0], u.kf[0])
+                lt0, lu0 = level_near(t.band, kb), level_near(u.band, kb)
+                if lt0 is not None and lu0 is not None and k - kb >= 3:
+                    r_now = t.levels[-1] - u.levels[-1]
+                    r_then = lt0 - lu0
+                    if abs(r_now - r_then) > 4.0:
+                        return False
+            return True
+
+        ups = [j for j in partners[:n_up] if comoved(j)]
+        if len(ups) >= cfg.family_partials:
+            return True
+        if sub:
+            subs = partners[n_up:]
+            if subs and all(comoved(j) for j in subs):
+                return True
+        if octave_up and partners[0] in ups:
+            return True
+        if jb is not None and comoved(jb):
+            return True
+        return False
+
+    # -- growth ---------------------------------------------------------------------------------
+
+    def _growth(self, t: Candidate) -> tuple[str, float, float, int]:
+        """Evaluate the loop-growth signature on the track's current ramp.
+
+        Returns (kind, net_rise_db, slope_db_per_s, start_index) with kind in {"fast", "slow", ""}.
+        """
+        cfg = self.cfg
+        lv = t.levels
+        n = len(lv)
+        gs = t.grow_start
+        settle = self._settle_frames[min(max(t.band, 0), len(self._settle_frames) - 1)]
+        slope_report = 0.0
+        if n - gs >= 2:
+            i0 = max(gs, n - 20)
+            slope_report = _ls_slope(t.ts_list[i0:], lv[i0:])
+        # ---- FAST: exponential growth resolved frame by frame (>= 2 dB/frame) ----------------------
+        # steps considered: the last <=5 inside the ramp, plus the step up from the pre-birth level when the
+        # ramp starts at birth (so a line that shot out of the bed in 3 frames carries its full rise)
+        pts = lv[max(gs, n - 6):]
+        virtual = False
+        if gs == 0 and n <= 6 and t.pre_level_db is not None and not t.est:
+            pts = [t.pre_level_db] + list(pts)
+            virtual = True
+        contiguous = n < 2 or (t.kf[-1] - t.kf[max(gs, n - 6)] <= 8)
+        if len(pts) >= 4 and contiguous and (n - 1) >= min(settle, 3) and (settle <= 3 or n - 1 - gs >= settle):
+            diffs = [b - a for a, b in zip(pts, pts[1:])]
+            diffs = diffs[-5:]
+            base_i = len(pts) - 1 - len(diffs)
+            tot = pts[-1] - pts[base_i]
+            i_ref0 = max(0, n - 1 - len(diffs)) if not virtual else 0
+            dref = t.ref_list[-1] - t.ref_list[i_ref0]
+            net = tot - max(0.0, dref)
+            big = max(diffs)
+            cnt = sum(1 for d in diffs if d >= cfg.growth_fast_step_db)
+            if (cnt >= 3 and net >= cfg.growth_fast_total_db and big <= cfg.pop_step_frac * tot
+                    and diffs[-1] >= 0.5 * cfg.growth_fast_step_db):
+                start_idx = max(gs, n - 1 - len(diffs))
+                return "fast", net, slope_report, start_idx
+        # ---- SLOW: least-squares ramp sustained over >= max(growth_slow_frames, settle) intervals --------
+        avail = n - 1 - gs
+        m_min = max(cfg.growth_slow_frames, settle)
+        if avail >= m_min:
+            tried: set[int] = set()
+            for m in (m_min, 8, 12, 20, 40, cfg.growth_window_frames, avail):
+                if m < m_min or m > avail or m in tried:
+                    continue
+                tried.add(m)
+                i0 = n - 1 - m
+                ts = t.ts_list[i0:]
+                raw = lv[i0:]
+                # 3-point median: a one-frame transient on top of the line is not part of its envelope
+                vs = [raw[0]] + [sorted(raw[i - 1:i + 2])[1] for i in range(1, len(raw) - 1)] + [raw[-1]]
+                s, c0 = _ls_fit(ts, vs)
+                if s < cfg.growth_slow_min_db_per_s:
+                    continue
+                T = ts[-1] - ts[0]
+                if t.kf[-1] - t.kf[i0] > m + max(3, m // 4) or T <= 0:
+                    continue         # the track was lost and re-found inside this window: not one ramp
+                rise = min(s * T, median(vs[-3:]) - median(vs[:3]) + 1.0)
+                rr = t.ref_list[i0:]
+                dref = median(rr[-3:]) - median(rr[:3])
+                net = rise - max(0.0, dref)
+                if net < cfg.growth_slow_total_db:
+                    continue
+                # linear in dB: residuals small against the rise, no single step carrying it (that is an onset)
+                resid = [v - (c0 + s * x) for x, v in zip(ts, vs)]
+                if max(abs(r) for r in resid) > max(1.5, 0.25 * rise):
+                    continue
+                # onset guard on the RAW series: one frame step carrying most of the rise *and holding* is an
+                # instrument onset (a transient spike that falls back is not, and is what the median removed)
+                span = max(rise, raw[-1] - raw[0], 1e-6)
+                popped = False
+                for i in range(len(raw) - 1):
+                    st = raw[i + 1] - raw[i]
+                    if st > cfg.pop_step_frac * span:
+                        after = raw[i + 1:i + 4]
+                        if min(after) > raw[i] + 0.45 * span:
+                            popped = True
+                            break
+                if popped:
+                    continue
+                # sustained: every third of the window rising (not an attack that has already flattened, not the
+                # concave step response of a slow analyser band, not a fader ramp that has ended)
+                h = max(2, len(vs) // 3)
+                s1 = _ls_slope(ts[: h + 1], vs[: h + 1])
+                s2 = _ls_slope(ts[h: 2 * h + 1], vs[h: 2 * h + 1])
+                s3 = _ls_slope(ts[-(h + 1):], vs[-(h + 1):])
+                if s3 < 0.4 * s or s2 < 0.15 * s or s1 < 0.15 * s:
+                    continue
+                return "slow", net, s, i0
+        return "", 0.0, slope_report, gs
+
+    # -- probe ----------------------------------------------------------------------------------
+
+    def _probe_update(self, k: int) -> None:
+        cfg = self.cfg
+        if not self._steps:
+            return
+        ts_now = self._tss[-1]
+        for st in self._steps:
+            if st.k is None and ts_now >= st.ts - 1e-9:
+                st.k = k
+        N = cfg.probe_window_frames
+        settle = cfg.probe_settle_frames
+        for idx, st in enumerate(self._steps):
+            if st.done or st.k is None:
+                continue
+            nxt = None
+            if idx + 1 < len(self._steps) and self._steps[idx + 1].k is not None:
+                nxt = self._steps[idx + 1].k
+            a0 = st.k + settle
+            a1 = a0 + N - 1
+            if nxt is not None:
+                a1 = min(a1, nxt - 1)
+            if k < a1:
+                continue
+            st.done = True
+            if a1 - a0 + 1 < 4:
+                continue
+            b1 = st.k - 1
+            b0 = max(self._k0, b1 - N + 1)
+            if b1 - b0 + 1 < 4 or a0 < self._k0:
+                continue
+            refs_b = [self._refs[kk - self._k0] for kk in range(b0, b1 + 1)]
+            refs_a = [self._refs[kk - self._k0] for kk in range(a0, a1 + 1) if kk - self._k0 < len(self._refs)]
+            if len(refs_a) < 4:
+                continue
+            dref = median(refs_a) - median(refs_b)
+            d = st.delta_db
+            sgn = 1.0 if d > 0 else -1.0
+            expected = sgn * max(sgn * dref, sgn * d, 0.0)   # the larger of "spectrum moved" and "1 dB per dB"
+            for t in self._cands:
+                if t.born_frame > st.k - cfg.probe_min_history_frames:
+                    continue
+                before = [lv for kk, lv in zip(t.kf, t.levels) if b0 <= kk <= b1]
+                after = [lv for kk, lv in zip(t.kf, t.levels) if a0 <= kk <= a1]
+                if len(before) < 3 or len(after) < 3:
+                    continue
+                if max(after) - min(after) > 12.0 or max(before) - min(before) > 12.0:
+                    continue   # a note changed under the window: not a level comparison
+                exc = sgn * ((median(after) - median(before)) - expected)
+                t.probe_steps += 1
+                t.probe_last_excess_db = exc
+                if exc >= cfg.probe_excess_db:
+                    t.probe_hits += 1
+                    t.probe_linear = 0
+                elif exc <= cfg.probe_linear_db:
+                    t.probe_linear += 1
+                    t.probe_hits = 0
+        # forget fully evaluated old steps
+        while len(self._steps) > 8 and self._steps[0].done:
+            del self._steps[0]
+
+    # -- main entry -------------------------------------------------------------------------------
+
     def feed(self, values_db: Sequence[float], ts: float) -> list[Detection]:
         """Process one RTA frame (``len(values_db) == len(band_hz)``, dB) taken at time ``ts`` (s).
 
@@ -378,75 +911,389 @@ class FeedbackDetector:
         n = len(self.band_hz)
         if len(vals) != n:
             raise ValueError(f"expected {n} RTA values, got {len(vals)}")
-        prom = self.prominences(vals)
-        qualifying = [i for i in range(n) if prom[i] >= cfg.prominence_db and vals[i] >= cfg.min_level_db]
-        peaks = self._peaks(qualifying, vals)
+        k = self.frames_seen
+        ts = float(ts)
 
-        used: set[int] = set()
-        survivors: list[Candidate] = []
-        for c in self._cands:
-            best: int | None = None
-            for p in peaks:
-                if p in used:
-                    continue
-                dist = abs(p - c.band)
-                if dist > cfg.band_tolerance:
-                    continue
-                if best is None or (dist, -vals[p]) < (abs(best - c.band), -vals[best]):
-                    best = p
-            if best is None:
-                continue  # a frame without the condition ends the streak
-            used.add(best)
-            self._extend(c, best, vals[best], prom[best], ts)
-            survivors.append(c)
-        for p in peaks:
-            if p in used:
+        # ---- spectrum history and reference -------------------------------------------------------
+        ref = median(vals[self._ref_lo:self._ref_hi + 1])
+        self._vals.append(vals)
+        self._tss.append(ts)
+        self._refs.append(ref)
+        if len(self._vals) > self.HIST:
+            del self._vals[0]
+            del self._tss[0]
+            del self._refs[0]
+            self._k0 += 1
+
+        prom = self.prominences(vals)
+        is_peak = [False] * n
+        for i in range(n):
+            left = vals[i - 1] if i > 0 else -1e9
+            right = vals[i + 1] if i + 1 < n else -1e9
+            if vals[i] > left and vals[i] >= right and prom[i] >= cfg.family_prominence_db:
+                is_peak[i] = True
+
+        # ---- lines in this frame ------------------------------------------------------------------
+        # hysteresis: a line is *born* at track_prominence_db / half the narrowness, but an existing track keeps
+        # hold of its local maximum down to half of that (a faint emerging line flickers about the threshold)
+        track_narrow = 0.5 * cfg.narrow_db
+        weak_prom = 0.5 * cfg.track_prominence_db
+        clusters: list[tuple[int, float, float, float, float]] = []   # (band, centroid, Lpeak, prom, narrow)
+        strong: list[bool] = []
+        for i in range(1, n - 1):
+            if vals[i] < cfg.track_min_level_db or prom[i] < weak_prom:
                 continue
-            c = Candidate(band=p, first_ts=ts, frames=0, levels=[], ts_list=[], confidence=0.0)
-            self._extend(c, p, vals[p], prom[p], ts)
-            survivors.append(c)
-        survivors.sort(key=lambda c: c.band)
+            if not (vals[i] > vals[i - 1] and vals[i] >= vals[i + 1]):
+                continue
+            nar = self._narrowness(vals, i)
+            if nar < 0.5 * track_narrow:
+                continue
+            c, _lc = self._centroid(vals, i)
+            clusters.append((i, c, vals[i], prom[i], nar))
+            strong.append(bool(is_peak[i] and prom[i] >= cfg.track_prominence_db and nar >= track_narrow))
+
+        # ---- match to tracks ----------------------------------------------------------------------
+        # nearest-centroid assignment (closest pairs first), then hops for tracks left without a line
+        used: set[int] = set()
+        tolc = max(1.0, float(cfg.band_tolerance)) + 0.35   # a hop of up to ~160 c re-locks the same track
+        pairs: list[tuple[float, int, int]] = []
+        for ti, t in enumerate(self._cands):
+            for j, (b, c, lp, pr, nar) in enumerate(clusters):
+                dd = abs(c - t.centroid)
+                if dd <= tolc:
+                    pairs.append((dd, ti, j))
+        pairs.sort()
+        assigned: dict[int, int] = {}
+        for dd, ti, j in pairs:
+            if ti in assigned or j in used:
+                continue
+            assigned[ti] = j
+            used.add(j)
+        survivors: list[Candidate] = []
+        for ti, t in enumerate(self._cands):
+            best_j = assigned.get(ti, -1)
+            if best_j >= 0 and t.cen_list:
+                cl = sorted(t.cen_list[-10:])
+                if abs(clusters[best_j][1] - cl[len(cl) // 2]) > cfg.centroid_tol_bands:
+                    # the line re-appeared a semitone or more away: a hand-held mic re-locking on the neighbouring
+                    # loop candidate keeps its verdict (loop brief §2.3); anything else is a new note that must earn
+                    # its own — it was seen to arrive, so it is no longer "established at arm"
+                    t.hops += 1
+                    t.cen_list.clear()
+                    if not t.feedback:
+                        t.est = False
+                        t.birth = "pop"
+                        t.grow_start = len(t.levels)
+            if best_j < 0:
+                t.coast += 1
+                if t.coast <= 1:
+                    survivors.append(t)     # one missing frame is display/noise flicker, not the end
+                else:
+                    self._grave.append((k, t))
+                continue
+            b, c, lp, pr, nar = clusters[best_j]
+            t.coast = 0
+            self._extend(t, k, ts, b, c, lp, pr, nar, ref, is_peak)
+            survivors.append(t)
+        # new lines
+        self._grave = [(kd, g) for kd, g in self._grave if k - kd <= self.GRAVE_FRAMES]
+        for j, (b, c, lp, pr, nar) in enumerate(clusters):
+            if j in used or not strong[j]:
+                continue
+            t = None
+            for gi, (kd, g) in enumerate(self._grave):
+                if abs(g.centroid - c) <= 1.0 and abs(g.level_db - lp) <= 6.0:
+                    t = g
+                    del self._grave[gi]
+                    t.coast = 0
+                    if t.kf and k - t.kf[-1] > 6:
+                        t.grow_start = len(t.levels)   # a gap this long (0.3 s) breaks a ramp
+                    break
+            if t is None:
+                t = Candidate(band=b, first_ts=ts, born_frame=k, centroid=c)
+                t.pre_level_db = self._pre_level(b, k)
+                self._backfill(t, b, k)
+                if k < cfg.est_arm_frames or (pr >= cfg.prominence_db and self._present_since_arm(b, lp)):
+                    t.est = True
+                    t.birth = "est"
+                elif t.pre_level_db is not None and lp - t.pre_level_db < 6.0:
+                    t.birth = "static"
+                else:
+                    t.birth = "new"
+            self._extend(t, k, ts, b, c, lp, pr, nar, ref, is_peak)
+            survivors.append(t)
+        survivors.sort(key=lambda t: t.centroid)
         self._cands = survivors
 
+        # ---- probe bookkeeping --------------------------------------------------------------------
+        self._probe_update(k)
+
+        # ---- decide -------------------------------------------------------------------------------
         out: list[Detection] = []
-        for c in self._cands:
-            self._score(c)
-            if (
-                c.frames >= cfg.persistence_frames
-                and c.confidence >= cfg.confidence_threshold
-                and not self._in_cooldown(c.band, ts)
-            ):
-                det = Detection(
-                    ts=ts,
-                    band=c.band,
-                    freq_hz=c.freq_hz,
-                    level_db=c.level_db,
-                    prominence_db=c.prominence_db,
-                    slope_db_per_s=c.slope_db_per_s,
-                    frames=c.frames,
-                    confidence=c.confidence,
-                )
-                out.append(det)
-                c.emitted += 1
-                self._cooldown[c.band] = ts + cfg.cooldown_s
-                log.debug("feedback detected: band %d (%.0f Hz) %.1f dB slope %.1f dB/s conf %.2f",
-                          c.band, c.freq_hz, c.level_db, c.slope_db_per_s, c.confidence)
-        if self._cooldown and self.frames_seen % 100 == 0:
-            self._cooldown = {b: t for b, t in self._cooldown.items() if ts < t}
+        for t in self._cands:
+            if t.coast:
+                continue
+            verdict = self._classify(t, k, ts, is_peak, vals)
+            t.verdict = verdict or t.verdict if not verdict else verdict
+            if not verdict:
+                continue
+            if t.frames < cfg.persistence_frames:
+                continue
+            if self._in_cooldown(t.band, ts) or ts - t.last_emit_ts < cfg.cooldown_s - 1e-9:
+                continue
+            det = Detection(
+                ts=ts, band=t.band, freq_hz=t.freq_hz, level_db=t.level_db, prominence_db=t.prominence_db,
+                slope_db_per_s=t.slope_db_per_s, frames=t.frames, confidence=t.confidence, reasons=t.reasons,
+            )
+            out.append(det)
+            t.emitted += 1
+            t.feedback = True
+            if t.birth == "new":
+                t.birth = "grow"
+            t.last_emit_ts = ts
+            self._cooldown[t.band] = ts + cfg.cooldown_s
+            log.debug("feedback: band %d (%.0f Hz) %.1f dB prom %.1f [%s]", t.band, t.freq_hz, t.level_db,
+                      t.prominence_db, ",".join(t.reasons))
+        if self._cooldown and k % 100 == 0:
+            self._cooldown = {b: u for b, u in self._cooldown.items() if ts < u}
+        if k % 20 == 19:
+            self._diagnose()
         self.frames_seen += 1
         self.last_ts = ts
         return out
 
-    @property
-    def candidates(self) -> list[Candidate]:
-        """Current streaks (live objects; treat as read-only), lowest band first."""
-        return list(self._cands)
+    def _backfill(self, t: Candidate, b: int, k: int) -> None:
+        """Give a newborn track the last few frames in which its band was already a rising local maximum above the
+        pre-birth level (the analyser showed the line before it was prominent enough to be promoted to a track):
+        a fast ring in a loud mix shows only 2-4 frames of growth and none of them may be wasted."""
+        if t.pre_level_db is None:
+            return
+        rows: list[tuple[int, float]] = []
+        n = len(self.band_hz)
+        for j in range(1, 5):
+            kk = k - j
+            i = kk - self._k0
+            if i < 0 or i >= len(self._vals) - 1:
+                break
+            row = self._vals[i]
+            v = row[b]
+            if v < t.pre_level_db + 3.0:
+                break
+            if not (v >= row[b - 1] - 1.0 if b >= 1 else True) or not (v >= row[b + 1] - 1.0 if b + 1 < n else True):
+                break
+            rows.append((kk, v))
+        for kk, v in reversed(rows):
+            i = kk - self._k0
+            t.kf.append(kk)
+            t.ts_list.append(self._tss[i])
+            t.levels.append(v)
+            t.cen_list.append(float(b))
+            t.ref_list.append(self._refs[i])
+            t.fam_list.append(False)
+            t.fam_strong.append(False)
+        if rows:
+            t.born_frame = rows[-1][0]
+            t.first_ts = self._tss[rows[-1][0] - self._k0]
+            t.frames = len(rows)
+            t.pre_level_db = self._pre_level(b, t.born_frame) if self._pre_level(b, t.born_frame) is not None else t.pre_level_db
 
-    def reset(self) -> None:
-        self._cands = []
-        self._cooldown = {}
-        self.frames_seen = 0
-        self.last_ts = None
+    def _extend(self, t: Candidate, k: int, ts: float, band: int, c: float, lp: float, pr: float, nar: float,
+                ref: float, is_peak: Sequence[bool]) -> None:
+        cfg = self.cfg
+        t.frames += 1
+        t.band = band
+        t.centroid = c
+        t.freq_hz = self.freq_of(c)
+        t.level_db = lp
+        t.prominence_db = pr
+        t.narrow_db = nar
+        t.last_ts = ts
+        # ramp restart on a real drop (against the recent typical level, so a one-frame transient sitting on top of
+        # the line — a hi-hat, a consonant — does not reset a slow ramp when it goes away)
+        if t.levels:
+            seg = t.levels[t.grow_start:]
+            if seg:
+                recent = sorted(seg[-5:])
+                typical = recent[len(recent) // 2]
+                earlier = max(median(seg[i:i + 3]) for i in range(0, max(1, len(seg) - 2), 3)) if len(seg) >= 3 else typical
+                if lp < max(typical, earlier) - cfg.growth_drop_tol_db:
+                    t.grow_start = len(t.levels)   # the new point starts the next ramp
+        t.kf.append(k)
+        t.ts_list.append(ts)
+        t.levels.append(lp)
+        t.cen_list.append(c)
+        t.ref_list.append(ref)
+        vals_now = self._vals[-1]
+        n_up, sub, partners = self._family_now(c, is_peak, vals_now)
+        # An exact-octave partner (2f or f/2 within family_tol_bands) is family for a *steady* line: two coexisting
+        # independent rings land within ±50 c of an octave < 1 % of the time (loop brief §2.3), an organ 8'+4', a
+        # flute and every two-partial timbre do it always. Growing lines are judged with co-movement instead.
+        octave = (n_up >= 1 and abs((partners[0] if partners else -99) - (c + 10.0)) <= 1.5) or self._octave_below(c, is_peak, vals_now)
+        strong = bool(n_up >= cfg.family_partials or sub)
+        t.fam_list.append(strong or octave)
+        t.fam_strong.append(strong)
+        cap = max(cfg.growth_window_frames + 4, 24)
+        if len(t.levels) > cap:
+            drop = len(t.levels) - cap
+            del t.kf[:drop], t.ts_list[:drop], t.levels[:drop], t.cen_list[:drop], t.ref_list[:drop], t.fam_list[:drop]
+            del t.fam_strong[:drop]
+            t.grow_start = max(0, t.grow_start - drop)
+        if len(t.cen_list) > 12:
+            del t.cen_list[: len(t.cen_list) - 12]
+        # birth class: an onset that arrived in one step is an instrument (or a >500 dB/s ring — irreducible)
+        if t.birth == "new" and t.frames >= 2 and t.pre_level_db is not None:
+            total = lp - t.pre_level_db
+            first = t.levels[0] - t.pre_level_db if len(t.levels) <= 6 else 0.0
+            steps = [t.levels[0] - t.pre_level_db] + [b - a for a, b in zip(t.levels, t.levels[1:])]
+            if total >= 6.0 and max(steps[:3]) >= cfg.pop_step_frac * total and t.frames <= 4:
+                t.birth = "pop"
+            elif t.frames >= 8 and total < 3.0:
+                t.birth = "static"
+            del first
+
+    # -- classification -----------------------------------------------------------------------------
+
+    def _classify(self, t: Candidate, k: int, ts: float, is_peak: Sequence[bool], vals: Sequence[float]) -> str:
+        """Return the emitting rule name ('' = candidate only) and update the track's report fields."""
+        cfg = self.cfg
+        f = t.freq_hz
+        lv = t.levels
+        n = len(lv)
+        lp = lv[-1]
+        reasons: list[str] = []
+
+        # temporal predicates
+        recent_max = max(lv[-20:])
+        decaying = lp < recent_max - cfg.decay_tol_db
+        cl = t.cen_list[-10:]
+        cen_range = (max(cl) - min(cl)) if len(cl) >= 2 else 0.0
+        stationary = cen_range <= cfg.centroid_tol_bands
+        diffs = [b - a for a, b in zip(lv[-7:], lv[-6:])]
+        steady = (len(diffs) >= 3 and _sd(diffs) <= cfg.level_unsteady_db
+                  and max(abs(d) for d in diffs) <= 2.5 * cfg.level_unsteady_db)
+        fl = t.fam_list[-10:]
+        fam_frac = sum(fl) / len(fl) if fl else 0.0
+        family = fam_frac >= cfg.family_veto_frac and len(fl) >= 2
+        fs = t.fam_strong[-10:]
+        fam_strong_frac = sum(fs) / len(fs) if fs else 0.0
+        narrow = t.narrow_db >= cfg.narrow_db
+        prominent = t.prominence_db >= cfg.prominence_db
+        in_window = (f >= cfg.lf_edge_hz) and (f <= cfg.hf_edge_hz)
+        lf_strict = f < cfg.lf_strict_hz
+        kind, net, slope, gi0 = self._growth(t)
+        t.slope_db_per_s = slope
+        t.growth_score = min(1.0, net / cfg.growth_fast_total_db) if kind else 0.0
+
+        # onset synchrony: several lines born within ±2 frames = a programme event (chord, crash, song start)
+        sync = 0
+        if not t.est:
+            for u in self._cands:
+                if u is not t and u.frames >= 3 and abs(u.born_frame - t.born_frame) <= 2 and not u.est:
+                    du = u.centroid - t.centroid
+                    if any(abs(du - off) <= 0.6 for _, off in _HARM_OFFSETS):
+                        continue    # its own partial/distortion product: the family test's business, not sync
+                    sync += 1
+
+        verdict = ""
+        if not in_window:
+            verdict = ""
+        elif t.feedback:
+            # sticky: keep reporting a line we already called feedback while it is there and not dying away
+            if not decaying and prominent and t.narrow_db >= 0.5 * cfg.narrow_db:
+                verdict = "sustained"
+                reasons = list(t.reasons[:1]) + ["sustained"]
+        else:
+            # programme verdicts: set on evidence, cleared when the line has outlived that evidence (a ring seeded
+            # by a speech partial keeps the partial's track; the partial's cohort and family die with the syllable)
+            if not t.musical:
+                if sync >= 4 and t.birth == "pop":
+                    t.musical = "sync-onset"
+                elif t.frames >= 6 and fam_strong_frac >= 0.8 and t.birth in ("pop", "static", "est"):
+                    t.musical = "harmonic-family"
+                elif t.frames >= 10 and t.birth == "est" and sum(t.fam_list) >= 0.6 * len(t.fam_list) and len(t.fam_list) >= 10:
+                    t.musical = "harmonic-family"   # incl. a steady exact-octave partner (organ 8'+4' voicing)
+            elif t.musical == "sync-onset" and sync < 2 and fam_frac == 0.0:
+                t.musical = ""
+            elif t.musical == "harmonic-family" and fam_frac == 0.0 and len(fl) >= 10:
+                t.musical = ""
+            clip = lp >= cfg.clip_level_db
+            loud = lp >= cfg.loud_level_db
+            escape = lp >= cfg.family_escape_level_db
+            probe_veto = t.probe_linear >= 2
+            if clip and narrow and t.frames >= cfg.loud_frames and min(lv[-cfg.loud_frames:]) >= cfg.clip_level_db \
+                    and not lf_strict and stationary:
+                verdict = "clip"
+                reasons = ["clip", "narrow", "stationary"]
+            elif (loud and narrow and prominent and stationary and steady and not decaying and not lf_strict
+                  and t.frames >= cfg.loud_frames and min(lv[-cfg.loud_frames:]) >= cfg.loud_level_db
+                  and (escape or not family) and not probe_veto and not (t.musical and not escape)):
+                verdict = "loud"
+                reasons = ["loud", "narrow", "stationary", "steady", "no-family" if not family else "near-clip"]
+            elif (kind and narrow and stationary and not t.musical
+                  and t.prominence_db >= cfg.track_prominence_db + 3.0
+                  and not self._fc(t, gi0, k, is_peak, vals)):
+                verdict = "grow-" + kind
+                reasons = [verdict, f"+{net:.0f}dB", f"{slope:.0f}dB/s", "narrow", "stationary", "no-comoving-family"]
+            elif (t.est and narrow and prominent and stationary and steady and not decaying and not family
+                  and not lf_strict and lp >= cfg.est_min_level_db and t.frames >= cfg.est_frames
+                  and not probe_veto and not t.musical):
+                verdict = "est"
+                reasons = ["established-at-arm", "narrow", "no-family", "stationary", "steady",
+                           f"level>={cfg.est_min_level_db:.0f}"]
+            elif ((t.probe_hits >= 2 or (t.probe_hits >= 1 and t.probe_last_excess_db >= cfg.probe_strong_db))
+                  and t.narrow_db >= 0.8 * cfg.narrow_db and t.prominence_db >= cfg.track_prominence_db + 3.0
+                  and stationary and not decaying and not family and not t.musical):
+                verdict = "probe"
+                reasons = ["probe", f"+{t.probe_last_excess_db:.1f}dB/step", "narrow", "stationary", "no-family"]
+
+        t.diag = {"narrow": narrow, "prom": prominent, "stat": stationary, "steady": steady, "decay": decaying,
+                  "family": family, "famfrac": round(fam_frac, 2), "kind": kind, "net": round(net, 1), "sync": sync,
+                  "cen_range": round(cen_range, 2), "sd": round(_sd(diffs), 2) if len(diffs) >= 2 else 0.0,
+                  "fam_comov": getattr(t, "_fam_comov", None), "birth": t.birth, "mus": t.musical}
+        # confidence: a monotone function of the margins, >= threshold iff emitting (dashboard contract)
+        base = (0.25 * min(1.0, max(0.0, t.prominence_db) / cfg.prominence_db)
+                + 0.15 * min(1.0, t.frames / max(1, cfg.est_frames))
+                + 0.25 * t.growth_score)
+        if verdict:
+            margin = max(0.0, t.prominence_db - cfg.prominence_db) / 24.0 + t.growth_score / 2.0
+            t.confidence = max(cfg.confidence_threshold, min(1.0, cfg.confidence_threshold + 0.3 * min(1.0, margin)))
+            t.reasons = tuple(reasons)
+        else:
+            t.confidence = min(base, cfg.confidence_threshold - 0.01)
+            if not t.reasons or not t.feedback:
+                why = []
+                if t.musical:
+                    why.append("musical:" + t.musical)
+                if family:
+                    why.append("family")
+                if not stationary:
+                    why.append("moving")
+                if decaying:
+                    why.append("decaying")
+                if t.birth == "pop":
+                    why.append("popped-onset")
+                t.reasons = tuple(why)
+        return verdict
+
+    def _fc(self, t: Candidate, gi0: int, k: int, is_peak: Sequence[bool], vals: Sequence[float]) -> bool:
+        r = self._family_comoving(t, gi0, k, is_peak, vals)
+        t._fam_comov = r
+        return r
+
+    def _diagnose(self) -> None:
+        """Cheap analyser sanity hints (reported, never a gate): peak-hold leaves prominent bands bit-identical
+        for many frames; a display gain offset lifts the whole spectrum toward full scale."""
+        if len(self._vals) < 10:
+            return
+        rows = self._vals[-10:]
+        n = len(self.band_hz)
+        frozen = 0
+        for b in range(n):
+            col = [r[b] for r in rows]
+            if col[0] > -90.0 and max(col) - min(col) == 0.0:
+                frozen += 1
+        self.flags["peak_hold_suspect"] = frozen >= 5
+        self.flags["hot_spectrum"] = self._refs[-1] > -30.0
 
 
 # ---------------------------------------------------------------------------------------------
