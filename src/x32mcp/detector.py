@@ -353,6 +353,7 @@ class Candidate:
     verdict: str = ""                  # last frame's classification (diagnostic)
     hops: int = 0
     coast: int = 0
+    weak_run: int = 0
     last_emit_ts: float = -1e9
     emit_level_db: float = -128.0       # level at the most recent emission (a deeper cut needs the line still there)
     probe_hits: int = 0                # consecutive super-linear step responses
@@ -364,6 +365,7 @@ class Candidate:
     levels: list[float] = field(default_factory=list)  # peak band level (dB)
     cen_list: list[float] = field(default_factory=list)
     ref_list: list[float] = field(default_factory=list)
+    prom_list: list[float] = field(default_factory=list)
     fam_list: list[bool] = field(default_factory=list)   # family incl. a lone exact-octave partner
     fam_strong: list[bool] = field(default_factory=list) # >= family_partials partners, or somebody's H2/H3/H4
     grow_start: int = 0                # index into the lists where the current monotone ramp starts
@@ -882,6 +884,12 @@ class FeedbackDetector:
                 need_total = cfg.growth_slow_total_long_db
             if net < need_total:
                 return False, net, s
+            if settle > 3:
+                # below ~300 Hz band noise is ±3-4 dB and a slow band turns any onset into a ramp: the window must be
+                # made of frames in which this WAS a line (prominent), not of noise that a note then landed on
+                pw = t.prom_list[i0:]
+                if sum(1 for x in pw if x >= cfg.track_prominence_db) < 0.75 * len(pw):
+                    return False, net, s
             # linear in dB: residuals small against the rise
             resid = [v - (c0 + s * x) for x, v in zip(ts, vs)]
             if max(abs(r) for r in resid) > max(1.5, 0.25 * rise):
@@ -1127,6 +1135,12 @@ class FeedbackDetector:
                 continue
             b, c, lp, pr, nar = clusters[best_j]
             t.coast = 0
+            # hysteresis is for a dip of a few frames, not life support: a "line" that has not been prominent for
+            # 0.3 s is noise wearing a track (LF bands especially), and its history must not seed a ramp later
+            t.weak_run = t.weak_run + 1 if not strong[best_j] else 0
+            if t.weak_run > 12 and not t.feedback:
+                self._grave.append((k, t))
+                continue
             self._extend(t, k, ts, b, c, lp, pr, nar, ref, is_peak)
             survivors.append(t)
         # new lines
@@ -1250,6 +1264,10 @@ class FeedbackDetector:
             t.levels.append(v)
             t.cen_list.append(float(b))
             t.ref_list.append(self._refs[i])
+            row = self._vals[i]
+            k3 = self.cfg.neighbour_bins
+            neigh = [row[jj] for jj in range(max(0, b - k3), min(n, b + k3 + 1)) if jj != b]
+            t.prom_list.append(v - median(neigh))
             t.fam_list.append(False)
             t.fam_strong.append(False)
         t.born_frame = rows[-1][0]
@@ -1285,6 +1303,7 @@ class FeedbackDetector:
         t.levels.append(lp)
         t.cen_list.append(c)
         t.ref_list.append(ref)
+        t.prom_list.append(pr)
         if t.frames <= 5:
             cl0 = sorted(t.cen_list[-t.frames:]) if t.frames >= 1 else [c]
             t.cen0 = cl0[len(cl0) // 2]
@@ -1310,7 +1329,7 @@ class FeedbackDetector:
         if len(t.levels) > cap:
             drop = len(t.levels) - cap
             del t.kf[:drop], t.ts_list[:drop], t.levels[:drop], t.cen_list[:drop], t.ref_list[:drop], t.fam_list[:drop]
-            del t.fam_strong[:drop]
+            del t.fam_strong[:drop], t.prom_list[:drop]
             t.grow_start = max(0, t.grow_start - drop)
         if len(t.cen_list) > 12:
             del t.cen_list[: len(t.cen_list) - 12]
