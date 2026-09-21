@@ -197,7 +197,7 @@ class Renderer:
             _, band, gain = self._sched.pop(0)
             self.set_geq_gain(band, gain)
         values, dom = self._run_frame(k)
-        ts = k * FRAME_S
+        ts = round(k * FRAME_S, 9)
         s = self.scene.analyser
         # ground-truth trace for every ring
         for i, r in enumerate(self.scene.rings):
@@ -266,7 +266,8 @@ class Episode:
 
     def to_dict(self) -> dict[str, Any]:
         return {"ring": self.ring, "label": self.label, "freq_hz": round(self.freq_hz, 1), "band": self.band,
-                "t_onset": self.t_onset, "t_prom": self.t_prom, "t_end": self.t_end,
+                "t_onset": round(self.t_onset, 4), "t_prom": None if self.t_prom is None else round(self.t_prom, 4),
+                "t_end": round(self.t_end, 4),
                 "peak_level_db": round(self.peak_level_db, 1), "peak_prom_db": round(self.peak_prom_db, 1),
                 "established": self.established, "visible": self.visible}
 
