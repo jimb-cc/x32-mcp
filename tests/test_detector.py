@@ -213,15 +213,41 @@ def test_clean_music_no_detections(cfg, band_hz):
 
 
 def test_held_note_not_detected(cfg, band_hz):
+    """A note that swells in over 0.25 s to 20 dB above the floor and is held for 5 s is not detected.
+
+    CHANGED (physics): the note now carries the harmonic family every real 330 Hz instrument or voice has
+    (2f at -4 dB, 3f at -8 dB — the same partials this file's own melody generator uses). The original stream
+    was a *family-less* line rising dB-linearly at 80 dB/s for 5 frames to -15 dBFS and then holding: that is
+    not a note, it is the exact envelope of a loop with 0.4 dB excess on a 5 ms wedge path meeting a compressor
+    (loop brief §1.3/§1.4), and passed the old detector only because of the 60 dB/s "onset guard" that the M7
+    live test showed discards 35-70 % of genuine ring-out howls (analyser brief §0.2). See
+    ``test_familyless_dblinear_ramp_is_the_feedback_signature`` for the complementary assertion.
+    """
     src = SyntheticRta(band_hz, seed=3, melody=False)
-    # rises to +20 dB over neighbours across 5 frames (0.25 s), then holds for 100 frames
-    src.add_note(330.0, t_on=1.0, rise_s=5 * FRAME_S, above_floor_db=20.0)
+    # rises to +20 dB over neighbours across 5 frames (0.25 s), then holds for 100 frames — with its partials
+    for hz, above in ((330.0, 20.0), (660.0, 16.0), (990.0, 12.0)):
+        src.add_note(hz, t_on=1.0, rise_s=5 * FRAME_S, above_floor_db=above)
     frames = src.frames(20 + 5 + 100)
     band = nearest_band(band_hz, 330.0)
     assert prominence(frames[24], band) > 18.0          # the note really is there
     assert prominence(frames[124], band) > 18.0
     dets = run(cfg, band_hz, frames, "b:note")
     assert dets == []
+
+
+def test_familyless_dblinear_ramp_is_the_feedback_signature(cfg, band_hz):
+    """The original stream of (b): a lone line with no partials rising 80 dB/s for 0.25 s, then flat at -15 dBFS.
+    By every passive observable that is a loop above threshold hitting a limiter (growth rate = excess/τ spans
+    1..>500 dB/s, loop brief §1.3; plateau at any level, §1.4), so it IS reported — within the 6-frame budget of
+    stream (c) — and, being reported on growth evidence, the report says so."""
+    src = SyntheticRta(band_hz, seed=3, melody=False)
+    src.add_note(330.0, t_on=1.0, rise_s=5 * FRAME_S, above_floor_db=20.0)
+    frames = src.frames(20 + 5 + 100)
+    band = nearest_band(band_hz, 330.0)
+    t0 = first_crossing(frames, band, cfg.prominence_db)
+    dets = run(cfg, band_hz, frames, "b2:ramp")
+    assert dets and abs(dets[0][1].band - band) <= 1 and 0 <= dets[0][0] - t0 <= 6
+    assert any(r.startswith("grow") for r in dets[0][1].reasons)
 
 
 # -- (c) regenerating ring ------------------------------------------------------------------------
@@ -239,7 +265,7 @@ def test_ring_detected_quickly(cfg, band_hz):
     i, first = dets[0]
     print(f"[c:ring] prominence first >= {cfg.prominence_db} dB at frame {t0}; detected at frame {i} (+{i - t0})")
     assert abs(first.band - band) <= 1
-    assert 0 <= i - t0 <= 6
+    assert -4 <= i - t0 <= 6      # CHANGED lower bound (see test_two_rings_both_detected)
     assert first.slope_db_per_s == pytest.approx(15.0, abs=3.0)
     assert first.confidence >= cfg.confidence_threshold
     assert all(abs(dd.band - band) <= 1 for _, dd in dets)
@@ -267,7 +293,10 @@ def test_two_rings_both_detected(cfg, band_hz):
         t0 = first_crossing(frames, target, cfg.prominence_db)
         i = next(i for i, dd in dets if abs(dd.band - target) <= 1)
         print(f"[d:two] band {target}: crossing at frame {t0}, detected at frame {i}")
-        assert t0 is not None and 0 <= i - t0 <= 6
+        # CHANGED: lower bound -4 (was 0). A line tracked from 6 dB prominence that has risen dB-linearly for
+        # >= 5 frames carries its evidence with it and may be reported a frame or two before it happens to cross
+        # the 12 dB display threshold (grow_prominence_db); earlier is better, the upper bound is the requirement.
+        assert t0 is not None and -4 <= i - t0 <= 6
 
 
 # -- (e) noise robustness --------------------------------------------------------------------------
@@ -307,9 +336,11 @@ def test_plateau_and_transient_do_not_detect(cfg, band_hz):
 
 
 def test_vibrato_rejected_with_longer_persistence(d, band_hz):
-    """A held note wobbling ±1 band / ±2 dB at 5 Hz: each rising half-cycle (2 frames at 20 fps) looks like
-    +40 dB/s growth to a 3-frame window, so persistence_frames=3 reports it (known limitation of the
-    DESIGN heuristic). persistence_frames=6 (yaml knob) rejects it while the 15 dB/s ring is still caught."""
+    """A held note wobbling ±1 band / ±2 dB at 5 Hz. The old weighted sum reported it at persistence_frames=3
+    (each rising half-cycle looked like +40 dB/s growth to a 3-frame window) and the first assertion below
+    documented that flaw; the predicate detector rejects it at ANY persistence (centroid wobble > 0.6 band is not
+    a stationary line; a level climbing back to where it already was is not growth). CHANGED: both configs must
+    now report nothing; the 15 dB/s ring must still be caught with persistence 6."""
 
     def stream(src: SyntheticRta, n: int) -> list[list[float]]:
         frames = []
@@ -324,7 +355,7 @@ def test_vibrato_rejected_with_longer_persistence(d, band_hz):
         return frames
 
     cfg3 = DetectorConfig.from_descriptor(d)
-    assert run(cfg3, band_hz, stream(SyntheticRta(band_hz, seed=2, melody=False), 120), "h:vibrato/3") != []
+    assert run(cfg3, band_hz, stream(SyntheticRta(band_hz, seed=2, melody=False), 120), "h:vibrato/3") == []
     cfg6 = DetectorConfig.from_dict({**d.detector, "persistence_frames": 6})
     assert run(cfg6, band_hz, stream(SyntheticRta(band_hz, seed=2, melody=False), 120), "h:vibrato/6") == []
     src = SyntheticRta(band_hz, seed=5, melody=False)
@@ -335,7 +366,7 @@ def test_vibrato_rejected_with_longer_persistence(d, band_hz):
     t0 = first_crossing(frames, band, cfg6.prominence_db)
     # persistence 6 needs 3 more frames than the default; the streak may also restart once at the threshold
     print(f"[h:ring/6] crossing at frame {t0}, detected at frame {dets[0][0]} (+{dets[0][0] - t0})")
-    assert dets and abs(dets[0][1].band - band) <= 1 and 0 <= dets[0][0] - t0 <= 9
+    assert dets and abs(dets[0][1].band - band) <= 1 and -4 <= dets[0][0] - t0 <= 9
 
 
 def test_candidates_and_reset(cfg, band_hz):
@@ -522,9 +553,14 @@ def test_the_override_needs_real_prominence_not_just_patience(cfg, band_hz):
     assert not fired, f"a modest plateaued peak must not be notched, got {len(fired)}"
 
 
-def test_override_is_disabled_by_zero(band_hz):
-    """override_prominence_db: 0 restores the pre-M7 behaviour, for anyone who wants it back."""
-    cfg = DetectorConfig(override_prominence_db=0.0)
-    det = FeedbackDetector(cfg, band_hz)
-    _, frames = _plateaued_ring(band_hz, 8000.0, prominence_db=60.0, frames=40)
-    assert not [d for vals, ts in frames for d in det.feed(vals, ts)]
+def test_override_knob_is_legacy_and_inert(band_hz):
+    """CHANGED: ``override_prominence_db`` belonged to the weighted sum ("emit at >= 25 dB regardless of growth").
+    The predicate detector has no such path to switch off: an established, narrow, family-less, stationary,
+    steady line at -25 dBFS is feedback by loop brief P1/P3/P5/P8 whatever the knob says. The key is still
+    accepted (an existing device.yaml loads) and changes nothing."""
+    idx, frames = _plateaued_ring(band_hz, 8000.0, prominence_db=60.0, frames=40)
+    for knob in (0.0, 25.0):
+        det = FeedbackDetector(DetectorConfig(override_prominence_db=knob), band_hz)
+        fired = [d for vals, ts in frames for d in det.feed(vals, ts)]
+        assert fired and abs(fired[0].band - idx) <= 1
+        assert "established-at-arm" in fired[0].reasons

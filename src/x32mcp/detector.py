@@ -518,6 +518,7 @@ class FeedbackDetector:
         self._tss: list[float] = []
         self._k0 = 0                           # frame index of self._vals[0]
         self._steps: list[_Step] = []
+        self._n_growing = 0
         self._recent_step_k: int | None = None   # frame of the last upward master step the server told us about
         self._cuts: list[tuple[float, float, float]] = []
         self.frames_seen: int = 0
@@ -820,7 +821,7 @@ class FeedbackDetector:
         prior_max = max(lv[max(0, gs - 40):gs]) if gs > 0 else None   # what this line had already reached before the ramp
         slope_report = 0.0
         if n - gs >= 2:
-            i0 = max(gs, n - 20)
+            i0 = max(gs, n - 6)          # the current rate (last 0.25 s), which is what a notch decision cares about
             slope_report = _ls_slope(t.ts_list[i0:], lv[i0:])
         # ---- FAST: exponential growth resolved frame by frame (>= 2 dB/frame) ----------------------
         # steps considered: the last <=5 inside the ramp, plus the step up from the pre-birth level when the
@@ -940,11 +941,11 @@ class FeedbackDetector:
                 med3 = [raw[0]] + [sorted(raw[i - 1:i + 2])[1] for i in range(1, len(raw) - 1)] + [raw[-1]]
                 ok, net, s_ = ramp(ts, raw, kfs, med3, i0, m)
                 if ok:
-                    return "slow", net, s_, i0
+                    return "slow", net, max(s_, slope_report), i0
                 low3 = [min(raw[max(0, i - 2):i + 1]) for i in range(len(raw))]
                 ok, net, s_ = ramp(ts, raw, kfs, low3, i0, m)
                 if ok:
-                    return "slow", net, s_, i0
+                    return "slow", net, max(s_, slope_report), i0
         return "", 0.0, slope_report, gs
 
     # -- probe ----------------------------------------------------------------------------------
@@ -1170,11 +1171,15 @@ class FeedbackDetector:
 
         # ---- decide -------------------------------------------------------------------------------
         out: list[Detection] = []
-        for t in self._cands:
-            if t.coast:
-                continue
+        live = [t for t in self._cands if not t.coast]
+        for t in live:
+            t._gk = self._growth(t)
+        # several unrelated lines ramping at once have a common cause (a pad swelling, a fader riding up, a song
+        # starting): a loop crosses threshold alone. Two at once is two rings (it happens); three is programme.
+        self._n_growing = sum(1 for t in live if t._gk[0])
+        for t in live:
             verdict = self._classify(t, k, ts, is_peak, vals)
-            t.verdict = verdict or t.verdict if not verdict else verdict
+            t.verdict = verdict
             if not verdict:
                 continue
             if t.frames < cfg.persistence_frames:
@@ -1346,7 +1351,9 @@ class FeedbackDetector:
         prominent = t.prominence_db >= cfg.prominence_db
         in_window = (f >= cfg.lf_edge_hz) and (f <= cfg.hf_edge_hz)
         lf_strict = f < cfg.lf_strict_hz
-        kind, net, slope, gi0 = self._growth(t)
+        kind, net, slope, gi0 = getattr(t, "_gk", None) or self._growth(t)
+        if kind and self._n_growing >= 3:
+            kind = ""            # synchronous growth elsewhere: common cause, not a loop
         t.slope_db_per_s = slope
         t.growth_score = min(1.0, net / cfg.growth_fast_total_db) if kind else 0.0
 
