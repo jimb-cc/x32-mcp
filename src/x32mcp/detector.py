@@ -367,6 +367,7 @@ class Candidate:
     centroid: float = 0.0
     centroids: list[float] = field(default_factory=list)
     cpows: list[float] = field(default_factory=list)
+    cpmin: list[float] = field(default_factory=list)      # 3-frame lower envelope of cpows (additive transients removed)
     proms: list[float] = field(default_factory=list)
     narrows: list[float] = field(default_factory=list)
     refs: list[float] = field(default_factory=list)
@@ -593,35 +594,61 @@ class FeedbackDetector:
     @staticmethod
     def _compatible(a: "Candidate | None", b: "Candidate | None") -> bool:
         """Could two peaks belong to ONE source? Partials of a note onset together (within the analyser rise time)
-        and co-modulate (vibrato/tremolo/decay); an unrelated line that happens to sit at an integer ratio does
-        neither [loop brief §5 P1, analyser brief §4.3]. Untracked (weak) partners get the benefit of the doubt."""
+        and their envelopes co-move (swell, decay, vibrato through the skirts, tremolo); an unrelated line that
+        happens to sit at an integer ratio does neither [loop brief §5 P1, analyser brief §4.3]. Untracked (weak)
+        partners get the benefit of the doubt."""
         if a is None or b is None or a is b:
             return True
+        # frame-aligned common history (tracks can have gaps)
+        ta = dict(zip(a.ts_list[-12:], a.cpows[-12:]))
+        common = [t for t in b.ts_list[-12:] if t in ta]
+        xa = [ta[t] for t in common]
+        if common:
+            tb = dict(zip(b.ts_list[-12:], b.cpows[-12:]))
+            xb = [tb[t] for t in common]
+        else:
+            xb = []
+        n = len(common)
         if abs(a.born_frame - b.born_frame) <= 3 or (a.onset == "at_arm" and b.onset == "at_arm"):
             # co-onset (or both older than our memory): one source unless the envelopes have since DIVERGED —
             # partials of a note keep their level ratio to a few dB; a ring growing through a note's harmonic
             # position changes it by tens of dB
-            k = min(len(a.cpows), len(b.cpows))
-            if k >= 4:
-                d_then = a.cpows[-k] - b.cpows[-k]
-                d_now = 0.5 * ((a.cpows[-1] - b.cpows[-1]) + (a.cpows[-2] - b.cpows[-2]))
+            if n >= 4:
+                d_then = xa[0] - xb[0]
+                d_now = 0.5 * ((xa[-1] - xb[-1]) + (xa[-2] - xb[-2]))
                 if abs(d_now - d_then) > 5.0:
                     return False
             return True
-        xa = a.cpows[-9:]
-        xb = b.cpows[-9:]
-        m = min(len(xa), len(xb))
-        if m >= 6:
-            da = [xa[-m:][i + 1] - xa[-m:][i] for i in range(m - 1)]
-            db_ = [xb[-m:][i + 1] - xb[-m:][i] for i in range(m - 1)]
+        if n < 6:
+            # too little shared history to judge envelopes: a partial that crossed the tracking floor a few
+            # frames after its fundamental (quieter, or slower through the analyser at LF) gets the benefit of
+            # the doubt; a line that turned up seconds later does not
+            return abs(a.born_frame - b.born_frame) <= 12
+        if n >= 6:
+            ma = sum(xa) / n
+            mb = sum(xb) / n
+            va = sum((x - ma) ** 2 for x in xa)
+            vb = sum((x - mb) ** 2 for x in xb)
+            ra = max(xa) - min(xa)
+            rb = max(xb) - min(xb)
+            if ra >= 2.5 and rb >= 2.5 and va > 0 and vb > 0:
+                # both envelopes move: co-swelling / co-decaying lines of one source track each other closely
+                cov = sum((x - ma) * (y - mb) for x, y in zip(xa, xb))
+                d_then = xa[0] - xb[0]
+                d_now = xa[-1] - xb[-1]
+                if cov / math.sqrt(va * vb) >= 0.85 and abs(d_now - d_then) <= 4.0:
+                    return True
+            # small-range co-modulation (vibrato/tremolo): increments correlate
+            da = [xa[i + 1] - xa[i] for i in range(n - 1)]
+            db_ = [xb[i + 1] - xb[i] for i in range(n - 1)]
             k = len(da)
-            ma = sum(da) / k
-            mb = sum(db_) / k
-            va = sum((x - ma) ** 2 for x in da)
-            vb = sum((x - mb) ** 2 for x in db_)
-            if va >= 0.09 * k and vb >= 0.09 * k:          # both actually modulate (sd >= 0.3 dB/frame)
-                cov = sum((x - ma) * (y - mb) for x, y in zip(da, db_))
-                if cov / math.sqrt(va * vb) >= 0.6:
+            mda = sum(da) / k
+            mdb = sum(db_) / k
+            vda = sum((x - mda) ** 2 for x in da)
+            vdb = sum((x - mdb) ** 2 for x in db_)
+            if vda >= 0.09 * k and vdb >= 0.09 * k:
+                cov = sum((x - mda) * (y - mdb) for x, y in zip(da, db_))
+                if cov / math.sqrt(vda * vdb) >= 0.6:
                     return True
         return False
 
@@ -744,12 +771,13 @@ class FeedbackDetector:
         c.ts_list.append(ts)
         c.centroids.append(pk.centroid)
         c.cpows.append(pk.cpow)
+        c.cpmin.append(min(c.cpows[-3:]))
         c.proms.append(pk.prom)
         c.narrows.append(pk.narrow)
         c.refs.append(ref)
         pk.track = c
         if len(c.levels) > cap:
-            for lst in (c.levels, c.ts_list, c.centroids, c.cpows, c.proms, c.narrows, c.refs):
+            for lst in (c.levels, c.ts_list, c.centroids, c.cpows, c.cpmin, c.proms, c.narrows, c.refs):
                 del lst[0]
             if len(c.fam) > cap:
                 del c.fam[0]
@@ -769,21 +797,33 @@ class FeedbackDetector:
 
     def _associate(self, peaks: list[_Peak], ts: float, ref: float) -> None:
         cfg = self.cfg
-        pairs: list[tuple[float, int, int]] = []
-        for ti, t in enumerate(self._tracks):
-            for pi, pk in enumerate(peaks):
-                d = abs(pk.centroid - t.centroid)
-                if d <= cfg.assoc_tol_bands:
-                    pairs.append((d, ti, pi))
-        pairs.sort()
         used_t: set[int] = set()
         used_p: set[int] = set()
-        for d, ti, pi in pairs:
-            if ti in used_t or pi in used_p:
-                continue
-            used_t.add(ti)
-            used_p.add(pi)
-            self._extend(self._tracks[ti], peaks[pi], ts, ref)
+        # pass 1: strict radius; pass 2: leftovers within a band (wide vibrato swings the centroid by up to ±0.6
+        # band; that is still ONE line and must stay one track, or its family/motion record is lost)
+        for radius in (cfg.assoc_tol_bands, 1.0):
+            pairs: list[tuple[float, int, int]] = []
+            for ti, t in enumerate(self._tracks):
+                if ti in used_t:
+                    continue
+                last_cp = t.cpows[-1] if t.cpows else -128.0
+                for pi, pk in enumerate(peaks):
+                    if pi in used_p:
+                        continue
+                    d = abs(pk.centroid - t.centroid)
+                    if d > radius:
+                        continue
+                    if d > 0.35 and (pk.cpow - last_cp > 6.0 or t.misses >= 2):
+                        continue     # a stronger line appeared next to this one (or this one had gone and
+                                     # something else turned up a third of a band away): a new object
+                    pairs.append((d, ti, pi))
+            pairs.sort()
+            for d, ti, pi in pairs:
+                if ti in used_t or pi in used_p:
+                    continue
+                used_t.add(ti)
+                used_p.add(pi)
+                self._extend(self._tracks[ti], peaks[pi], ts, ref)
         survivors: list[Candidate] = []
         self._recent_dead = [(f, d) for f, d in self._recent_dead if self.frames_seen - f <= 3]
         for ti, t in enumerate(self._tracks):
@@ -867,22 +907,31 @@ class FeedbackDetector:
 
     def _ramp_stats(self, c: Candidate) -> tuple[int, float, float, bool, float, bool, bool]:
         """Current rise ending now: (n_increments, rise_db, slope_db_s, still_rising, ref_change, linear, strict).
-        Uses cluster power (offset/vibrato invariant) over back-fill + tracked history."""
+        Uses cluster power (offset/vibrato invariant) over back-fill + tracked history. Two estimators, the
+        better one wins: (a) the run of consecutive per-frame increments >= ``ramp_min_step_db`` (fast, clean
+        ramps), (b) a least-squares line over the last 6..16 samples with a small residual (slow ramps whose
+        per-frame increments drown in wander and RTA noise, e.g. a reverberant 10 dB/s loop)."""
         cfg = self.cfg
         seq = c.pre_levels[-8:] + c.cpows
         tss = c.pre_ts[-8:] + c.ts_list
         if len(seq) < 3:
             return 0, 0.0, 0.0, False, 0.0, False, False
-        # walk back while increments stay >= min step (allow ONE sub-threshold increment inside the run
-        # if the one before it is fine: RTA noise on a slow ramp)
         step = cfg.ramp_min_step_db
         fp = cfg.frame_period_s
+        refs = list(self._refs)
 
         def inc(i: int) -> float:      # per-frame increment ending at sample i (gaps from masked frames normalised)
             dt = tss[i] - tss[i - 1]
             k = max(1.0, round(dt / fp)) if dt > 0 else 1.0
             return (seq[i] - seq[i - 1]) / k
 
+        def ref_change_over(span: int) -> float:
+            if len(refs) >= span and span >= 2:
+                rseg = refs[-span:]
+                return max(rseg) - rseg[0]
+            return 0.0
+
+        # -- (a) increment run -----------------------------------------------------------------------
         i = len(seq) - 1
         n_inc = 0
         skips = 0
@@ -899,39 +948,68 @@ class FeedbackDetector:
                 continue
             break
         start = i
-        if n_inc < 2:
-            return n_inc, 0.0, 0.0, False, 0.0, False, False
-        run = seq[start:]
-        rts = tss[start:]
-        rise = run[-1] - run[0]
-        incs = [inc(j) for j in range(start + 1, len(seq))]
-        h = len(incs) // 2
-        first = sum(incs[:h]) / max(1, h)
-        second = sum(incs[h:]) / max(1, len(incs) - h)
-        linear = first <= 0 or (second / first >= cfg.ramp_linearity)
-        # spread of increments: regeneration is linear in dB; an onset through the analyser decelerates,
-        # a swell that then holds has a knee. Allow generous spread for wander/noise.
-        if len(incs) >= 3:
-            m = sorted(incs)[len(incs) // 2]
-            linear = linear and max(incs) <= 3.0 * max(m, step) + 1.0
-        if rise >= 8.0:
-            # no one or two frames carry the rise: regeneration spreads it evenly (linear in dB); a note onset
-            # that straddles a frame boundary shows as one or two big increments and then nothing
-            srt = sorted(incs, reverse=True)
-            linear = linear and srt[0] <= 0.5 * rise
-            if len(incs) >= 4:
-                linear = linear and (srt[0] + srt[1]) <= (2.0 / len(incs) + 0.25) * rise
-        slope = _ls_slope(rts, run) if len(run) >= 2 else 0.0
-        still = incs[-1] >= max(step, 0.3 * (sum(incs) / len(incs)))
-        # reference change over the same span (tracked part only; pre-birth refs from the detector history)
-        refs = list(self._refs)
-        span = len(run)
-        ref_change = 0.0
-        if len(refs) >= span:
-            rseg = refs[-span:]
-            ref_change = max(rseg) - rseg[0]
-        strict = linear and first > 0 and second / first >= 0.7      # not decelerating even mildly (LF analyser smear)
-        return n_inc, rise, slope, still and linear, ref_change, linear, strict
+        res_a: tuple[int, float, float, bool, float, bool, bool] = (n_inc, 0.0, 0.0, False, 0.0, False, False)
+        if n_inc >= 2:
+            run = seq[start:]
+            rts = tss[start:]
+            rise = run[-1] - run[0]
+            incs = [inc(j) for j in range(start + 1, len(seq))]
+            h = len(incs) // 2
+            first = sum(incs[:h]) / max(1, h)
+            second = sum(incs[h:]) / max(1, len(incs) - h)
+            linear = first <= 0 or (second / first >= cfg.ramp_linearity)
+            # spread of increments: regeneration is linear in dB; an onset through the analyser decelerates,
+            # a swell that then holds has a knee. Allow generous spread for wander/noise.
+            if len(incs) >= 3:
+                m = sorted(incs)[len(incs) // 2]
+                linear = linear and max(incs) <= 3.0 * max(m, step) + 1.0
+            if rise >= 8.0:
+                # no one or two frames carry the rise: regeneration spreads it evenly (linear in dB); a note onset
+                # that straddles a frame boundary shows as one or two big increments and then nothing
+                srt = sorted(incs, reverse=True)
+                linear = linear and srt[0] <= 0.5 * rise
+                if len(incs) >= 4:
+                    linear = linear and (srt[0] + srt[1]) <= (2.0 / len(incs) + 0.25) * rise
+            slope = _ls_slope(rts, run) if len(run) >= 2 else 0.0
+            still = incs[-1] >= max(step, 0.3 * (sum(incs) / len(incs)))
+            strict = linear and first > 0 and second / first >= 0.7
+            res_a = (n_inc, rise, slope, still and linear, ref_change_over(len(run)), linear, strict)
+        # -- (b) regression over the last m samples ------------------------------------------------------
+        res_b: tuple[int, float, float, bool, float, bool, bool] | None = None
+        nmax = min(len(seq), 16)
+        for m_ in range(nmax, 5, -1):
+            ys = seq[-m_:]
+            xs = tss[-m_:]
+            sl = _ls_slope(xs, ys)
+            span_s = xs[-1] - xs[0]
+            if sl < cfg.growth_min_db_per_s or span_s <= 0:
+                continue
+            rise = sl * span_s
+            if rise < 4.0:
+                continue
+            xm = sum(xs) / m_
+            ym = sum(ys) / m_
+            resid = math.sqrt(sum((y - ym - sl * (x - xm)) ** 2 for x, y in zip(xs, ys)) / m_)
+            if resid > max(0.6, 0.06 * rise):
+                continue
+            h = m_ // 2
+            s1 = _ls_slope(xs[:h], ys[:h]) if h >= 3 else sl
+            s2 = _ls_slope(xs[h:], ys[h:]) if m_ - h >= 3 else sl
+            if s1 <= 0 or s2 < cfg.ramp_linearity * s1 or s2 > 2.5 * s1 + 2.0:
+                continue                                    # decelerating (analyser smear / swell knee) or a jump
+            incs_b = [inc(j) for j in range(len(seq) - m_ + 1, len(seq))]
+            if max(incs_b) > 0.5 * rise and rise >= 8.0:
+                continue                                    # one frame carries the rise: a jump, not a ramp
+            fit_end = ym + sl * (xs[-1] - xm)
+            still = ys[-1] >= fit_end - max(0.7, 1.5 * resid) and _ls_slope(xs[-4:], ys[-4:]) > 0.25 * sl
+            strict = s2 >= 0.7 * s1
+            res_b = (m_ - 1, rise, sl, still, ref_change_over(m_), True, strict)
+            break
+        if res_b is None:
+            return res_a
+        if not res_a[5] or res_b[0] > res_a[0]:
+            return res_b
+        return res_a
 
     def _stationary(self, c: Candidate, k: int) -> tuple[bool, float]:
         """Centroid stationarity over the last ``k`` tracked frames: (stationary, window median)."""
@@ -949,8 +1027,8 @@ class FeedbackDetector:
         """Does the line's level follow the spectrum reference (≈1 dB/dB)? None when the reference did not move."""
         cfg = self.cfg
         w = cfg.comove_window_frames
-        ys = c.cpows[-w:]
-        xs = c.refs[-w:]
+        ys = c.cpmin[-w:]          # lower envelope: a hat or snare adding energy to both the reference and this
+        xs = c.refs[-w:]           # band for a frame is masking, not co-movement
         if len(ys) < 6:
             return None
         xr = max(xs) - min(xs)
@@ -985,6 +1063,8 @@ class FeedbackDetector:
             if ts_now < st + cfg.probe_settle_s + cfg.probe_window_s:
                 break
             c.probe_steps_done += 1
+            if c.first_ts > st - 0.1:
+                continue          # the line did not exist (as this track) before the step: nothing to compare
             pre = [l for t, l in zip(tss, lv) if st - cfg.probe_window_s - 0.02 <= t < st - 0.02]
             post = [l for t, l in zip(tss, lv) if st + cfg.probe_settle_s <= t <= st + cfg.probe_settle_s + cfg.probe_window_s + 0.02]
             if len(pre) < 3 or len(post) < 3:
@@ -1040,15 +1120,31 @@ class FeedbackDetector:
         comove_recent = fno - c.last_comove_frame < K2
 
         dw = cfg.decay_window_frames
-        lv = c.cpows[-dw:]
+        lv = c.cpmin[-dw:]
         lt = c.ts_list[-dw:]
         slope_dw = _ls_slope(lt, lv) if len(lv) >= 4 else 0.0
         if len(lv) >= 6 and slope_dw <= -cfg.decay_db_per_s and (lv[0] - lv[-1]) >= 1.0:
             c.last_decay_frame = fno
         decay_recent = fno - c.last_decay_frame < K2
 
-        n_inc, rise, rslope, still, ref_change, linear, strict_linear = self._ramp_stats(c)
+        n_inc, rise, rslope, still, ref_change, linear, strict_linear = getattr(c, "_rs", None) or self._ramp_stats(c)
         ramp_ok = linear and n_inc >= 3 and rise >= 4.0 and ref_change <= 0.5 * rise and rslope >= cfg.growth_min_db_per_s
+        if ramp_ok:
+            # ensemble swell: >= 2 OTHER lines ramping at a similar rate right now = a pad/crescendo/fader move
+            # (rings start alone; two simultaneous rings are rare, three unheard of) [analyser brief §5]
+            mates = 0
+            for o in getattr(self, "_live", ()):
+                if o is c or abs(o.centroid - c.centroid) < 1.5:
+                    continue
+                on, orise, oslope, _st, _rc, olin, _sl = getattr(o, "_rs", (0, 0.0, 0.0, False, 0.0, False, False))
+                if olin and on >= 3 and orise >= 4.0 and oslope >= cfg.growth_min_db_per_s \
+                        and 0.5 * rslope <= oslope <= 2.0 * rslope:
+                    mates += 1
+                    if mates >= 2:
+                        break
+            if mates >= 2:
+                ramp_ok = False
+                c.last_comove_frame = fno     # remember it as a common-mode/programme event for the tier-B window
         ramp_strong = ramp_ok and (
             (n_inc >= cfg.ramp_strong_frames and still)                       # >= 300 ms of steady exponential growth
             or (rise >= cfg.ramp_strong_rise_db and n_inc >= 4)              # or a lot of it (fast loop)
@@ -1059,18 +1155,24 @@ class FeedbackDetector:
         # over by a ring; kick re-triggering the band of an LF loop): behaviour NOW wins over lineage,
         # except for a family visible NOW.
         if ramp_ok and n_inc >= cfg.ramp_strong_frames and rise >= 10.0 and not fam_recent:
+            # >= 300 ms of solitary exponential growth: whatever shared this band before (a chord tone, a vocal
+            # partial, a kick), what is growing NOW has no family and was seen to grow from below -> judge it on
+            # its own record from here on
             if c.onset in ("adult", "slow", "at_arm"):
                 c.onset = "ramp"
-            if c.fam_lineage and fam_ratio < cfg.family_ratio:
-                c.fam_lineage = False   # >= 300 ms of solitary exponential growth: whatever shared this band before,
-                family = False          # what is growing now has no family
+            if family:
+                del c.fam[:-3]
+                c.fam_lineage = False
+                famwin = c.fam
+                fam_ratio = sum(1 for f in famwin if f) / max(1, len(famwin))
+                family = fam_ratio >= cfg.family_ratio
 
         # steadiness over the tier-B window (cluster power)
-        wlv = c.cpows[-K2:]
+        wlv = c.cpmin[-K2:]
         steady = len(wlv) >= 2 and (max(wlv) - min(wlv)) <= cfg.plateau_range_db
         # slow rise (marginal loop, 1-6 dB/s): judged over >= 1.2 s so tremolo/Leslie AM (0.8-7 Hz) cannot pose as one
         LW = 2 * K2
-        llv = c.cpows[-LW:]
+        llv = c.cpmin[-LW:]
         lts = c.ts_list[-LW:]
         slow_rise = False
         wslope = 0.0
@@ -1100,8 +1202,11 @@ class FeedbackDetector:
         level = c.level_db
         prom_now = c.prominence_db
         proms = c.proms[-K1:]
-        prom_med = _median_small(list(proms[-3:])) if proms else prom_now
-        prom_ok = prom_med >= cfg.prominence_db and prom_now >= cfg.prominence_db - 1.5
+        prom_med = _median_small(list(proms)) if proms else prom_now
+        prom_hi = max(proms) if proms else prom_now
+        # visible: reached the emission prominence within the last K1 frames and has not fallen far below it
+        # (percussion pumping the neighbourhood depresses the measure for a frame or two at a time)
+        prom_ok = prom_hi >= cfg.prominence_db and prom_now >= cfg.prominence_db - 3.0
         nar = c.narrows[-K1:]
         narrow_ok = sum(1 for x in nar if x >= cfg.narrow_db) * 2 >= len(nar)
         in_win = self._in_window(med_c)
@@ -1236,9 +1341,11 @@ class FeedbackDetector:
         self._note_family(peaks)
         self._analyser_flags(vals)
         out: list[Detection] = []
-        for c in self._tracks:
-            if c.misses:
-                continue
+        live = [c for c in self._tracks if not c.misses]
+        for c in live:
+            c._rs = self._ramp_stats(c)          # cached: the ensemble test below looks across tracks
+        self._live = live
+        for c in live:
             det = self._decide(c, ts)
             if det is not None:
                 out.append(det)
