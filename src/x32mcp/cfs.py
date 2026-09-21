@@ -213,7 +213,8 @@ def _rta_dict(r: RtaSourceResult | None) -> dict[str, Any] | None:
     return {"target": r.target.key, "source_index": r.source_index, "post_eq": r.post_eq, "stat_expected": r.stat_expected,
             "stat_actual": r.stat_actual, "verified": r.verified, "options_cleared": r.options_cleared,
             "autogain_cleared": r.autogain_cleared, "detector_set_peak": r.detector_set_peak,
-            "decay_set_min": r.decay_set_min, "peakhold_cleared": r.peakhold_cleared, "prefs_before": r.prefs_before}
+            "decay_set_min": r.decay_set_min, "peakhold_cleared": r.peakhold_cleared, "prefs_before": r.prefs_before,
+            "settle_attempts": r.settle_attempts, "settle_ms": r.settle_ms}
 
 
 # -- state / reports -------------------------------------------------------------------------------

@@ -82,6 +82,7 @@ from .nodes import (
 )
 from .policy import FADER_FLOOR_DB, Policy, Tier
 from .scales import NEG_INF_DB, ScaleError, enum_to_index, format_db
+from .settle import read_until
 from .targets import Target, TargetError, parse_target
 
 __all__ = ["DeskError", "Desk", "ALL_FAMILIES"]
@@ -212,6 +213,11 @@ class Desk:
         self._events = events
         self._snapshots = snapshots
         self._ttl = float(d.policy.get("read_cache_ttl_s", 2.0))
+        # A section read this soon after one of our writes to it is answered by the desk but never
+        # cached: real hardware served the pre-write value once (HANDOVER §4b), and caching that
+        # answer would repeat the lie for read_cache_ttl_s (DESIGN §0.6: the desk is the truth).
+        self._settle_window_s = float(d.policy.get("settle_window_s", 0.5))
+        self._written_at: dict[str, float] = {}  # node path -> monotonic time of our last write into it
         self._cache: dict[str, tuple[float, dict[str, Any]]] = {}
         self._epoch: dict[str, int] = {}  # invalidations of in-flight paths
         self._inflight: dict[str, asyncio.Future] = {}
@@ -280,17 +286,22 @@ class Desk:
 
     def _drop(self, path: str) -> None:
         self._cache.pop(path, None)
-        if path in self._inflight:
+        # A request issued before this invalidation must not serve a reader that arrives after
+        # it (read-your-writes): detach it from the join index. Its own waiters keep their
+        # future (the fetcher resolves the futures it created, not whatever the index holds).
+        if self._inflight.pop(path, None) is not None:
             self._epoch[path] = self._epoch.get(path, 0) + 1
         if self._dropped_since is not None:
             self._dropped_since.add(path)
 
-    def _invalidate_address(self, address: str) -> None:
+    def _invalidate_address(self, address: str, *, written: bool = False) -> None:
         hit = self._leaf_index.get(address)
-        if hit is not None:
-            self._drop(hit[0].path)
-        elif address in self._node_by_path:
-            self._drop(address)
+        path = hit[0].path if hit is not None else address if address in self._node_by_path else None
+        if path is None:
+            return
+        self._drop(path)
+        if written:
+            self._written_at[path] = time.monotonic()
 
     def _on_push(self, address: str, args: tuple) -> None:
         # DESIGN §0.6: the desk is the source of truth — a pushed change retires our copy.
@@ -299,7 +310,7 @@ class Desk:
     def _on_write_event(self, ev: Any) -> None:
         addr = ev.data.get("address") if isinstance(ev.data, dict) else None
         if isinstance(addr, str):
-            self._invalidate_address(addr)
+            self._invalidate_address(addr, written=True)
 
     def _parse(self, path: str, line: str | None) -> dict[str, Any] | None:
         if line is None:
@@ -334,12 +345,15 @@ class Desk:
             waits[p] = fut
         if fetch:
             epochs = {p: self._epoch.get(p, 0) for p in fetch}
+            mine = {p: waits[p] for p in fetch}  # the futures THIS call created and must resolve
             try:
                 lines = await self._conn.node_many(fetch, concurrency)
             except BaseException as e:
                 for p in fetch:
-                    f = self._inflight.pop(p, None)
-                    if f is not None and not f.done():
+                    f = mine[p]
+                    if self._inflight.get(p) is f:
+                        del self._inflight[p]
+                    if not f.done():
                         # Never cancel() a shared future: asyncio.shield does not stop an *inner*
                         # cancellation reaching the waiters, so another tool call would die with a
                         # CancelledError it never asked for. Hand it an error it can report instead.
@@ -349,11 +363,16 @@ class Desk:
             t1 = time.monotonic()
             for p in fetch:
                 vals = self._parse(p, lines.get(p))
-                if vals is not None and self._epoch.get(p, 0) == epochs[p]:
+                current = self._epoch.get(p, 0) == epochs[p]  # not invalidated while in flight
+                settled = t1 - self._written_at.get(p, float("-inf")) >= self._settle_window_s
+                if vals is not None and current and settled:
                     self._cache[p] = (t1, vals)
-                self._epoch.pop(p, None)
-                f = self._inflight.pop(p, None)
-                if f is not None and not f.done():
+                if current:
+                    self._epoch.pop(p, None)
+                f = mine[p]
+                if self._inflight.get(p) is f:
+                    del self._inflight[p]
+                if not f.done():
                     f.set_result(vals)
         for p, fut in waits.items():
             try:
@@ -675,7 +694,8 @@ class Desk:
             raise self._unreachable("desk state")
         now = time.monotonic()
         for p, vals in state.sections.items():
-            if p not in self._inflight and p not in dropped:  # a push during the sweep beats the sweep
+            # a push during the sweep beats the sweep; a section we just wrote is not settled yet
+            if p not in self._inflight and p not in dropped and now - self._written_at.get(p, float("-inf")) >= self._settle_window_s:
                 self._cache[p] = (now, vals)
         return state
 
@@ -922,7 +942,7 @@ class Desk:
         except NotConnected as e:
             raise DeskError("NOT_CONNECTED", str(e)) from None
         self.write_count += 1
-        self._invalidate_address(address)
+        self._invalidate_address(address, written=True)
         self._events.publish("desk.write", address=address, value=_jsonable(value), tier=int(tier), tool=tool, target=target.key if target else None)
 
     async def _write_value(self, t: Target, rel: str, value: Any, *, tool: str, guarded: bool = False, **vars: Any) -> tuple[str, Any]:

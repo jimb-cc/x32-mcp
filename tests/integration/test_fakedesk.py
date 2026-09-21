@@ -380,6 +380,37 @@ async def test_meter_lease_renew_unsubscribe(conn, fakedesk):
 # ---------------------------------------------------------------------------------------- RTA source
 
 
+async def test_sync_is_a_barrier_for_fire_and_forget_sets(conn, fakedesk):
+    """conn.sync(): once /status is answered, every earlier SET was dispatched by the desk."""
+    fakedesk.latency_ms = 30.0
+    for ch in range(1, 33):
+        await conn.set(f"/ch/{ch:02d}/mix/fader", 0.5)
+    rtt = await conn.sync()
+    assert 25 <= rtt < 500
+    assert all(abs(fakedesk.get(f"/ch/{ch:02d}/mix/fader") - 0.5) < 1e-3 for ch in range(1, 33))
+    # it proves dispatch, not application: a desk that applies late still answers the barrier first
+    fakedesk.latency_ms = 0.0
+    fakedesk.set_apply_delay("/ch/01/", 200)
+    await conn.set("/ch/01/mix/fader", 0.25)
+    await conn.sync()
+    assert abs(fakedesk.get("/ch/01/mix/fader") - 0.5) < 1e-3 and fakedesk.pending_writes == 1
+    assert fakedesk.flush_pending() == 1 and abs(fakedesk.get("/ch/01/mix/fader") - 0.25) < 1e-3
+
+
+async def test_set_rta_source_verifies_when_the_stat_mirror_lags(conn, descriptor, fakedesk):
+    """M7: /-stat/rtasource follows the prefs write only after the desk answered the first
+    read-back. With the fake applying /-prefs/rta/* 300 ms late the read-back is polled until it
+    agrees (settle.read_until, 1 s), instead of two reads 100 ms apart calling it unverified."""
+    fakedesk.set_apply_delay("/-prefs/rta/", 300)
+    res = await set_rta_source(conn, descriptor, Target("bus", 3))
+    assert res.verified and res.stat_actual == 148 == res.stat_expected
+    assert res.settle_attempts >= 2 and 250 <= res.settle_ms < 1000
+    # a mirror that never follows is reported, bounded by the deadline, never raised
+    fakedesk.set_apply_delay("/-prefs/rta/", 60_000)
+    res = await set_rta_source(conn, descriptor, Target("bus", 5), verify_deadline_s=0.3)
+    assert not res.verified and res.stat_actual == 148 and 250 <= res.settle_ms < 900
+
+
 async def test_rta_source_mirror_and_set_rta_source(conn, descriptor):
     await conn.set("/-prefs/rta/source", 52)  # Bus 3
     await conn.set("/-prefs/rta/pos", 1)

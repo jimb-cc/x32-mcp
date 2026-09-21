@@ -506,6 +506,27 @@ async def test_setup_ringout_eqs_validation_failure_is_an_error_envelope(app, mo
     assert "ok" not in res["error"] and "requires_confirmation" not in res
 
 
+async def test_setup_ringout_eqs_on_a_desk_that_applies_late_is_ok_or_not_yet_verified(app, fakedesk, monkeypatch):
+    """HANDOVER §4b: a successful setup reported GEQ_VALIDATION_FAILED because the desk showed the
+    inserts only after it had answered the read-back. Late-but-in-time → plain ok (verified);
+    later than the settle deadline → ok with verified False and a warning, never the error."""
+    fakedesk.set_apply_delay("/bus/", 150)
+    fakedesk.set_apply_delay("/fx/", 150)
+    token = assert_pending(await srv.setup_ringout_eqs([1, 2]))
+    done = await srv.setup_ringout_eqs([1, 2], confirm_token=token)
+    assert done["ok"] is True and done["verified"] is True and done["changed"] == 3 and "all validate" in done["summary"]
+    assert done["settle"]["attempts"] >= 2
+    monkeypatch.setattr(srv._prov, "SETUP_SETTLE_S", 0.3)
+    fakedesk.set_apply_delay("/bus/03/insert", 60_000)
+    token = assert_pending(await srv.setup_ringout_eqs([3]))
+    late = await srv.setup_ringout_eqs([3], confirm_token=token)
+    assert late["ok"] is True and late["verified"] is False and "NOT YET VERIFIED" in late["summary"]
+    assert late["warnings"] and "insert" in late["warnings"][0] and "error" not in late
+    fakedesk.flush_pending()
+    v = await srv.validate_ringout_eqs([3])
+    assert v["all_ok"] is True  # and the stale answer was not left in the cache
+
+
 async def test_reconnect_rearms_the_snapshot_before_write_net(app, fakedesk):
     """BRIEF §4 ties the undo net to the desk in front of us, not to the process."""
     assert (await srv.set_fader("ch.1", -6.0, ramp_ms=0))["ok"]

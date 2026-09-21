@@ -47,6 +47,7 @@ from typing import Any, Callable, Iterable, Iterator, Protocol, Sequence, runtim
 from x32mcp.descriptor import Descriptor
 from x32mcp.events import EventBus
 from x32mcp.osc import OscError, decode, encode
+from x32mcp.settle import read_until
 from x32mcp.targets import Target
 
 __all__ = [
@@ -858,6 +859,8 @@ class RtaSourceResult:
     decay_set_min: bool = False  # True when the RTA release ("decay") had to be shortened to its minimum
     peakhold_cleared: bool = False  # True when the RTA peak-hold had to be switched off
     prefs_before: dict[str, Any] | None = None  # raw pref values as found, for the report / a later restore
+    settle_attempts: int = 1  # reads of stat_param until it agreed (or the deadline passed)
+    settle_ms: float = 0.0
 
 
 async def set_rta_source(
@@ -867,7 +870,7 @@ async def set_rta_source(
     *,
     post_eq: bool = True,
     read_timeout_s: float = 1.0,
-    verify_attempts: int = 2,
+    verify_deadline_s: float = 1.0,
 ) -> RtaSourceResult:
     """Point the console's RTA (and hence ``/meters/15``) at ``target``.
 
@@ -953,19 +956,24 @@ async def set_rta_source(
     prefs_before = {k: v for k, v in (("autogain", ag), ("det", det), ("decay", dec), ("peakhold", ph),
                                       ("options", opts), ("gain", gain)) if v is not None}
 
+    # Whether the desk has derived /-stat/rtasource from the prefs by the time it answers the next
+    # datagram is UNCONFIRMED (transport.md §5.4; inserts and names were seen to lag at M5/M7), so
+    # the read-back is polled until it agrees or verify_deadline_s passes (settle.read_until): a
+    # timeout is "not verified" — logged and reported, never raised.
     expected = rta_stat_expected(idx, post_eq)
-    actual: int | None = None
-    for attempt in range(max(1, verify_attempts)):
-        raw = await _read(stat_addr)
-        actual = raw if isinstance(raw, int) else None
-        if actual == expected or raw is None:
-            break
-        if attempt + 1 < verify_attempts:
-            await asyncio.sleep(0.1)  # the desk applies prefs asynchronously
-    verified = actual == expected
+
+    async def _read_stat() -> Any:
+        return await asyncio.wait_for(conn.get(stat_addr), timeout=read_timeout_s)
+
+    settled = await read_until(_read_stat, lambda v: isinstance(v, int) and v == expected, deadline_s=verify_deadline_s,
+                               first_delay_s=0.05, read_timeout_s=read_timeout_s, retry_on=(Exception,), what=f"rta source {target.key}")
+    actual = settled.value if isinstance(settled.value, int) and not isinstance(settled.value, bool) else None
+    verified = settled.ok
     if not verified:
-        log.warning("rta source %s: %s reads %r, expected %d", target.key, stat_addr, actual, expected)
+        log.warning("rta source %s: %s reads %r, expected %d (not verified after %d read(s), %.0f ms%s)", target.key, stat_addr,
+                    actual, expected, settled.attempts, settled.elapsed_ms, f"; {settled.error}" if settled.error else "")
     else:
         log.info("rta source -> %s (%s=%d, %s)", target.label, src_addr, idx, "post-EQ" if post_eq else "pre-EQ")
     return RtaSourceResult(target, idx, post_eq, expected, actual, verified, cleared,
-                           autogain_cleared, detector_set_peak, decay_set_min, peakhold_cleared, prefs_before or None)
+                           autogain_cleared, detector_set_peak, decay_set_min, peakhold_cleared, prefs_before or None,
+                           settled.attempts, round(settled.elapsed_ms, 1))

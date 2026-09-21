@@ -115,10 +115,11 @@ async def test_cache_is_invalidated_by_pushes_and_own_writes(desk, conn, fakedes
     assert desk.stats["cached_sections"] > 0
     await desk.label("ch.7", name="Mine")  # our own write drops the section too
     assert (await desk.get_channel(7))["name"] == "Mine"
+    assert "/ch/07/config" not in desk._cache  # answered by the desk, not cached: inside the settle window
     # a write by another module through the same connection is seen via the bus's "write" event
-    assert "/ch/07/config" in desk._cache
-    events.publish("write", address="/ch/07/config/color", args=[6])
-    assert "/ch/07/config" not in desk._cache
+    assert "/ch/07/mix" in desk._cache
+    events.publish("write", address="/ch/07/mix/fader", args=[0.5])
+    assert "/ch/07/mix" not in desk._cache
     desk.invalidate()
     assert desk.stats["cached_sections"] == 0
 
@@ -738,3 +739,39 @@ async def test_headamp_resolves_through_firmware_4x_user_routing(fakedesk, conn,
     conn.invalidate(); d.invalidate()
     assert await d.headamp_index_for("ch.1") == 0
     assert await d.headamp_index_for("ch.4") == 3
+
+
+# ------------------------------------------------------------ read-your-writes (REVIEW_BRIEF §5)
+
+
+async def test_reader_after_a_write_never_joins_a_request_issued_before_it(desk, conn, fakedesk, policy):
+    """A section read in flight BEFORE label() stayed joinable AFTER it, so a get_strip issued
+    after the write returned the pre-write name (our own staleness, no desk asynchrony needed)."""
+    policy.snapshot_before_write = False
+    t = Target("ch", 1)
+    old = (await desk.get_strip(t))["name"]
+    desk.invalidate()
+    fakedesk.latency_ms = 150.0  # replies are slow: the first read is still in flight across the write
+    early = asyncio.create_task(desk.get_strip(t))
+    await asyncio.sleep(0.02)
+    await desk.label(t, name="NEWNAME")
+    late = await desk.get_strip(t)  # issued after the write
+    assert (await early)["name"] == old  # that request predates the write: fine
+    assert late["name"] == "NEWNAME", "a reader after the write was served the pre-write reply"
+
+
+async def test_a_read_straight_after_a_write_is_not_cached(desk, conn, fakedesk, policy):
+    """HANDOVER §4b: the desk answered the read straight after label_channel with the previous
+    name. That answer must not then be served from OUR cache for read_cache_ttl_s."""
+    policy.snapshot_before_write = False
+    t = Target("ch", 2)
+    fakedesk.set_apply_delay("/ch/02/config", 150)  # the desk shows the name 150 ms after the SET
+    await desk.label(t, name="LATE")
+    first = (await desk.get_strip(t))["name"]
+    assert first == "Ch02"  # the desk really is stale here: it is the source of truth, we report it
+    await asyncio.sleep(0.2)
+    assert (await desk.get_strip(t))["name"] == "LATE"  # ...but we ask it again rather than repeat the lie
+    # once settled (older than settle_window_s) the section is cached as usual
+    await asyncio.sleep(0.4)
+    await desk.get_strip(t)
+    assert "/ch/02/config" in desk._cache

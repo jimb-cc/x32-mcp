@@ -697,3 +697,33 @@ async def test_candidate_gate_is_calibrated_to_the_room_noise_floor(cfs, descrip
         assert (await cfs._calibrate_floor(strict)).min_level_db == -20.0
     finally:
         await room.stop()
+
+
+# ------------------------------------------------------------------ read-after-write settle (REVIEW_BRIEF §5)
+
+
+async def test_apply_setup_waits_for_the_desk_to_apply_inserts_and_type_loads(desk, conn, fakedesk):
+    """HANDOVER §4b: the real desk answered the read straight after the writes with the OLD
+    insert/on, so a successful setup reported GEQ_VALIDATION_FAILED. With the fake applying
+    inserts and the FX type load 150 ms late, apply_setup must poll until it validates."""
+    fakedesk.set_apply_delay("/bus/", 150)
+    fakedesk.set_apply_delay("/fx/", 150)
+    plan = await plan_setup(desk, [1, 2])
+    res = await apply_setup(desk, plan)
+    assert res["changed"] == 3
+    assert res["ok"] is True and res["verified"] is True, res["geq"]
+    assert res["settle"]["attempts"] >= 2 and 100 <= res["settle"]["elapsed_ms"] < 1500
+    assert fakedesk.pending_writes == 0 and fakedesk.applied_late == 7  # 1 type load + sel/on/pos on 2 buses
+
+
+async def test_apply_setup_not_yet_verified_is_reported_not_failed(desk, conn, fakedesk):
+    """A settle timeout alone is 'not yet verified' (ok False, verified False), never an error;
+    and it must not leave the stale answer in the Desk cache for the next validate."""
+    fakedesk.set_apply_delay("/bus/01/insert", 10_000)
+    plan = await plan_setup(desk, [1])
+    res = await apply_setup(desk, plan, settle_deadline_s=0.3)
+    assert res["changed"] == 2 and res["ok"] is False and res["verified"] is False
+    assert res["settle"]["attempts"] >= 2 and any("insert" in r for r in res["geq"]["1"]["reasons"])
+    assert fakedesk.flush_pending() >= 1
+    status = await validate_ringout_eqs(desk, [1])  # goes to the desk, not to a cached stale section
+    assert status[1].ok, status[1].reasons
