@@ -613,7 +613,7 @@ class FeedbackDetector:
             clear of the local floor (second-lowest of its six neighbours) and within 3 dB of the band beside it."""
             if j < 1 or j >= n - 1:
                 return False
-            if j < 3 or j >= n - 3 or vals[j] < max(vals[j - 1], vals[j + 1]) - 3.0:
+            if j < 3 or j >= n - 3 or vals[j] < max(vals[j - 1], vals[j + 1]) - 6.0:
                 return False
             left = min(vals[j - 3:j])
             right = min(vals[j + 1:j + 4])
