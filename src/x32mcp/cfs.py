@@ -88,7 +88,7 @@ from .connection import ConnectionError as X32ConnectionError, ConnectionState, 
 from .desk import Desk, DeskError, priority_writes
 from .detector import Detection, DetectorConfig, FeedbackDetector, Notch, NotchController, NotchPlan
 from .events import Event, EventBus
-from .meters import FrameSource, LiveMeters, MeterFrame, RtaSourceError, RtaSourceResult, rta_band_hz, set_rta_source
+from .meters import FrameSource, LiveMeters, MeterFrame, RtaSourceError, RtaSourceResult, rta_band_hz, set_rta_source, restore_rta_prefs
 from .policy import FADER_FLOOR_DB, Policy, PolicyError
 from .provision import geq_sides_for, Preflight, bus_label, bus_target, preflight, validate_ringout_eqs
 from .scales import NEG_INF_DB, format_db
@@ -213,8 +213,8 @@ def _rta_dict(r: RtaSourceResult | None) -> dict[str, Any] | None:
     return {"target": r.target.key, "source_index": r.source_index, "post_eq": r.post_eq, "stat_expected": r.stat_expected,
             "stat_actual": r.stat_actual, "verified": r.verified, "options_cleared": r.options_cleared,
             "autogain_cleared": r.autogain_cleared, "detector_set_peak": r.detector_set_peak,
-            "decay_set_min": r.decay_set_min, "peakhold_cleared": r.peakhold_cleared, "prefs_before": r.prefs_before,
-            "settle_attempts": r.settle_attempts, "settle_ms": r.settle_ms}
+            "decay_set_min": r.decay_set_min, "peakhold_cleared": r.peakhold_cleared, "gain_set": r.gain_set,
+            "prefs_before": r.prefs_before, "settle_attempts": r.settle_attempts, "settle_ms": r.settle_ms}
 
 
 # -- state / reports -------------------------------------------------------------------------------
@@ -1050,6 +1050,16 @@ class CfsManager:
             except Exception:
                 log.exception("restore task failed")
         await self._disarm()
+        # Hand the engineer's RTA back the way we found it (source, ballistics, gain). Best effort, never raises.
+        ses.rta_restored = None
+        if ses.rta is not None and ses.rta.prefs_before:
+            try:
+                ses.rta_restored = await restore_rta_prefs(self._conn, self._d, ses.rta.prefs_before)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                log.exception("restoring the RTA preferences failed")
+            self._desk.invalidate("/-prefs/rta")
         ses.ended = self._clock()
         if ses.final_stage is None:
             ses.final_stage = "ABORT" if ses.abort_reason else "DONE"
@@ -1678,7 +1688,7 @@ class CfsManager:
             "target_db": _db1(ses.target_db), "step_db": ses.step_db, "dwell_ms": ses.dwell_ms,
             "notch_budget": ses.budget, "budget_left": ses.nc.budget_left,
             "geq": {"fx_slot": ses.fx_slot, "side": ses.side, "sel": ses.sel},
-            "rta": _rta_dict(ses.rta), "snapshot": ses.snapshot_id,
+            "rta": _rta_dict(ses.rta), "rta_restored": getattr(ses, "rta_restored", None), "snapshot": ses.snapshot_id,
             "notches": mine, "existing_cuts": pre,
             "detections": len(ses.detections), "detection_log": ses.detections[-_MAX_DETECTIONS_IN_REPORT:],
             "notch_log": ses.notch_log, "stages": ses.stages, "frames": ses.frames,

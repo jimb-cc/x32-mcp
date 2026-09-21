@@ -16,6 +16,7 @@ import pytest
 from x32mcp.descriptor import Descriptor
 from x32mcp.events import EventBus
 from x32mcp.meters import (
+    restore_rta_prefs,
     METER_COUNTS,
     METER_GROUPS,
     RTA_BAND_HZ,
@@ -707,14 +708,21 @@ async def test_set_rta_source_forces_analyser_ballistics(d):
     assert ("/-prefs/rta/det", (1,)) in conn.sets and res.detector_set_peak
     assert ("/-prefs/rta/decay", (0.0,)) in conn.sets and res.decay_set_min
     assert ("/-prefs/rta/peakhold", (0,)) in conn.sets and res.peakhold_cleared
-    assert res.prefs_before == {"autogain": 1, "det": 0, "decay": 0.5, "peakhold": 3, "options": 0, "gain": 0.4}
-    assert not any(a == "/-prefs/rta/gain" for a, _ in conn.sets)  # reported, never written
+    assert res.prefs_before == {"source": 0, "pos": 0, "autogain": 1, "det": 0, "decay": 0.5, "peakhold": 3, "options": 0, "gain": 0.4}
+    assert ("/-prefs/rta/gain", (0.0,)) in conn.sets and res.gain_set  # pinned to rta.gain_db for the session
     assert res.verified
+    # and the engineer's settings go back afterwards (Solo Priority excepted)
+    conn.sets.clear()
+    out = await restore_rta_prefs(conn, d, res.prefs_before)
+    assert out["failed"] == [] and set(out["restored"]) == {"source", "pos", "autogain", "det", "decay", "peakhold", "gain"}
+    assert ("/-prefs/rta/peakhold", (3,)) in conn.sets and ("/-prefs/rta/source", (0,)) in conn.sets and ("/-prefs/rta/gain", (0.4,)) in conn.sets
+    assert not any(a == "/-prefs/rta/options" for a, _ in conn.sets)
     # already right: nothing is rewritten
     good = FakeDeskConn({
         "/-prefs/rta/source": 0, "/-prefs/rta/pos": 0, "/-prefs/rta/options": 0, "/-stat/rtasource": 0,
         "/-prefs/rta/autogain": 0, "/-prefs/rta/det": 1, "/-prefs/rta/decay": 0.0, "/-prefs/rta/peakhold": 0,
+        "/-prefs/rta/gain": 0.0,
     })
     res = await set_rta_source(good, d, Target("bus", 1))
     assert [a for a, _ in good.sets] == ["/-prefs/rta/source", "/-prefs/rta/pos"]
-    assert not (res.autogain_cleared or res.detector_set_peak or res.decay_set_min or res.peakhold_cleared)
+    assert not (res.autogain_cleared or res.detector_set_peak or res.decay_set_min or res.peakhold_cleared or res.gain_set)

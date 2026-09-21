@@ -799,7 +799,8 @@ rta:
   # freezes past maxima into dead-flat prominent bands that look exactly like an established ring.
   decay_param: "/-prefs/rta/decay"       # force raw 0.0 (shortest release)
   peakhold_param: "/-prefs/rta/peakhold" # enum OFF,1..8 - force 0 (OFF)
-  gain_param: "/-prefs/rta/gain"         # manual display gain 0..60 dB; read and reported only (effect on /meters/15 UNCONFIRMED)
+  gain_param: "/-prefs/rta/gain"         # manual display gain 0..60 dB (effect on /meters/15 UNCONFIRMED; same stage as auto-gain)
+  gain_db: 0                             # pinned to this for the session so absolute levels mean the same thing on every desk
   frame_period_s: 0.05
 
 geq:
