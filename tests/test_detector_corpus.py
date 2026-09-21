@@ -21,7 +21,7 @@ from rtasim import SCENARIOS, evaluate
 from rtasim.harness import run_one
 
 DEFAULT_REPORT_DIR = ("/private/tmp/claude-502/-Users-jimb-code-studio-intel-demo/d5626e47-bee8-4335-aa3f-27a50ae21455/"
-                      "scratchpad/reports/corpus")
+                      "scratchpad/reports/corpus-critic")
 
 
 def _report_dir(tmp_path_factory) -> Path:
@@ -103,13 +103,13 @@ def test_harness_scores_a_perfect_oracle_and_a_null_detector():
         def feed(self, values, ts):
             out = []
             for e in self.events:
-                if e["t_prom"] is not None and abs(ts - e["t_prom"]) < 1e-6:
+                if e["t_prom"] is not None and abs(ts - e["t_prom"]) < 0.02:     # reported ts carries ±3 ms jitter
                     out.append(type("D", (), {"ts": ts, "band": e["band"], "freq_hz": RTA_BAND_HZ[e["band"]], "confidence": 1.0})())
             return out
 
     ev = ground_truth("S11a_two_rings", 1)["events"]
     r = run_one(lambda bh: Oracle(ev), "S11a_two_rings", 1)
-    assert r.tp == 2 and not r.misses and not r.fps and r.latencies_ms == [0.0, 0.0] and r.passed
+    assert r.tp == 2 and not r.misses and not r.fps and all(abs(l) <= 5.0 for l in r.latencies_ms) and r.passed
     # a detection on a music-only scenario is an FP with a GEQ band attached
     class Blurter:
         n = 0

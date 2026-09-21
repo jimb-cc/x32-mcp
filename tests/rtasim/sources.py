@@ -528,16 +528,33 @@ def BassLine(*, notes: Sequence[str | float], t_start: float, t_end: float, note
 _SCALE = (0, 2, 4, 5, 7, 9, 11)
 
 
+# per-timbre "humanisation" defaults for Melody: (drift_cents, flutter_db, expressive_db, timbre_jitter_db)
+HUMANIZE: dict[str, tuple[float, float, float, float]] = {
+    "voice": (8.0, 1.2, 1.0, 3.0), "voice_closed": (10.0, 1.5, 1.0, 4.0), "flute": (10.0, 1.0, 1.0, 3.0),
+    "flute_high": (10.0, 1.0, 1.0, 3.0), "whistle": (25.0, 1.5, 1.0, 2.0), "organ_flue": (0.0, 0.15, 0.0, 3.0),
+    "organ_8_4": (0.0, 0.15, 0.0, 2.0), "piano": (0.0, 0.2, 0.0, 2.0), "sine_lead": (0.0, 0.15, 0.3, 1.0),
+    "el_guitar": (4.0, 0.5, 0.5, 3.0), "ac_guitar": (3.0, 0.5, 0.5, 3.0),
+}
+_HUMANIZE_DEFAULT = (5.0, 0.8, 0.5, 3.0)
+
+
 def Melody(*, t_start: float, t_end: float, low: str = "C4", high: str = "C6", note_s: tuple[float, float] = (0.3, 1.0),
            gap_s: tuple[float, float] = (0.02, 0.15), level_db: float = -30.0, timbre: str = "voice", seed: int = 1,
-           vib_rate_hz: float = 5.5, vib_cents: float = 40.0, legato: bool = False, drift_cents: float = 8.0,
-           flutter_db: float = 0.8, timbre_jitter_db: float = 3.0, vib_rate_spread: float = 0.12,
-           repeat_prob: float = 0.0, **note_kw) -> Group:
+           vib_rate_hz: float = 5.5, vib_cents: float = 40.0, legato: bool = False, drift_cents: float | None = None,
+           expressive_db: float | None = None, flutter_db: float | None = None, timbre_jitter_db: float | None = None,
+           vib_rate_spread: float = 0.12, repeat_prob: float = 0.0, **note_kw) -> Group:
     """Random diatonic melody (C major) between ``low`` and ``high``, deterministic from ``seed``.
     Steps are mostly ±1..2 scale degrees (music 'moves', analyser brief §4.3 ii); ``repeat_prob`` re-strikes the
     same pitch (a repeated note is NOT evidence of a fixed-frequency ring). Per note: own drift/flutter/partial
-    jitter, vibrato rate varied ±``vib_rate_spread`` (singers are not quartz-locked at 5.500 Hz)."""
+    jitter and a slight swell or sag (``expressive_db``), vibrato rate varied ±``vib_rate_spread`` (singers are not
+    quartz-locked at 5.500 Hz). Unset humanisation parameters come from HUMANIZE[timbre] (organ/piano: no drift,
+    no expression, 0.15-0.2 dB flutter; voice 8 c / 1.2 dB / ±1 dB; whistle 25 c / 1.5 dB)."""
     rng = random.Random(seed * 101 + 11)
+    hd, hf, he, hj = HUMANIZE.get(timbre, _HUMANIZE_DEFAULT) if isinstance(timbre, str) else _HUMANIZE_DEFAULT
+    drift_cents = hd if drift_cents is None else drift_cents
+    flutter_db = hf if flutter_db is None else flutter_db
+    expressive_db = he if expressive_db is None else expressive_db
+    timbre_jitter_db = hj if timbre_jitter_db is None else timbre_jitter_db
     lo_hz, hi_hz = note_hz(low), note_hz(high)
     lo_m = int(round(69 + 12 * math.log2(lo_hz / 440.0)))
     hi_m = int(round(69 + 12 * math.log2(hi_hz / 440.0)))
@@ -550,6 +567,8 @@ def Melody(*, t_start: float, t_end: float, low: str = "C4", high: str = "C6", n
         m = degrees[idx]
         f = 440.0 * 2.0 ** ((m - 69) / 12.0)
         kw = dict(release_db_per_s=80.0 if legato else 150.0, label="melody")
+        if expressive_db and "decay_db_per_s" not in note_kw:
+            kw["decay_db_per_s"] = rng.uniform(-expressive_db, expressive_db) / max(0.3, d)   # slight swell or sag per note
         kw.update(note_kw)
         out.append(HarmonicNote(f0_hz=f, t_on=t, dur=d, level_db=level_db + rng.uniform(-2.0, 2.0), timbre=timbre,
                                 vib_rate_hz=vib_rate_hz * rng.uniform(1.0 - vib_rate_spread, 1.0 + vib_rate_spread),
@@ -738,7 +757,14 @@ class FeedbackRing:
     def randomize(self, seed: int) -> None:
         """(Re)draw the wander processes from ``seed`` (the renderer calls this with its own seed)."""
         lo = max(0.05, self.wander_hz * 0.3)
-        self._wander = Wobble(seed * 11 + 1, 4, lo, max(lo * 4.0, self.wander_hz * 3.0)) if self.wander_db else _ZERO_WOBBLE
+        # slow wander (air movement, performer) plus a faster 2-7 Hz flutter component at ~1/3 of the depth
+        # (turbulence / limiter and compressor gain riding): a plateaued ring is steady but not synthetic-steady
+        if self.wander_db:
+            slow = Wobble(seed * 11 + 1, 4, lo, max(lo * 4.0, self.wander_hz * 3.0))
+            fast = Wobble(seed * 11 + 4, 4, 2.0, 7.0)
+            self._wander = lambda t, s_=slow, f_=fast: 0.75 * s_(t) + 0.35 * f_(t)
+        else:
+            self._wander = _ZERO_WOBBLE
         self._ewander = Wobble(seed * 11 + 2, 3, *self.excess_wander_hz) if self.excess_wander_db else _ZERO_WOBBLE
         self._fdrift = Wobble(seed * 11 + 3, 3, 0.02, 0.3) if self.freq_drift_cents else _ZERO_WOBBLE
 

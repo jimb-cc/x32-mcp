@@ -512,6 +512,295 @@ def _m3(seed, st):
 
 
 # ==================================================================================================
+# X: the hostile examiner's additions (corpus-critic). Each targets a predicate a designer might lean on.
+# ==================================================================================================
+def loud_band(seed: int, bed_db: float = -26.0, drums_db: float = -16.0, bass_db: float = -22.0, gtr_db: float = -24.0,
+              vox_db: float = -18.0, t0: float = 0.3, t1: float = 13.7) -> list:
+    """A loud stage: bed, rock drums, bass, power chords, lead vocal (levels per source)."""
+    drums = DrumPattern(t_start=t0, t_end=t1, bpm=128.0, pattern="rock", level_db=drums_db, seed=seed)
+    bass = BassLine(notes=["E1", "G1", "A1", "E2", "D2"], t_start=t0, t_end=t1, note_s=0.42, gap_s=0.05, level_db=bass_db, seed=seed)
+    gtr = ChordPad(chords=[["E2", "B2", "E3"], ["G2", "D3", "G3"], ["A2", "E3", "A3"], ["D3", "A3", "D4"]], t_start=t0, t_end=t1,
+                   chord_s=1.875, level_db=gtr_db, timbre="el_guitar", decay_db_per_s=2.0, strum_s=0.02, seed=seed)
+    vox = Melody(t_start=t0 + 0.3, t_end=t1 - 0.2, low="A3", high="E5", note_s=(0.25, 1.4), level_db=vox_db, timbre="voice",
+                 seed=seed, vib_rate_hz=5.6, vib_cents=55.0, attack_s=0.05, glide_cents=-120.0, glide_s=0.1, repeat_prob=0.25)
+    return [music_bed(bed_db, lfo_db=3.0, seed=seed), drums, bass, gtr, vox]
+
+
+@scenario("X1_organ_held_notes", "electronic organ flue 8' (no Leslie, H2 -36: no usable family): E5 659 Hz (between bands 50/51) held 7 s, "
+          "then B4 3.5 s; level -27 over bed -52; flutter 0.1 dB, zero drift — a dead-steady family-less mid-band line that "
+          "was SEEN TO START and that ENDS", "NOTE; 0 detections", 12.0, tags=("music", "near_sine", "held", "examiner"))
+def _x1(seed, st):
+    a = HarmonicNote(f0_hz=note_hz("E5", 4.0), t_on=0.5, dur=7.0, level_db=-27.0, timbre="organ_flue", attack_s=0.008,
+                     flutter_db=0.1, timbre_jitter_db=3.0, release_db_per_s=90.0, seed=seed * 3 + 1, label="organ_E5")
+    b = HarmonicNote(f0_hz=note_hz("B4", 4.0), t_on=7.6, dur=3.5, level_db=-28.0, timbre="organ_flue", attack_s=0.008,
+                     flutter_db=0.1, timbre_jitter_db=3.0, release_db_per_s=90.0, seed=seed * 3 + 2, label="organ_B4")
+    return Scene(12.0, sources=[room_noise(), music_bed(-52.0, seed=seed), a, b])
+
+
+@scenario("X2_flute_held_vibrato", "flute upper register (H2 -26): E6 1319 Hz held 6 s with vibrato 5.2 Hz developing to +-18 c after 0.6 s, "
+          "10 c intonation drift, 1 dB flutter, breath noise; then A5 2.5 s", "NOTE; 0 detections", 11.0,
+          tags=("music", "near_sine", "held", "examiner"))
+def _x2(seed, st):
+    a = HarmonicNote(f0_hz=note_hz("E6", -6.0), t_on=1.0, dur=6.0, level_db=-28.0, timbre="flute_high", attack_s=0.06,
+                     vib_rate_hz=5.2, vib_cents=18.0, vib_delay_s=0.6, vib_ramp_s=0.8, drift_cents=10.0, flutter_db=1.0,
+                     timbre_jitter_db=3.0, am_db=0.4, am_hz=5.2, release_db_per_s=100.0, seed=seed * 5 + 1, label="flute_E6")
+    b = HarmonicNote(f0_hz=note_hz("A5", 3.0), t_on=7.4, dur=2.5, level_db=-29.0, timbre="flute_high", attack_s=0.06,
+                     vib_rate_hz=5.0, vib_cents=15.0, vib_delay_s=0.4, vib_ramp_s=0.6, drift_cents=10.0, flutter_db=1.0,
+                     seed=seed * 5 + 2, label="flute_A5")
+    breath = PinkBed(level_1k_db=-60.0, tilt_db_per_oct=0.5, f_lo=900.0, f_hi=10000.0, lfo_db=1.5, seed=seed * 5 + 3, label="breath")
+    return Scene(11.0, sources=[room_noise(), music_bed(-55.0, seed=seed), breath, a, b])
+
+
+@scenario("X3_whistle_held_drift", "human whistle: 1423 Hz held 4 s (-21 dB, ~33 dB prominent), 30 c slow drift + irregular 5.5 Hz +-35 c vibrato "
+          "+ 1.5 dB flutter; then 2.65 kHz 3 s entering with a +60 c glide; trace of H2 only (-42)", "NOTE; 0 detections", 10.0,
+          tags=("music", "near_sine", "held", "trap", "examiner"))
+def _x3(seed, st):
+    a = HarmonicNote(f0_hz=1423.0, t_on=0.8, dur=4.0, level_db=-21.0, timbre="whistle", attack_s=0.05, vib_rate_hz=5.5,
+                     vib_cents=35.0, vib_delay_s=0.3, vib_ramp_s=0.7, drift_cents=30.0, drift_hz=(0.1, 0.8), flutter_db=1.5,
+                     glide_cents=-70.0, glide_s=0.12, seed=seed * 7 + 1, label="whistle_1k4")
+    b = HarmonicNote(f0_hz=2650.0, t_on=5.6, dur=3.0, level_db=-22.0, timbre="whistle", attack_s=0.05, vib_rate_hz=6.0,
+                     vib_cents=30.0, vib_delay_s=0.5, vib_ramp_s=0.5, drift_cents=35.0, drift_hz=(0.1, 0.8), flutter_db=1.5,
+                     glide_cents=-60.0, glide_s=0.3, seed=seed * 7 + 2, label="whistle_2k6")
+    return Scene(10.0, sources=[room_noise(), music_bed(-52.0, seed=seed), a, b])
+
+
+@scenario("X4_sine_lead_portamento", "synth sine lead (H2 -48): G5 Bb5 C6 D6 phrases 1-2 s with 80 ms portamento and LFO vibrato (5.8 Hz +-30 c) delayed "
+          "0.5 s; then C6 HELD 6 s whose vibrato only fades in after 1.5 s: for 1.5 s a dead-flat, family-less, in-band line "
+          "at -26 dBFS. Passive physics cannot separate that window from a plateaued ring except by level/onset/context.",
+          "NOTE; 0 detections", 14.0, tags=("music", "near_sine", "held", "irreducible_passive", "examiner"))
+def _x4(seed, st):
+    seq = [("G5", 0.6, 1.2, 0.0), ("Bb5", 1.85, 1.0, 300.0), ("C6", 2.9, 1.6, 200.0), ("D6", 4.55, 1.1, 200.0), ("Bb5", 5.7, 1.3, -400.0)]
+    notes = []
+    for i, (nm, t, d, gl) in enumerate(seq):
+        notes.append(HarmonicNote(f0_hz=note_hz(nm), t_on=t, dur=d, level_db=-26.0, timbre="sine_lead", attack_s=0.01,
+                                  glide_cents=-gl, glide_s=0.08 if gl else 0.0, vib_rate_hz=5.8, vib_cents=30.0, vib_delay_s=0.5,
+                                  vib_ramp_s=0.3, flutter_db=0.15, release_db_per_s=120.0, seed=seed * 11 + i, label="sine_lead"))
+    held = HarmonicNote(f0_hz=note_hz("C6"), t_on=7.3, dur=6.0, level_db=-26.0, timbre="sine_lead", attack_s=0.01, glide_cents=-200.0,
+                        glide_s=0.08, vib_rate_hz=5.8, vib_cents=35.0, vib_delay_s=1.5, vib_ramp_s=1.0, flutter_db=0.15,
+                        release_db_per_s=120.0, seed=seed * 11 + 9, label="sine_lead_held")
+    return Scene(14.0, sources=[room_noise(), music_bed(-52.0, seed=seed), Group(notes, "lead"), held])
+
+
+@scenario("X5_808_bassline_40_60Hz", "clean 808 sine bass E1 G1 A1 Bb1 (41-58 Hz), 1.4 s notes, -150 c pitch envelope over 100 ms, 8 dB/s decay, "
+          "-26 dB, NO kick, H2 -35; then a sustained synth sine A1 (55 Hz) for 4 s dead steady at -28: no family, in the "
+          "sub band, analyser-limited onsets", "NOTE; 0 detections", 15.0, tags=("music", "lf", "near_sine", "examiner"))
+def _x5(seed, st):
+    sub = BassLine(notes=["E1", "G1", "A1", "Bb1"], t_start=0.5, t_end=10.0, note_s=1.4, gap_s=0.1, level_db=-26.0, timbre="808",
+                   seed=seed, decay_db_per_s=8.0, glide_cents=150.0, glide_s=0.10, drift_cents=0.0, flutter_db=0.1)
+    pad = HarmonicNote(f0_hz=note_hz("A1"), t_on=10.5, dur=4.0, level_db=-28.0, timbre="synth_sine_bass", flutter_db=0.1,
+                       release_db_per_s=60.0, seed=seed * 13 + 1, label="sine_sub_A1")
+    return Scene(15.0, sources=[room_noise(), music_bed(-64.0, tilt=-1.6, lfo_db=1.0, seed=seed), sub, pad])
+
+
+@scenario("X6_soprano_closed_vowel_band_edge", "closed-vowel soprano note (H2 -20, H3 -26) placed ON the band 51/52 edge (717 Hz), held 5 s: scoop, vibrato "
+          "6.2 Hz ramping to +-90 c after 0.5 s, 12 c drift, 1.2 dB shimmer; peak band hops most frames; then D5 2 s",
+          "NOTE; 0 detections", 10.0, tags=("music", "edge", "near_sine", "examiner"))
+def _x6(seed, st):
+    a = HarmonicNote(f0_hz=band_centre_hz(51.5), t_on=1.0, dur=5.0, level_db=-26.0, timbre="voice_closed", attack_s=0.08,
+                     glide_cents=-120.0, glide_s=0.15, vib_rate_hz=6.2, vib_cents=90.0, vib_delay_s=0.5, vib_ramp_s=0.5,
+                     drift_cents=12.0, flutter_db=2.0, timbre_jitter_db=4.0, release_db_per_s=120.0, seed=seed * 17 + 1, label="soprano_edge")
+    b = HarmonicNote(f0_hz=note_hz("D5", -8.0), t_on=6.8, dur=2.0, level_db=-27.0, timbre="voice_closed", attack_s=0.08,
+                     glide_cents=-100.0, glide_s=0.12, vib_rate_hz=6.0, vib_cents=70.0, vib_delay_s=0.3, vib_ramp_s=0.4,
+                     drift_cents=12.0, flutter_db=2.0, seed=seed * 17 + 2, label="soprano_D5")
+    return Scene(10.0, sources=[room_noise(), music_bed(-55.0, seed=seed), a, b])
+
+
+def _quiet_combo(seed: int, t1: float, organ_db: float = -34.0, mel_db: float = -32.0, bass_db: float = -40.0) -> list:
+    organ = ChordPad(chords=[["C4", "E4", "G4"], ["A3", "C4", "F4"], ["B3", "D4", "G4"], ["A3", "C4", "E4"]], t_start=-1.0, t_end=t1,
+                     chord_s=2.4, level_db=organ_db, timbre="organ_8_4", chorus_db=0.5, chorus_hz=0.8, seed=seed)
+    mel = Melody(t_start=0.4, t_end=t1 - 0.3, low="C5", high="C6", note_s=(0.3, 1.0), level_db=mel_db, timbre="piano", seed=seed,
+                 vib_cents=0.0, decay_db_per_s=4.0, attack_s=0.005, repeat_prob=0.2)
+    bass = BassLine(notes=["C2", "A1", "G1", "A1"], t_start=0.2, t_end=t1, note_s=1.1, gap_s=0.1, level_db=bass_db, seed=seed)
+    return [organ, mel, bass]
+
+
+@scenario("X7_plateaued_ring_under_music_from_t0", "compressor-limited ring at 1683 Hz (band 64 +35 c) ALREADY at its -30 dBFS plateau when the detector arms "
+          "(~20 dB prominent, non-periodic +-0.4 dB wander), UNDER organ chords + piano melody + bass + bed -50: no onset, no "
+          "growth, no clip, programme partials share its neighbourhood", "FEEDBACK from t=0; detect <= 1 s", 12.0,
+          tags=("feedback", "established", "music", "mixture", "examiner"), latency_budget_ms=1000.0)
+def _x7(seed, st):
+    ring = FeedbackRing(freq_hz=band_centre_hz(64, 35.0), excess_db=1.0, tau_loop_s=0.011, sat_db=-30.0, established=True,
+                        wander_db=0.4, wander_hz=0.5, label="ring_1k68_plateau")
+    return Scene(12.0, sources=[room_noise(), music_bed(-50.0, seed=seed)] + _quiet_combo(seed, 11.8), rings=[ring])
+
+
+@scenario("X8_slow_ring_midband_under_chords", "marginal loop at 1287 Hz (band 60 +42 c): 0.035 +- 0.02 dB excess, tau 11 ms -> 1.4-5 dB/s irregular ramp "
+          "from -62 (t=1) toward -24, under organ chords changing every 2.4 s + piano + bed -52", "FEEDBACK; detect within 1 s of "
+          "visibility", 18.0, tags=("feedback", "slow", "music", "mixture", "examiner"), latency_budget_ms=1000.0)
+def _x8(seed, st):
+    ring = FeedbackRing(freq_hz=band_centre_hz(60, 42.0), excess_db=0.035, excess_wander_db=0.02, tau_loop_s=0.011, t_on=1.0,
+                        start_db=-62.0, sat_db=-24.0, wander_db=0.3, label="slow_1k29")
+    src = _quiet_combo(seed, 17.8, organ_db=-36.0, mel_db=-34.0, bass_db=-42.0)
+    return Scene(18.0, sources=[room_noise(), music_bed(-52.0, seed=seed)] + src, rings=[ring])
+
+
+@scenario("X9_ring_rta_midpoint_525Hz_speech", "lav/lectern loop EXACTLY half-way between RTA centres 47/48 (525.4 Hz; also between GEQ 500/630): "
+          "0.3 dB on a 22 ms loop -> 13.6 dB/s from -65 at t=3 to -16, under speech (-30) whose H4/H5 sweep through the mode",
+          "FEEDBACK onset 3.0; ONE detection stream; detect <= 300 ms", 12.0, tags=("feedback", "edge", "music", "examiner"))
+def _x9(seed, st):
+    sp = SpeechBursts(t_start=0.4, t_end=11.6, level_db=-30.0, seed=seed)
+    form = Group([NoiseBurst(band_lo=56, band_hi=76, t_on=n.t_on, level_db=-50.0, attack_s=0.03, hold_s=n.dur * 0.7,
+                             decay_db_per_s=150.0, dur=n.dur + 0.3, label="formants") for n in sp.children], "formants", "NOTE")
+    ring = FeedbackRing(freq_hz=band_centre_hz(47.5), excess_db=0.3, tau_loop_s=0.022, t_on=3.0, start_db=-65.0, sat_db=-16.0,
+                        wander_db=0.3, label="lav_525_mid")
+    return Scene(12.0, sources=[room_noise(), music_bed(-58.0, lfo_db=0.5, seed=seed), sp, form], rings=[ring])
+
+
+@scenario("X10_two_rings_exact_octave", "two candidates of the same rig an EXACT octave apart: 1587 Hz (50 dB/s from t=2.0) and 3174 Hz (62 dB/s from "
+          "t=2.3), both on an 8 ms loop, plateaux -9/-11; light hats + bed -55. The <1 % coincidence a family test must survive.",
+          "both FEEDBACK; both detected <= 300 ms", 9.0, tags=("feedback", "trap", "coincidence", "examiner"))
+def _x10(seed, st):
+    a = FeedbackRing(freq_hz=1587.0, excess_db=0.4, tau_loop_s=0.008, t_on=2.0, start_db=-66.0, sat_db=-9.0, label="ring_1587")
+    b = FeedbackRing(freq_hz=3174.0, excess_db=0.5, tau_loop_s=0.008, t_on=2.3, start_db=-68.0, sat_db=-11.0, label="ring_3174")
+    hats = DrumPattern(t_start=0.5, t_end=8.5, bpm=116.0, pattern="hats_only", level_db=-34.0, seed=seed)
+    return Scene(9.0, sources=[room_noise(), music_bed(-55.0, lfo_db=1.0, seed=seed), hats], rings=[a, b])
+
+
+@scenario("X11_amp_clipped_howl_minus12dBFS", "howl at 905 Hz through a clipping powered speaker: 1.2 dB on an 8 ms loop -> 150 dB/s from -60 at t=4 to a "
+          "-12 dBFS plateau (desk NOT clipped) carrying acoustic distortion partials H2 -22, H3 -14, H4 -30, H5 -20 that the mic "
+          "hears; medium-loud band underneath", "FEEDBACK onset 4.0; detect <= 300 ms; harmonics do not make it music", 10.0,
+          tags=("feedback", "clip", "harmonics", "fast", "music", "examiner"))
+def _x11(seed, st):
+    ring = FeedbackRing(freq_hz=band_centre_hz(55, 27.0), excess_db=1.2, tau_loop_s=0.008, t_on=4.0, start_db=-60.0, sat_db=-12.0,
+                        harmonics=((2, -22.0), (3, -14.0), (4, -30.0), (5, -20.0)), harmonics_knee_db=-35.0, wander_db=0.5,
+                        label="howl_905_ampclip")
+    return Scene(10.0, sources=[room_noise()] + loud_band(seed, bed_db=-36.0, drums_db=-26.0, bass_db=-30.0, gtr_db=-32.0, vox_db=-26.0,
+                                                          t1=9.7), rings=[ring])
+
+
+def _drop_raise(seed, st, *, prog: float, satc: float):
+    organ = ChordPad(chords=[["D3", "A3", "F#4", "D5"]], t_start=-2.0, t_end=10.8, chord_s=12.8, level_db=-32.0, timbre="organ_8_4",
+                     chorus_db=0.4, chorus_hz=0.9, seed=seed)
+    bass = BassLine(notes=["D2", "A1", "B1", "G1"], t_start=0.2, t_end=10.8, note_s=0.9, gap_s=0.1, level_db=-38.0, seed=seed)
+    master = CommonModeGain(points=((0.0, 0.0), (3.0, 0.0), (3.0, -20.0), (7.0, -20.0), (7.0, 0.0)), label="master_drop_raise")
+    ring = FeedbackRing(freq_hz=band_centre_hz(67, 15.0), excess_db=1.0, tau_loop_s=0.010, sat_db=-12.0, established=True,
+                        wander_db=0.4, label="ring_2k05")
+    return Scene(11.0, sources=[room_noise(), music_bed(-52.0, seed=seed), organ, bass], rings=[ring], master=master,
+                 prog_coupling=prog, loop_coupling=1.0, sat_coupling=satc)
+
+
+@scenario("X12a_master_drop20_raise_channel", "COMMON MODE BOTH WAYS via a channel/DCA-type move (programme follows 1:1, plateau follows): organ chord + bass "
+          "+ established 2.05 kHz ring at -12; at t=3 the fader drops -20 dB (ring loop 19 dB under: dies in a frame; programme "
+          "-20 with LF lag/release), at t=7 back up +20 (every line 'grows' through its analyser rise; ring re-grows at 100 dB/s "
+          "from the floor)", "FEEDBACK episode [0, ~3] and a NEW episode from 7.0 (detect <= 300 ms after visibility); 0 detections "
+          "on programme during either step", 11.0, tags=("feedback", "common_mode", "music", "established", "examiner"))
+def _x12a(seed, st):
+    return _drop_raise(seed, st, prog=1.0, satc=1.0)
+
+
+@scenario("X12b_master_drop20_raise_busmaster", "as X12a but the move is the BUS MASTER at a pre-fader tap: programme does not move at all, only the ring "
+          "dies at t=3 and re-grows at t=7 (100 dB/s) to the same -12 plateau", "FEEDBACK episodes [0, ~3] and from 7.0; 0 FP",
+          11.0, tags=("feedback", "common_mode", "music", "established", "examiner"))
+def _x12b(seed, st):
+    return _drop_raise(seed, st, prog=0.0, satc=0.0)
+
+
+@scenario("X13_decay16_jazz_lav_ring", "M3 jazz trio + 416 Hz lav ring rendered with /-prefs/rta/decay = 16 (3.75 dB/s release): every piano/bass "
+          "partial leaves a flat tail, neighbour medians rise, prominences shrink — the REAL ring must still be found and the "
+          "tails must not be", "FEEDBACK onset 4.0; detect <= 600 ms; 0 FP", 14.0,
+          tags=("feedback", "music", "mixture", "prefs", "examiner"), analyser={"decay_s": 16.0}, latency_budget_ms=600.0)
+def _x13(seed, st):
+    return _m3(seed, st)
+
+
+@scenario("X14_peakhold_loud_band_wedge_ring", "M1 loud band + 2.83 kHz wedge ring rendered with peak-hold 1 s: every hit freezes dozens of bands into "
+          "dead-flat plateaus; the ring's 200 dB/s rise and plateau are still there", "FEEDBACK onset 5.0; detect <= 300 ms; "
+          "0 FP (or refuse to arm: ANALYSER_MISCONFIGURED)", 12.0, tags=("feedback", "music", "mixture", "prefs", "examiner"),
+          analyser={"peak_hold_s": 1.0})
+def _x14(seed, st):
+    return _m1(seed, st)
+
+
+@scenario("X15_kick_bass_unison_55Hz", "kick tuned to A (55 Hz, four-on-the-floor 120 bpm, -28) locked with a bass riff A1 A1 E1 G1 (-34, H2 +3+-3): "
+          "band 15 is re-struck every 250-500 ms by two sources and never releases; hats; bed -56", "NOTE/TRANSIENT; 0 detections",
+          16.0, tags=("music", "lf", "examiner"))
+def _x15(seed, st):
+    kick = DrumPattern(t_start=0.5, t_end=15.5, bpm=120.0, pattern="four_on_floor", level_db=-28.0, seed=seed, kick_hz=55.0)
+    bass = BassLine(notes=["A1", "A1", "E1", "G1"], t_start=0.5, t_end=15.5, note_s=0.42, gap_s=0.08, level_db=-34.0, seed=seed,
+                    decay_db_per_s=6.0)
+    return Scene(16.0, sources=[room_noise(), music_bed(-56.0, tilt=-1.8, lfo_db=2.0, seed=seed), kick, bass])
+
+
+@scenario("X16_wedge_ring_315Hz_loud_band", "LOUD band (bed -26/band, drums -16, bass -22, guitars -24, vocal -18) and a wedge ring at 318 Hz (band 40 "
+          "+30 c; GEQ 315): 1.2 dB on a 5 ms loop -> 240 dB/s from -50 at t=6 to -3; bass H4-H6 and guitar fundamentals live in "
+          "the same bands; prominence at the plateau only ~15-20 dB", "FEEDBACK onset 6.0; detect <= 300 ms after visibility",
+          14.0, tags=("feedback", "music", "mixture", "loud", "fast", "lf_mid", "examiner"))
+def _x16(seed, st):
+    ring = FeedbackRing(freq_hz=band_centre_hz(40, 30.0), excess_db=1.2, tau_loop_s=TAU_LOOP_WEDGE_S, t_on=6.0, start_db=-50.0,
+                        sat_db=-3.0, wander_db=0.5, label="wedge_318")
+    return Scene(14.0, sources=[room_noise()] + loud_band(seed), rings=[ring])
+
+
+@scenario("X17_ring_122Hz_acoustic_guitar_body", "fingerstyle acoustic guitar (G Em C D, let ring, body hump bands 22-25) through a wedge whose loop "
+          "sits at 121.8 Hz (band 26 +42 c, 24 c under the B2 the guitar keeps playing): -3 dB until 5.5 s (rings on every B), "
+          "pushed to +0.4 by 6.5 s -> 33 dB/s to -12", "FEEDBACK at 122 Hz; detect <= 600 ms; needs the LF prior relaxed", 14.0,
+          tags=("feedback", "music", "lf", "mixture", "examiner"), latency_budget_ms=600.0, lf_optin=True)
+def _x17(seed, st):
+    gtr = ChordPad(chords=[["G2", "B2", "D3", "G3"], ["E2", "B2", "E3", "G3"], ["C3", "E3", "G3", "C4"], ["D3", "A3", "D4", "F#4"]],
+                   t_start=0.5, t_end=13.5, chord_s=2.0, level_db=-33.0, timbre="ac_guitar", decay_db_per_s=5.0, strum_s=0.22,
+                   release_db_per_s=70.0, seed=seed)
+    body = PinkBed(level_1k_db=-56.0, tilt_db_per_oct=-1.0, f_lo=60.0, f_hi=8000.0, bumps=((23.5, 7.0, 1.8),), seed=seed * 3 + 1,
+                   random_humps=2, hump_db=2.0, label="guitar_body")
+    ring = FeedbackRing(freq_hz=band_centre_hz(26, 42.0), excess_db=-3.0, excess_points=((0.0, -3.0), (5.5, -3.0), (6.5, 0.4)),
+                        tau_loop_s=0.012, t_on=0.0, start_db=-80.0, sat_db=-12.0, label="wedge_122")
+    return Scene(14.0, sources=[room_noise(), body, gtr], rings=[ring])
+
+
+@scenario("X18_applause_crowd_30s", "30 s of crowd: applause bed 300 Hz-6 kHz swelling +12..+18 dB over 2 s twice and undulating (independent "
+          "octave regions), three crowd whistles 1.6-2.6 kHz (0.6-1.2 s, drift, glides), 'woo' shouts (voice 400-600 Hz with "
+          "+300 c scoops)", "COMMON_MODE + NOTE; 0 detections", 30.0, tags=("music", "crowd", "common_mode", "trap", "examiner"))
+def _x18(seed, st):
+    import random as _r
+    rng = _r.Random(seed * 991 + 3)
+    crowd = PinkBed(level_1k_db=-40.0, tilt_db_per_oct=0.0, f_lo=300.0, f_hi=6000.0, t_on=0.5, attack_s=2.0, t_off=28.0,
+                    release_db_per_s=12.0, lfo_db=2.5, region_mod_db=2.5, random_humps=3, hump_db=3.0, seed=seed * 5 + 1,
+                    swell=((0.0, -12.0), (2.5, 0.0), (8.0, -4.0), (12.0, -10.0), (14.0, -1.0), (20.0, -6.0), (26.0, -14.0), (30.0, -22.0)),
+                    label="applause")
+    whistles = []
+    for i, (t, f) in enumerate(((3.2, 1750.0), (13.6, 2280.0), (15.1, 2600.0))):
+        whistles.append(HarmonicNote(f0_hz=f * 2 ** (rng.uniform(-60, 60) / 1200), t_on=t + rng.uniform(-0.3, 0.3), dur=rng.uniform(0.6, 1.2),
+                                     level_db=-19.0 + rng.uniform(-3, 2), timbre="whistle", attack_s=0.05, vib_rate_hz=rng.uniform(5, 7),
+                                     vib_cents=rng.uniform(30, 70), vib_delay_s=0.1, vib_ramp_s=0.2, glide_cents=rng.choice((-150.0, 120.0, 200.0)),
+                                     glide_s=rng.uniform(0.1, 0.25), drift_cents=30.0, flutter_db=2.0, seed=seed * 31 + i, label="crowd_whistle"))
+    woos = []
+    t = 2.0
+    i = 0
+    while t < 27.0:
+        woos.append(HarmonicNote(f0_hz=rng.uniform(380.0, 600.0), t_on=t, dur=rng.uniform(0.35, 0.7), level_db=-27.0 + rng.uniform(-4, 2),
+                                 timbre="voice", attack_s=0.06, glide_cents=-300.0, glide_s=rng.uniform(0.15, 0.3), drift_cents=25.0,
+                                 flutter_db=2.0, timbre_jitter_db=5.0, release_db_per_s=100.0, seed=seed * 37 + i, label="woo"))
+        t += rng.uniform(1.2, 3.5)
+        i += 1
+    return Scene(30.0, sources=[room_noise(), crowd, Group(whistles, "whistles"), Group(woos, "shouts")])
+
+
+@scenario("X19_handheld_ring_stalls_and_hops", "hand-held vocal mic: 2.35 kHz loop grows at ~31 dB/s from t=2, STALLS (excess -> -0.15: sags ~11 dB over "
+          "0.6 s) as the singer moves, regrows at 44 dB/s to -10, then HOPS +125 c to the neighbouring candidate at t=4.6 (with 6 c "
+          "drift), under a vocal melody -28 + bed -50", "ONE FEEDBACK event (non-monotone, hopping); detect <= 300 ms", 9.0,
+          tags=("feedback", "music", "hop", "nonmonotone", "examiner"))
+def _x19(seed, st):
+    vox = Melody(t_start=0.4, t_end=8.6, low="A3", high="D5", note_s=(0.3, 1.2), level_db=-28.0, timbre="voice", seed=seed,
+                 vib_rate_hz=5.5, vib_cents=50.0, attack_s=0.05, glide_cents=-100.0, glide_s=0.1, repeat_prob=0.2)
+    ring = FeedbackRing(freq_hz=band_centre_hz(69, 13.0), excess_db=0.25, tau_loop_s=0.008, t_on=2.0, start_db=-65.0, sat_db=-10.0,
+                        excess_points=((0.0, 0.25), (3.2, 0.25), (3.3, -0.15), (3.9, -0.15), (4.0, 0.35)), hop_at_s=4.6, hop_cents=125.0,
+                        freq_drift_cents=6.0, wander_db=0.5, label="handheld_2k35")
+    return Scene(9.0, sources=[room_noise(), music_bed(-50.0, seed=seed), vox], rings=[ring])
+
+
+@scenario("X20_mains_hum_and_hvac_whine", "stationary non-feedback lines present before arm: mains hum 50 Hz + buzz harmonics 100/150/200/250/300/350 Hz "
+          "(-46, dead steady, exact family) and a family-less HVAC/projector whine at 587 Hz (-50, +-0.3 dB), quiet bed -62, some "
+          "speech 3-9 s", "0 detections (stationary lines: zero growth, exact family / low level; a probe would show 1 dB/dB)", 12.0,
+          tags=("stationary", "trap", "lf", "irreducible_passive", "examiner"))
+def _x20(seed, st):
+    hum = HarmonicNote(f0_hz=50.0, t_on=-5.0, dur=30.0, level_db=-46.0, timbre="hum", flutter_db=0.05, timbre_jitter_db=2.0,
+                       seed=seed * 19 + 1, label="mains_hum")
+    whine = HarmonicNote(f0_hz=587.0, t_on=-5.0, dur=30.0, level_db=-50.0, timbre="sine_lead", flutter_db=0.3, drift_cents=2.0,
+                         seed=seed * 19 + 2, label="hvac_whine")
+    sp = SpeechBursts(t_start=3.0, t_end=9.0, level_db=-34.0, seed=seed)
+    return Scene(12.0, sources=[room_noise(-74.0), music_bed(-62.0, lfo_db=0.5, seed=seed), hum, whine, sp])
+
+
+# ==================================================================================================
 # rendering + cache
 # ==================================================================================================
 _CACHE: dict[tuple, tuple[list[tuple[float, list[float]]], list[Episode], Renderer]] = {}

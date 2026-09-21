@@ -293,3 +293,61 @@ def test_note_hz():
     assert note_hz("E1") == pytest.approx(41.2, abs=0.05)
     assert note_hz("Bb1") == pytest.approx(58.27, abs=0.05)
     assert note_hz(196.0, 1200.0) == pytest.approx(392.0)
+
+
+# -- corpus-critic additions ----------------------------------------------------------------------------
+def test_regeneration_is_comb_selective():
+    from rtasim.physics import comb_gain_lin, comb_band_mean_lin
+    g = 10 ** (-3.0 / 20)                                     # loop 3 dB under threshold
+    assert 10 * math.log10(comb_gain_lin(g, 0.0, 0.012)) == pytest.approx(10.7, abs=0.1)      # on the mode: +10.7 dB
+    assert comb_gain_lin(g, 0.5 / 0.012, 0.012) == pytest.approx(1.0 / (1 + g) ** 2, rel=1e-6)  # between modes: < 0 dB
+    # a band spanning many comb periods sees the mean 1/(1-g^2); a band much narrower than 1/tau sees ~the peak
+    assert comb_band_mean_lin(g, 2000.0, 0.012) == pytest.approx(1.0 / (1 - g * g), rel=0.03)
+    assert comb_band_mean_lin(g, 0.5, 0.012) == pytest.approx(comb_gain_lin(g, 0.0, 0.012), rel=0.02)
+    # a programme line 100 cents (11 Hz at 196 Hz) off a tau=12 ms mode regenerates far less than one 2 Hz off
+    ring = FeedbackRing(freq_hz=199.7, excess_db=-3.0, tau_loop_s=0.012, excitation_db=-200.0, wander_db=0.0, excess_wander_db=0.0)
+    on = ring.regen_extra_db(-3.0, 199.7, [(197.7, -30.0)], -200.0)
+    off = ring.regen_extra_db(-3.0, 199.7, [(188.5, -30.0)], -200.0)
+    assert on > off + 8.0
+    assert on == pytest.approx(-30.0 - 6.0 + 10 * math.log10(comb_gain_lin(g, 2.0, 0.012) - 1.0), abs=0.05)
+
+
+def test_plateau_follows_pre_tap_gain_only_when_told():
+    ring = FeedbackRing(freq_hz=2000.0, excess_db=1.0, sat_db=-12.0, established=True, wander_db=0.0, excess_wander_db=0.0,
+                        excite_from_programme=False)
+    ring.step(0.0, 0.0125, common_db=0.0, geq_gain_db=0.0, prog_gain_db=6.0)
+    assert ring.sat_now == pytest.approx(-6.0) and ring.level_db <= -6.0
+    ring.step(0.1, 0.0125, common_db=0.0, geq_gain_db=0.0, prog_gain_db=20.0)
+    assert ring.sat_now == pytest.approx(-0.5)                 # never into the clip flag
+    clip = FeedbackRing(freq_hz=2000.0, excess_db=1.0, sat_db=0.0, established=True, wander_db=0.0, excess_wander_db=0.0)
+    clip.step(0.0, 0.0125, common_db=0.0, geq_gain_db=0.0, prog_gain_db=-10.0)
+    assert clip.sat_now == 0.0                                  # a desk-clip plateau is at the tap: does not move
+
+
+def test_ring_wander_is_not_a_pure_tone_and_notes_are_not_dead_flat():
+    import statistics
+    fr = frames("S2a_established_ring_8k", 1)
+    lv = [v[87] for _, v in fr]
+    d1 = [b - a for a, b in zip(lv, lv[1:])]
+    # a pure 0.6 Hz sinusoid has (almost) no sign changes in its first difference within a half period (17 frames);
+    # the seeded multi-rate wander changes direction several times per second
+    sign_changes = sum(1 for a, b in zip(d1, d1[1:]) if a * b < 0)
+    assert sign_changes > 25, sign_changes
+    assert 0.03 < statistics.pstdev(lv) < 0.6
+    # a sung note flutters and drifts: its peak band level is not constant to the quantum
+    fr = frames("X6_soprano_closed_vowel_band_edge", 1)
+    seg = [max(v[50:54]) for _, v in fr[40:100]]
+    assert statistics.pstdev(seg) > 0.5
+
+
+def test_examiner_scenarios_ground_truth():
+    gt = ground_truth("X12a_master_drop20_raise_channel", 1)["events"]
+    assert len(gt) == 2 and gt[0]["t_onset"] == 0.0 and gt[0]["t_end"] == pytest.approx(3.0, abs=0.1)
+    assert gt[1]["t_onset"] == pytest.approx(7.0, abs=0.06) and 7.1 < gt[1]["t_prom"] < 7.6
+    two = ground_truth("X10_two_rings_exact_octave", 1)["events"]
+    assert len(two) == 2 and abs(two[1]["freq_hz"] / two[0]["freq_hz"] - 2.0) < 1e-6
+    one = ground_truth("X19_handheld_ring_stalls_and_hops", 1)["events"]
+    assert len(one) == 1                                        # a sag and a hop do not make two events
+    for name in ("X1_organ_held_notes", "X4_sine_lead_portamento", "X5_808_bassline_40_60Hz", "X18_applause_crowd_30s",
+                 "X20_mains_hum_and_hvac_whine", "X15_kick_bass_unison_55Hz"):
+        assert ground_truth(name, 2)["events"] == [], name

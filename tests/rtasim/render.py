@@ -233,7 +233,14 @@ class Renderer:
                     if d > best_dom:
                         best_dom = d
                     if d >= DOMINANCE_MIN:
-                        p = max(prominence_at(values, bb), cluster_prominence_at(values, bb))
+                        p = prominence_at(values, bb)
+                        # the cluster measure counts only if the ring also dominates the CLUSTER's power (a programme
+                        # partial in the adjacent band must not make the ring 'visible' early)
+                        lo, hi = max(0, bb - 1), min(RTA_BANDS, bb + 2)
+                        pw = [10.0 ** (values[j] / 10.0) for j in range(lo, hi)]
+                        share = sum(w * dom[j] for w, j in zip(pw, range(lo, hi))) / max(1e-30, sum(pw))
+                        if share >= DOMINANCE_MIN:
+                            p = max(p, cluster_prominence_at(values, bb))
                         if p > best_prom:
                             best_prom = p
             self.trace[i].append(RingFrame(ts=ts, level_db=r.level_db, e_eff=r.e_eff, f_hz=f, band=b,
