@@ -44,6 +44,8 @@ from .scenarios import SCENARIOS, Scenario, render as render_cached
 
 ATTRIB_LOOKBACK_S = 1.0
 EPISODE_GRACE_S = 1.0
+ACTUATION_DELAY_FRAMES = 1 # closed loop: a cut decided on frame k is written over OSC and lands during frame k+1,
+                           # so it is fully in effect from frame k+2 (0 = the optimistic "before the next frame")
 EARLY_CREDIT_S = 2.0       # an EARLY (sub-threshold ringing) detection this close before onset satisfies the event
 OCT_TOL = 1.0 / 6.0
 HARMONIC_KS = (2, 3, 4, 5, 6, 7)
@@ -197,10 +199,11 @@ def _attribute(dets: list[Det], renderer: Renderer, episodes: list[Episode]) -> 
                     continue
                 kk = min(max(0, k), len(tr) - 1)
                 fr = tr[kk]
-                if not (fr.active and r.sat_db >= -0.5 and fr.level_db > r.clip_knee_db):
+                if not (fr.active and r.harmonics_active(fr.level_db)):
                     continue
                 u_ring = 10.0 * math.log2(fr.f_hz / RTA_BAND_HZ[0])
-                if any(abs(d.band - (u_ring + 10.0 * math.log2(kh))) <= 1.0 for kh in HARMONIC_KS):
+                ks = set(HARMONIC_KS) | {k for k, _ in r.harmonics}
+                if any(abs(d.band - (u_ring + 10.0 * math.log2(kh))) <= 1.0 for kh in ks):
                     best = i
                     d.attributed = i
                     d.verdict = "HARM"
@@ -242,7 +245,8 @@ def _attribute(dets: list[Det], renderer: Renderer, episodes: list[Episode]) -> 
 
 def run_one(detector_factory: Callable[[Sequence[float]], Any], scenario: Scenario | str, seed: int, *,
             closed_loop: bool = False, analyser_overrides: dict[str, Any] | None = None,
-            notch_cfg: Any = None, geq_band_hz: Sequence[float] = GEQ_BAND_HZ) -> RunResult:
+            notch_cfg: Any = None, geq_band_hz: Sequence[float] = GEQ_BAND_HZ,
+            actuation_delay_frames: int = ACTUATION_DELAY_FRAMES) -> RunResult:
     sc = SCENARIOS[scenario] if isinstance(scenario, str) else scenario
     t0 = time.perf_counter()
     det = detector_factory(RTA_BAND_HZ)
@@ -266,8 +270,14 @@ def run_one(detector_factory: Callable[[Sequence[float]], Any], scenario: Scenar
         from x32mcp.detector import DetectorConfig, NotchController
         cfg = notch_cfg or DetectorConfig()
         nc = NotchController(cfg, geq_band_hz, lambda cur, new: None, budget=cfg.notch_budget_default)
+        from x32mcp.detector import Detection
         r = Renderer(sc.build(seed, analyser_overrides), seed, geq_band_hz=geq_band_hz)
+        pending: list[tuple[int, int, float, float]] = []      # (apply_before_frame, band, gain, ts_decided)
         while not r.done:
+            while pending and pending[0][0] <= r.k:
+                _, band, gain, ts0 = pending.pop(0)
+                r.set_geq_gain(band, gain)
+                cuts.append((ts0, band, gain))
             fr = r.step_frame()
             if fr is None:
                 continue
@@ -275,14 +285,12 @@ def run_one(detector_factory: Callable[[Sequence[float]], Any], scenario: Scenar
             new = collect(det.feed(vals, ts))
             dets.extend(new)
             for d in new:
-                from x32mcp.detector import Detection
                 dd = Detection(ts=d.ts, band=d.band, freq_hz=d.freq_hz, level_db=d.level_db or 0.0,
                                prominence_db=d.prominence_db or 0.0, slope_db_per_s=d.slope_db_per_s or 0.0,
                                frames=0, confidence=d.confidence)
                 notch = nc.plan(dd, 0, "sim")
                 if notch is not None:
-                    r.set_geq_gain(notch.band, notch.depth_db)
-                    cuts.append((ts, notch.band, notch.depth_db))
+                    pending.append((r.k + actuation_delay_frames, notch.band, notch.depth_db, ts))
         episodes = ring_episodes(r)
     _attribute(dets, r, episodes)
     return RunResult(sc.name, seed, closed_loop, episodes, dets, cuts, sc.latency_budget_ms, time.perf_counter() - t0)

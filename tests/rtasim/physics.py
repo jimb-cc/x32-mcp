@@ -127,7 +127,8 @@ class AnalyserSettings:
     quantum_db: float = 1.0 / 256.0      # int16/256 wire format
     substeps: int = 4                    # internal steps per 50 ms frame (12.5 ms)
     pre_roll_s: float = 1.5              # settle beds / established rings before frame 0
-    frame_jitter_s: float = 0.0          # timestamp jitter (uniform ±) on the reported ts
+    frame_jitter_s: float = 0.003        # timestamp jitter (uniform ±) on the reported ts: /meters/15 arrives over
+                                         # UDP through an asyncio loop; exact 50.000 ms spacing is a simulator tell
     drop_frame_prob: float = 0.0         # probability a frame is dropped (ts gap), [A §7 (vii)]
 
     def with_overrides(self, **kw: Any) -> "AnalyserSettings":
@@ -204,6 +205,39 @@ def regen_boost_db(excess_db: float, cap_db: float = 60.0) -> float:
     return min(cap_db, -20.0 * math.log10(1.0 - g))
 
 
+# Regeneration is frequency-selective: the closed-loop power response of a loop with round-trip gain g<1 and
+# delay τ at detuning δ (Hz) from a phase-aligned candidate is the comb
+#     |1/(1 − g·e^{−j2πδτ})|² = 1 / ((1−g)² + 4g·sin²(πδτ))            [L §1.2/§1.5: candidates every 1/τ]
+# peak 1/(1−g)² on the mode (= regen_boost_db), 1/(1+g)² (< 0 dB) half-way between modes, −3 dB half-width
+# ≈ (1−g)/(2πτ√g) Hz: 12 Hz at g=−4 dB, 3.7 Hz at −1 dB for τ=12 ms. A programme line must sit within a few
+# Hz (tens of cents at 200 Hz, a few cents at 2 kHz) of the mode to get the full boost; broadband excitation
+# gets the MEAN of the comb over the analyser band (→ 1/(1−g²) once the band spans a comb period).
+G_MAX_SUBTHRESHOLD: float = 10.0 ** (-0.25 / 20.0)   # cap for the steady-state formulas (e = −0.25 dB)
+
+
+def comb_gain_lin(g: float, detune_hz: float, tau_s: float) -> float:
+    g = min(G_MAX_SUBTHRESHOLD, max(0.0, g))
+    s_ = math.sin(math.pi * detune_hz * tau_s)
+    return 1.0 / ((1.0 - g) ** 2 + 4.0 * g * s_ * s_)
+
+
+def comb_band_mean_lin(g: float, band_bw_hz: float, tau_s: float) -> float:
+    """Mean of the comb power response over a band of width ``band_bw_hz`` centred on the mode (closed form of
+    ∫ dx/((1−g)²+4g sin²x): full periods contribute π/(1−g²) each, the remainder atan((1+g)/(1−g)·tan r)/(1−g²))."""
+    g = min(G_MAX_SUBTHRESHOLD, max(0.0, g))
+    if g <= 1e-6:
+        return 1.0
+    X = math.pi * 0.5 * band_bw_hz * tau_s            # half-band in units of x = πδτ (period π)
+    if X <= 1e-9:
+        return 1.0 / (1.0 - g) ** 2
+    one_m_g2 = 1.0 - g * g
+    m = math.floor(X / math.pi + 0.5)
+    r = X - m * math.pi                                # remainder in [−π/2, π/2)
+    F_r = math.atan((1.0 + g) / (1.0 - g) * math.tan(r)) / one_m_g2
+    integral_0_X = m * math.pi / one_m_g2 + F_r
+    return integral_0_X / X
+
+
 # Hard-clip harmonics of a howl at 0 dBFS [L §2.2, A §4.3]: odd partials, H3 -12 (≈3-6 dB over), H5 -18;
 # a little even-order from driver excursion (H2 -30). Absent until the fundamental is within clip_knee of FS.
 CLIP_HARMONICS: tuple[tuple[int, float], ...] = ((2, -30.0), (3, -12.0), (5, -18.0), (7, -24.0))
@@ -211,12 +245,15 @@ CLIP_KNEE_DB: float = -10.0
 
 # -- programme timbres: partial levels re H1 (dB) [A §4.2; S-numbers refer to the corpus table A §7] -----
 TIMBRES: dict[str, tuple[float, ...]] = {
-    # sung open vowel around A3/A4: H2..H4 within -6..+6 of H1, H5.. -10..-25 (S4: -30,-28,-33,-38,-45..-55)
-    "voice": (0.0, 2.0, -3.0, -8.0, -15.0, -18.0, -21.0, -25.0),
+    # sung open vowel around A3/A4: H2..H4 within -6..+6 of H1, H5.. -10..-25 (S4: -30,-28,-33,-38,-45..-55);
+    # partials continue to H16 (-6 dB/oct source slope after the formants) — they matter for what a vocal excites
+    "voice": (0.0, 2.0, -3.0, -8.0, -15.0, -18.0, -21.0, -25.0, -28.0, -30.0, -32.0, -34.0, -36.0, -38.0, -40.0, -42.0),
     # closed vowel / head voice: near-sine (H2 -15..-30)
-    "voice_closed": (0.0, -20.0, -26.0, -32.0),
-    # speech-ish (glottal -12 dB/oct + radiation, formant cluster lifts H3-H5)
-    "speech": (0.0, -2.0, -4.0, -3.0, -6.0, -10.0, -14.0, -18.0, -22.0, -26.0),
+    "voice_closed": (0.0, -20.0, -26.0, -32.0, -40.0, -46.0),
+    # speech, F0 110-140 Hz: F1 (k 4-7), F2 (k 10-14), F3 'speaker's formant' 2.4-3.5 kHz (k 19-28), 32 partials —
+    # the upper partials glide through any 2-4 kHz loop mode on every syllable (what makes a lectern 'ring')
+    "speech": (0.0, -2.0, -4.0, -3.0, -6.0, -8.0, -12.0, -16.0, -18.0, -17.0, -15.0, -14.0, -15.0, -17.0, -20.0, -23.0,
+               -26.0, -28.0, -27.0, -25.0, -24.0, -24.0, -25.0, -27.0, -29.0, -31.0, -33.0, -35.0, -37.0, -39.0, -41.0, -43.0),
     # bass guitar through small tops: H2 > H1 (S1: H1 -38, H2 -35, H3 -42, H4 -48)
     "bass_gtr": (0.0, 3.0, -4.0, -10.0, -16.0, -22.0),
     # clean 808 / sine sub: no detectable family (H2 -25..-40)
@@ -225,12 +262,17 @@ TIMBRES: dict[str, tuple[float, ...]] = {
     # plucked electric guitar at onset (S5: -32,-30,-35,-38,-42,-45)
     "el_guitar": (0.0, 2.0, -3.0, -6.0, -10.0, -13.0),
     "ac_guitar": (0.0, -2.0, -6.0, -9.0, -12.0, -16.0, -20.0),
-    # Hammond 8' alone: tonewheel leakage only (S8: -28, -52, -58)
-    "organ_flue": (0.0, -24.0, -30.0),
+    # Hammond 8' alone / flue stop: near-sine. The first corpus used (0, -24, -30); the brief's S8 spec says H2 -52, H3 -58
+    # (tonewheel leakage only). -36/-50 is the middle ground: H2 sits at or below a bed 20-25 dB under H1, i.e. the
+    # detector gets NO usable family (analyser brief §4.3) — the honest hard case.
+    "organ_flue": (0.0, -36.0, -50.0),
     # organ 8'+4' registration (S6 "C-E-G + H2s")
     "organ_8_4": (0.0, -3.0, -30.0, -12.0),
-    "flute": (0.0, -15.0, -28.0, -35.0),
-    "whistle": (0.0,),
+    "flute": (0.0, -15.0, -28.0, -35.0),           # low/mid register
+    "flute_high": (0.0, -26.0, -40.0, -50.0),      # upper register: ≈ pure sine (analyser brief §4.2)
+    "whistle": (0.0, -42.0),                        # human whistle: trace of H2 only
+    "sine_lead": (0.0, -48.0),                      # synth sine/triangle-ish lead
+    "hum": (0.0, -6.0, -3.0, -14.0, -8.0, -20.0, -12.0),   # mains hum + buzz: odd-rich exact family (rectifier buzz)
     "sine": (0.0,),
     "piano": (0.0, -3.0, -6.0, -10.0, -14.0, -18.0, -22.0, -26.0),
     # sawtooth pad: 1/k amplitudes = -6 dB/oct (S21)

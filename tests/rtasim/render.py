@@ -28,12 +28,27 @@ PROM_K = 3                 # neighbour bins for the ground-truth prominence (= d
 DOMINANCE_MIN = 0.5        # ring supplies >= half the band's power (-3 dB) -> "the band IS the ring"
 PROM_VISIBLE_DB = 12.0     # ground-truth 'RTA-visible' threshold (device.yaml prominence_db) [A §7]
 PROM_PRESENT_DB = 6.0      # below this (and loop sub-threshold) an episode is over
+EXCITE_REACH_OCT = 0.15    # programme lines within ±1.5 bands feed the loop's comb (weighted by detuning)
 
 
 def prominence_at(values: Sequence[float], i: int, k: int = PROM_K) -> float:
+    """Single-band prominence exactly as x32mcp.detector defines it: level − median of the ±k neighbours."""
     lo, hi = max(0, i - k), min(len(values), i + k + 1)
     neigh = [values[j] for j in range(lo, hi) if j != i]
     return values[i] - median(neigh)
+
+
+def cluster_prominence_at(values: Sequence[float], i: int) -> float:
+    """Cluster prominence: power sum of bands i−1..i+1 (a line split over two bands or off-centre counts in full)
+    over the median of the six bands at ±2..±4 (outside a single tone's skirts). Ground truth uses the earlier of
+    the two definitions so that a detector using cluster power is neither flattered nor penalised (an edge tone is
+    'visible' 3 dB earlier by this measure than by the single-band one)."""
+    n = len(values)
+    p = sum(10.0 ** (values[j] / 10.0) for j in range(max(0, i - 1), min(n, i + 2)))
+    neigh = [values[j] for d in (2, 3, 4) for j in (i - d, i + d) if 0 <= j < n]
+    if not neigh:
+        return float("-inf")
+    return 10.0 * math.log10(p) - median(neigh)
 
 
 @dataclass
@@ -47,6 +62,9 @@ class Scene:
     master: CommonModeGain | None = None
     prog_coupling: float = 1.0        # 1.0 = channel/common move or REVIEW_BRIEF framing; 0.0 = pure bus-master at a pre-fader tap [L §0]
     loop_coupling: float = 1.0
+    sat_coupling: float = 0.0         # how much of the master move sits between mic and tap and therefore moves a
+                                      # downstream-set howl plateau (speaker limiter / SPL): 0.0 for the bus master
+                                      # (ring_out: post-tap), 1.0 for a channel fader / DCA / preamp move [L §1.4]
     analyser: AnalyserSettings = DEFAULT_ANALYSER
     geq_q: float = GEQ_Q_DEFAULT
     geq_init: dict[int, float] = field(default_factory=dict)   # 1-based GEQ band -> dB present before frame 0
@@ -92,9 +110,9 @@ class Renderer:
         self.geq: dict[int, float] = {}
         self._geq_band_gain = [0.0] * RTA_BANDS
         self.geq_log: list[tuple[float, int, float]] = []   # (ts, band, gain_db)
-        for r in scene.rings:
+        for i, r in enumerate(scene.rings):
+            r.randomize(self.seed * 7 + 13 * i + int(scene.salt))   # wander / loop-gain wander realisations per seed
             r.reset()
-            r.wander_phase = self.rng.uniform(0.0, 2.0 * math.pi) if r.wander_db else 0.0
         for s in scene.sources:
             if hasattr(s, "reset"):
                 s.reset()
@@ -151,18 +169,22 @@ class Renderer:
             an = self.an
             for r in sc.rings:
                 f = r.current_hz(t)
-                exc = -200.0
+                lines: list[tuple[float, float]] = []
+                bed_db = -200.0
                 if r.excite_from_programme:
                     b = nearest_band(f)
-                    p = an.e_noise[b] * an.nfl_lin[b] * an.noise_off_lin + an.e_prog[b]
+                    # noise-like power in the ring's band at the tap (the analyser's band estimate of the bed —
+                    # for a real filter bank the short-time band power IS this fluctuating quantity)
+                    pn = an.e_noise[b] * an.nfl_lin[b] * an.noise_off_lin
+                    if pn > 0.0:
+                        bed_db = 10.0 * math.log10(pn)
                     lf = math.log2(f)
                     for tf, tl in tones:
-                        if abs(math.log2(tf) - lf) <= r.excite_bw_oct:
-                            p = max(p, 10.0 ** (tl / 10.0))
-                    if p > 0.0:
-                        exc = 10.0 * math.log10(p) + r.excite_coupling_db
+                        if abs(math.log2(tf) - lf) <= EXCITE_REACH_OCT:
+                            lines.append((tf, tl))
                 g_ring = self.geq_gain_at(f) if geq_on else 0.0
-                r.step(t, self.dt, common_db=m * sc.loop_coupling, geq_gain_db=g_ring, excitation_db=exc)
+                r.step(t, self.dt, common_db=m * sc.loop_coupling, geq_gain_db=g_ring, lines=lines, bed_db=bed_db,
+                       prog_gain_db=m * sc.sat_coupling)
                 if geq_on:
                     # the loop signal passes the PRE-insert GEQ before the RTA tap like everything else
                     fb.extend((tf, tl + self.geq_gain_at(tf)) for tf, tl in r.tones(t))
@@ -211,7 +233,7 @@ class Renderer:
                     if d > best_dom:
                         best_dom = d
                     if d >= DOMINANCE_MIN:
-                        p = prominence_at(values, bb)
+                        p = max(prominence_at(values, bb), cluster_prominence_at(values, bb))
                         if p > best_prom:
                             best_prom = p
             self.trace[i].append(RingFrame(ts=ts, level_db=r.level_db, e_eff=r.e_eff, f_hz=f, band=b,
@@ -243,9 +265,10 @@ class Episode:
     * ``t_onset``: first frame at which the loop is physically regenerating (e_eff > 0), or 0.0 for a ring
       established before arm;
     * ``t_prom``: first frame within the episode at which a band within ±1 of the ring's nearest centre is
-      ring-dominated (>= -3 dB share) AND its prominence (median of ±3 neighbours, detector definition) is
-      >= 12 dB on the *displayed* values — the moment an RTA-watching detector could first see it;
-      latency is judged from here [A §7];
+      ring-dominated (>= -3 dB share) AND its prominence — the larger of the single-band (median of ±3,
+      detector definition) and the cluster (powersum ±1 over median of ±2..±4) measure — is >= 12 dB on the
+      *displayed* values: the earliest moment an RTA-watching detector could see it; latency is judged from
+      here [A §7] (the analyser's own LF rise time is upstream of this and is not charged to the detector);
     * ``t_end``: first frame after which the loop is sub-threshold and the line has either fallen 20 dB from
       its episode peak or lost 6 dB prominence (killed by a cut / gain backed off), else the scenario end.
     """
@@ -298,7 +321,9 @@ def ring_episodes(renderer: Renderer) -> list[Episode]:
             peak_prom = max(peak_prom, fr.prom_db)
             if t_prom is None and fr.prom_db >= PROM_VISIBLE_DB:
                 t_prom = fr.ts
-            ended = (not above) and (fr.level_db <= peak_lv - 20.0 or fr.prom_db < PROM_PRESENT_DB)
+            # a marginal loop flickers either side of threshold (loop-gain wander): that does not end an episode
+            # unless the line has actually gone (20 dB down) or, having been visible, lost its prominence
+            ended = (not above) and (fr.level_db <= peak_lv - 20.0 or (t_prom is not None and fr.prom_db < PROM_PRESENT_DB))
             if ended:
                 out.append(Episode(i, r.label, tr[start].f_hz, tr[start].band, tr[start].ts, t_prom, fr.ts,
                                    peak_lv, peak_prom, r.established and start == 0))

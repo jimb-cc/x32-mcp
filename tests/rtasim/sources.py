@@ -18,11 +18,35 @@ from dataclasses import dataclass, field
 from typing import Callable, Sequence
 
 from .physics import (
-    RTA_BANDS, RTA_BAND_HZ, TIMBRES, CLIP_HARMONICS, CLIP_KNEE_DB, TAU_LOOP_TOPS_S, regen_boost_db,
-    harmonic_band_offset,
+    RTA_BANDS, RTA_BAND_HZ, TIMBRES, CLIP_HARMONICS, CLIP_KNEE_DB, TAU_LOOP_TOPS_S, BAND_REL_BW, regen_boost_db,
+    comb_gain_lin, comb_band_mean_lin, harmonic_band_offset,
 )
 
 INACTIVE_DB = -200.0
+
+
+class Wobble:
+    """Deterministic, smooth, NON-periodic modulation in [-1, 1]: a sum of ``n`` sinusoids at log-spaced random
+    rates in [f_lo, f_hi] Hz with random phases (seeded). Used for pitch drift, level flutter, loop-gain wander —
+    everything that in the first version of the simulator was either absent (notes dead flat, dead in tune) or a
+    single pure sinusoid (ring wander at exactly wander_hz: a template a detector could lock onto)."""
+
+    __slots__ = ("terms",)
+
+    def __init__(self, seed: int, n: int = 4, f_lo: float = 0.1, f_hi: float = 2.0) -> None:
+        rng = random.Random(int(seed) * 2654435761 % (2 ** 32) + 97)
+        terms = []
+        for i in range(n):
+            f = f_lo * (f_hi / f_lo) ** ((i + rng.random()) / n)
+            terms.append((2.0 * math.pi * f, rng.uniform(0.0, 2.0 * math.pi), rng.uniform(0.6, 1.4)))
+        norm = sum(a for _, _, a in terms) or 1.0
+        self.terms = tuple((w, ph, a / norm) for w, ph, a in terms)
+
+    def __call__(self, t: float) -> float:
+        return sum(a * math.sin(w * t + ph) for w, ph, a in self.terms)
+
+
+_ZERO_WOBBLE = lambda t: 0.0  # noqa: E731
 _NOTE_INDEX = {"C": 0, "D": 2, "E": 4, "F": 5, "G": 7, "A": 9, "B": 11}
 
 
@@ -76,7 +100,12 @@ class HarmonicNote(Source):
     faster, S5); after ``t_on+dur`` it releases at ``release_db_per_s``.
     Vibrato: ``vib_rate_hz``, extent ±``vib_cents`` reached after ``vib_delay_s`` + ``vib_ramp_s``.
     Glide: starts ``glide_cents`` away and reaches the target pitch after ``glide_s`` (scoops, 808 drops).
-    AM: ``am_db`` at ``am_hz`` (Leslie, chorus beating, shimmer).
+    AM: ``am_db`` at ``am_hz`` (Leslie, chorus beating, tremolo — genuinely periodic modulations).
+    Human/analogue imperfection (seeded from ``seed``, smooth and non-periodic, see :class:`Wobble`):
+    ``drift_cents`` slow intonation drift (voice 5-15 c, whistle 20-40 c, fretted/keyed ~0-3 c),
+    ``flutter_db`` level flutter (voice/wind 0.5-1.5 dB, organ/synth ~0.1), ``timbre_jitter_db`` a fixed
+    per-note random offset of each partial k>=2 (vowel / pluck position / register: partial tables are not a
+    fingerprint). All default to 0 so exact-arithmetic tests keep working; the sequencers set realistic values.
     """
 
     f0_hz: float = 220.0
@@ -101,18 +130,30 @@ class HarmonicNote(Source):
     am_phase: float = 0.0
     detune_cents: float = 0.0
     max_hz: float = 20000.0
+    drift_cents: float = 0.0
+    drift_hz: tuple[float, float] = (0.15, 1.5)
+    flutter_db: float = 0.0
+    flutter_hz: tuple[float, float] = (0.3, 4.0)
+    timbre_jitter_db: float = 0.0
+    seed: int = 0
     label: str = "note"
     kind: str = "NOTE"
 
     def __post_init__(self) -> None:
-        self.partials = tuple(TIMBRES[self.timbre]) if isinstance(self.timbre, str) else tuple(self.timbre)
+        base = tuple(TIMBRES[self.timbre]) if isinstance(self.timbre, str) else tuple(self.timbre)
+        if self.timbre_jitter_db:
+            rng = random.Random(int(self.seed) * 7907 + 5)
+            base = (base[0],) + tuple(x + rng.uniform(-self.timbre_jitter_db, self.timbre_jitter_db) for x in base[1:])
+        self.partials = base
+        self._drift = Wobble(self.seed * 3 + 1, 4, *self.drift_hz) if self.drift_cents else _ZERO_WOBBLE
+        self._flutter = Wobble(self.seed * 3 + 2, 5, *self.flutter_hz) if self.flutter_db else _ZERO_WOBBLE
         self.t0 = self.t_on
         tail = 70.0 / max(1.0, self.release_db_per_s)
         self.t1 = self.t_on + self.dur + tail
 
     def pitch_hz(self, t: float) -> float:
         x = t - self.t_on
-        cents = self.detune_cents
+        cents = self.detune_cents + (self.drift_cents * self._drift(t) if self.drift_cents else 0.0)
         if self.glide_s > 0.0 and x < self.glide_s:
             cents += self.glide_cents * (1.0 - x / self.glide_s)
         if self.vib_cents and self.vib_rate_hz:
@@ -134,6 +175,8 @@ class HarmonicNote(Source):
             env -= self.release_db_per_s * (x - self.dur)
         if self.am_db and self.am_hz:
             env += self.am_db * math.sin(2.0 * math.pi * self.am_hz * x + self.am_phase)
+        if self.flutter_db:
+            env += self.flutter_db * self._flutter(t)
         return env
 
     def tones(self, t: float) -> list[tuple[float, float]]:
@@ -261,23 +304,58 @@ class PinkBed(Source):
     attack_s: float = 0.0
     release_db_per_s: float = 60.0
     bumps: Sequence[tuple[float, float, float]] = ()   # (centre_band, height_db, sigma_bands) smooth humps
+    random_humps: int = 0            # add this many seeded random humps (±hump_db, sigma 2-6 bands): a mix residue
+    hump_db: float = 4.0             # is not a smooth pink line, and its shape differs per song (seed)
+    swell: Sequence[tuple[float, float]] = ()          # extra piecewise-linear gain envelope [(t, dB), ...]
+    region_mod_db: float = 0.0       # independent slow (0.2-1.5 Hz) level modulation of ~1-octave regions:
+                                     # spectral flux of a mix (LF, low-mid, presence, air do not move together)
+    seed: int = 0
     label: str = "bed"
     kind: str = "BED"
 
     def __post_init__(self) -> None:
+        rng = random.Random(int(self.seed) * 1543 + 11)
+        bumps = list(self.bumps)
+        for _ in range(int(self.random_humps)):
+            bumps.append((rng.uniform(8.0, 95.0), rng.uniform(-self.hump_db, self.hump_db), rng.uniform(2.0, 6.0)))
+        tilt = self.tilt_db_per_oct + (rng.uniform(-0.5, 0.5) if self.random_humps else 0.0)
         lv = []
         for b, f in enumerate(RTA_BAND_HZ):
-            x = self.level_1k_db + self.tilt_db_per_oct * math.log2(f / 1000.0)
+            x = self.level_1k_db + tilt * math.log2(f / 1000.0)
             if f < self.f_lo:
                 x -= 12.0 * math.log2(self.f_lo / f)
             elif f > self.f_hi:
                 x -= 12.0 * math.log2(f / self.f_hi)
-            for c, h, sg in self.bumps:
+            for c, h, sg in bumps:
                 x += h * math.exp(-((b - c) ** 2) / (2.0 * sg * sg))
             lv.append(x)
         self._levels = tuple(lv)
+        self._lfo = Wobble(self.seed * 5 + 3, 4, min(0.15, self.lfo_hz), max(0.9, 2.5 * self.lfo_hz)) if self.lfo_db else _ZERO_WOBBLE
+        self._regions: list[tuple[int, int, Wobble]] = []
+        if self.region_mod_db:
+            b = 0
+            i = 0
+            while b < RTA_BANDS:
+                w = rng.randint(8, 14)
+                self._regions.append((b, min(RTA_BANDS, b + w), Wobble(self.seed * 41 + i, 3, 0.2, 1.5)))
+                b += w
+                i += 1
+        self._swell = sorted(self.swell)
         self.t0 = self.t_on
         self.t1 = self.t_off + 130.0 / max(1.0, self.release_db_per_s)
+
+    def _swell_db(self, t: float) -> float:
+        pts = self._swell
+        if not pts:
+            return 0.0
+        if t <= pts[0][0]:
+            return pts[0][1]
+        prev = pts[0]
+        for p in pts[1:]:
+            if t < p[0]:
+                return prev[1] + (p[1] - prev[1]) * (t - prev[0]) / max(1e-9, p[0] - prev[0])
+            prev = p
+        return prev[1]
 
     def gain_db(self, t: float) -> float:
         if t < self.t_on:
@@ -288,14 +366,25 @@ class PinkBed(Source):
         if t > self.t_off:
             g -= self.release_db_per_s * (t - self.t_off)
         if self.lfo_db:
-            g += self.lfo_db * math.sin(2.0 * math.pi * self.lfo_hz * t)
+            g += self.lfo_db * self._lfo(t)
+        if self._swell:
+            g += self._swell_db(t)
         return g
 
     def noise(self, t: float) -> list[tuple[int, float]]:
         g = self.gain_db(t)
         if g <= -130.0:
             return []
-        return [(b, lv + g) for b, lv in enumerate(self._levels)]
+        if not self._regions:
+            return [(b, lv + g) for b, lv in enumerate(self._levels)]
+        out = []
+        lv = self._levels
+        rm = self.region_mod_db
+        for lo, hi, wob in self._regions:
+            m = g + rm * wob(t)
+            for b in range(lo, hi):
+                out.append((b, lv[b] + m))
+        return out
 
 
 # ---------------------------------------------------------------------------------------------
@@ -415,9 +504,11 @@ def DrumPattern(*, t_start: float, t_end: float, bpm: float = 124.0, pattern: st
 # ---------------------------------------------------------------------------------------------
 def BassLine(*, notes: Sequence[str | float], t_start: float, t_end: float, note_s: float = 0.6,
              gap_s: float = 0.15, level_db: float = -38.0, timbre: str = "bass_gtr", seed: int = 1,
-             decay_db_per_s: float = 5.0, attack_s: float = 0.0, humanize_s: float = 0.01, **note_kw) -> Group:
+             decay_db_per_s: float = 5.0, attack_s: float = 0.0, humanize_s: float = 0.01,
+             drift_cents: float = 3.0, flutter_db: float = 0.3, timbre_jitter_db: float = 3.0, **note_kw) -> Group:
     """Cycle through ``notes`` (names or Hz) from t_start to t_end; instant acoustic onsets by default
-    (the analyser makes them slow at LF), sag while held (analyser brief §4.2 bass)."""
+    (the analyser makes them slow at LF), sag while held (analyser brief §4.2 bass). Each note gets its own
+    small intonation drift, level flutter and partial-balance jitter (pluck position / string)."""
     rng = random.Random(seed * 17 + 3)
     out: list[Source] = []
     t = t_start
@@ -426,7 +517,9 @@ def BassLine(*, notes: Sequence[str | float], t_start: float, t_end: float, note
         f = note_hz(notes[i % len(notes)])
         out.append(HarmonicNote(f0_hz=f, t_on=t + rng.uniform(-humanize_s, humanize_s), dur=note_s,
                                 level_db=level_db + rng.uniform(-1.5, 1.5), timbre=timbre, attack_s=attack_s,
-                                decay_db_per_s=decay_db_per_s, release_db_per_s=120.0, label="bass", **note_kw))
+                                decay_db_per_s=decay_db_per_s, release_db_per_s=120.0, label="bass",
+                                drift_cents=drift_cents, flutter_db=flutter_db, timbre_jitter_db=timbre_jitter_db,
+                                seed=rng.randrange(1 << 30), **note_kw))
         t += note_s + gap_s
         i += 1
     return Group(out, label="bassline")
@@ -437,9 +530,13 @@ _SCALE = (0, 2, 4, 5, 7, 9, 11)
 
 def Melody(*, t_start: float, t_end: float, low: str = "C4", high: str = "C6", note_s: tuple[float, float] = (0.3, 1.0),
            gap_s: tuple[float, float] = (0.02, 0.15), level_db: float = -30.0, timbre: str = "voice", seed: int = 1,
-           vib_rate_hz: float = 5.5, vib_cents: float = 40.0, legato: bool = False, **note_kw) -> Group:
+           vib_rate_hz: float = 5.5, vib_cents: float = 40.0, legato: bool = False, drift_cents: float = 8.0,
+           flutter_db: float = 0.8, timbre_jitter_db: float = 3.0, vib_rate_spread: float = 0.12,
+           repeat_prob: float = 0.0, **note_kw) -> Group:
     """Random diatonic melody (C major) between ``low`` and ``high``, deterministic from ``seed``.
-    Steps are mostly ±1..2 scale degrees (music 'moves', analyser brief §4.3 ii)."""
+    Steps are mostly ±1..2 scale degrees (music 'moves', analyser brief §4.3 ii); ``repeat_prob`` re-strikes the
+    same pitch (a repeated note is NOT evidence of a fixed-frequency ring). Per note: own drift/flutter/partial
+    jitter, vibrato rate varied ±``vib_rate_spread`` (singers are not quartz-locked at 5.500 Hz)."""
     rng = random.Random(seed * 101 + 11)
     lo_hz, hi_hz = note_hz(low), note_hz(high)
     lo_m = int(round(69 + 12 * math.log2(lo_hz / 440.0)))
@@ -452,28 +549,40 @@ def Melody(*, t_start: float, t_end: float, low: str = "C4", high: str = "C6", n
         d = rng.uniform(*note_s)
         m = degrees[idx]
         f = 440.0 * 2.0 ** ((m - 69) / 12.0)
+        kw = dict(release_db_per_s=80.0 if legato else 150.0, label="melody")
+        kw.update(note_kw)
         out.append(HarmonicNote(f0_hz=f, t_on=t, dur=d, level_db=level_db + rng.uniform(-2.0, 2.0), timbre=timbre,
-                                vib_rate_hz=vib_rate_hz, vib_cents=vib_cents, vib_phase=rng.uniform(0, 6.28),
-                                release_db_per_s=80.0 if legato else 150.0, label="melody", **note_kw))
+                                vib_rate_hz=vib_rate_hz * rng.uniform(1.0 - vib_rate_spread, 1.0 + vib_rate_spread),
+                                vib_cents=vib_cents * rng.uniform(0.8, 1.2) if vib_cents else 0.0, vib_phase=rng.uniform(0, 6.28),
+                                drift_cents=drift_cents, flutter_db=flutter_db, timbre_jitter_db=timbre_jitter_db,
+                                seed=rng.randrange(1 << 30), **kw))
         t += d + (0.0 if legato else rng.uniform(*gap_s))
+        if repeat_prob and rng.random() < repeat_prob:
+            continue
         idx = min(len(degrees) - 1, max(0, idx + rng.choice((-2, -1, -1, 1, 1, 2, 3, -3))))
     return Group(out, label="melody")
 
 
 def ChordPad(*, chords: Sequence[Sequence[str | float]], t_start: float, t_end: float, chord_s: float = 2.0,
              level_db: float = -34.0, timbre: str = "organ_8_4", attack_s: float = 0.0, release_db_per_s: float = 60.0,
-             chorus_db: float = 0.0, chorus_hz: float = 1.2, seed: int = 1, **note_kw) -> Group:
-    """Block chords changing every ``chord_s`` (chord tones end with the chord — a ring does not, S12)."""
+             chorus_db: float = 0.0, chorus_hz: float = 1.2, seed: int = 1, drift_cents: float = 0.0,
+             flutter_db: float = 0.15, timbre_jitter_db: float = 2.0, level_spread_db: float = 1.0,
+             strum_s: float = 0.0, **note_kw) -> Group:
+    """Block chords changing every ``chord_s`` (chord tones end with the chord — a ring does not, S12).
+    ``strum_s`` spreads the onsets of the chord tones (guitar strum 20-40 ms); voices differ by ±level_spread."""
     rng = random.Random(seed * 53 + 5)
     out: list[Source] = []
     t = t_start
     i = 0
     while t < t_end - 0.05:
-        for nm in chords[i % len(chords)]:
-            out.append(HarmonicNote(f0_hz=note_hz(nm), t_on=t, dur=min(chord_s, t_end - t), level_db=level_db,
+        for j, nm in enumerate(chords[i % len(chords)]):
+            out.append(HarmonicNote(f0_hz=note_hz(nm), t_on=t + j * strum_s, dur=min(chord_s, t_end - t),
+                                    level_db=level_db + rng.uniform(-level_spread_db, level_spread_db),
                                     timbre=timbre, attack_s=attack_s, release_db_per_s=release_db_per_s,
                                     am_db=chorus_db, am_hz=chorus_hz * rng.uniform(0.8, 1.25),
-                                    am_phase=rng.uniform(0, 6.28), label="chord", **note_kw))
+                                    am_phase=rng.uniform(0, 6.28), label="chord", drift_cents=drift_cents,
+                                    flutter_db=flutter_db, timbre_jitter_db=timbre_jitter_db,
+                                    seed=rng.randrange(1 << 30), **note_kw))
         t += chord_s
         i += 1
     return Group(out, label="chords")
@@ -491,7 +600,8 @@ def SpeechBursts(*, t_start: float, t_end: float, level_db: float = -32.0, seed:
         f = rng.uniform(*f0_range)
         out.append(HarmonicNote(f0_hz=f, t_on=t, dur=d, level_db=level_db + rng.uniform(-3, 2), timbre="speech",
                                 attack_s=0.03, glide_cents=rng.uniform(80, 200), glide_s=d, release_db_per_s=300.0,
-                                vib_rate_hz=0.0, label="speech"))
+                                vib_rate_hz=0.0, label="speech", drift_cents=15.0, flutter_db=1.5, timbre_jitter_db=5.0,
+                                seed=rng.randrange(1 << 30)))
         t += d + rng.uniform(0.1, 0.3)
     return Group(out, label="speech")
 
@@ -561,20 +671,33 @@ class FeedbackRing:
 
     ``excess_db`` is the open-loop gain above threshold (dB) from ``t_on`` (``excess_points`` overrides it
     with a piecewise-linear schedule, e.g. a performer walking into a wedge). The scene adds the common-mode
-    gain × loop coupling and the (negative) GEQ gain at the ring frequency. Then, per substep:
+    gain × loop coupling and the (negative) GEQ gain at the ring frequency; ``excess_wander_db`` adds a slow,
+    non-periodic loop-gain wander (air movement, head/mic motion: tenths of a dB — a real ring's growth rate is
+    NOT constant and a marginal loop flickers either side of threshold). Then, per substep:
 
     * e_eff > 0: the line grows at e_eff/τ_loop dB/s (200 dB/s per dB on a 5 ms wedge loop, 100 on 10 ms
-      tops, 14 on a 70 ms reverberant loop) up to ``sat_db`` (limiter / compressor plateau — the M7
+      tops, 14 on a 70 ms reverberant loop) up to the plateau ``sat_db`` (limiter / compressor — the M7
       "60 dB-prominent line at a fixed level for 15 s"); ``sat_db >= 0`` pins it at 0 dBFS (RTA clip flag)
       and grows hard-clip partials (H3 −12, H5 −18, H2 −30 once within ``clip_knee_db`` of full scale).
-    * e_eff <= 0: the line relaxes at max(|e_eff|, 0.5)/τ_loop dB/s toward the regenerative floor
-      = excitation + 1/(1−g) boost (+6 dB @ −6, +10.7 @ −3, +19 @ −1): 'ringing tails' on programme, and
-      the super-linear response to a +1 dB step that makes ring_out's staircase a free probe.
+      A plateau set downstream of the tap (speaker limiter, amp clip, SPL) moves with any gain between mic and
+      tap: the renderer passes the programme common-mode gain and the plateau follows it (``sat_tracks_gain``);
+      a desk-clip plateau (sat_db >= 0) does not move.
+    * e_eff <= 0: the line relaxes at max(|e_eff|, 0.5)/τ_loop dB/s toward the regenerated EXTRA power the loop
+      adds on top of its excitation: Σ_lines P_line·c·(comb(δ)−1) + P_bed·c·(mean_band(comb)−1), comb =
+      1/((1−g)²+4g sin²(πδτ)) (physics.comb_gain_lin): a programme line ON the mode rings on at +6 dB (g=−6) …
+      +19 dB (−1); a line 100 cents away or a broadband bed gets far less. This is what makes ring_out's +1 dB
+      staircase a probe and what makes speech 'ring' below threshold — now with the right selectivity.
     * ``established``: at ``sat_db`` from before frame 0 (no onset is ever observed, S2).
-    * ``wander_db``/``wander_hz``: slow level wander (air movement; a real ring is not dead flat).
-    * ``hop_at_s``/``hop_cents``: mode hop (hand-held mic moved: neighbouring candidate takes over).
-    * excitation: ``excitation_db`` constant floor, plus, if ``excite_from_programme``, the loudest
-      programme line/bed within ±``excite_bw_oct`` of f (coupled at ``excite_coupling_db``).
+    * ``wander_db``: level wander at the plateau/tail — a seeded sum of incommensurate slow sinusoids
+      (0.2-2.5 Hz), NOT one pure tone at ``wander_hz`` (kept only as the centre of the rate range).
+    * ``hop_at_s``/``hop_cents``: mode hop (hand-held mic moved: neighbouring candidate takes over);
+      ``freq_drift_cents``: slow drift of the mode itself (temperature/geometry; normally ~0).
+    * ``harmonics``: acoustic distortion partials of a howl that is NOT clipping the desk (powered-speaker amp
+      clipping / driver excursion heard by the mic, loop brief §1.4(1)): (k, rel_db) pairs that fade in 2 dB/dB
+      above ``harmonics_knee_db``. Defeats "partials present ⇒ music unless the band reads 0.0".
+    * excitation: ``excitation_db`` constant on-mode floor (room noise in the mode), plus, if
+      ``excite_from_programme``, programme lines within ±1 band (comb-weighted) and the bed power in the band,
+      both coupled at ``excite_coupling_db`` (share of the tap signal that arrives through the open mic path).
     """
 
     freq_hz: float = 3150.0
@@ -585,6 +708,8 @@ class FeedbackRing:
     sat_db: float = -6.0
     established: bool = False
     excess_points: Sequence[tuple[float, float]] | None = None
+    excess_wander_db: float = 0.08
+    excess_wander_hz: tuple[float, float] = (0.05, 0.6)
     excitation_db: float = -90.0
     excite_from_programme: bool = True
     excite_coupling_db: float = -6.0
@@ -594,49 +719,87 @@ class FeedbackRing:
     wander_phase: float = 0.0
     hop_at_s: float | None = None
     hop_cents: float = 0.0
+    freq_drift_cents: float = 0.0
     clip_harmonics: Sequence[tuple[int, float]] = CLIP_HARMONICS
     clip_knee_db: float = CLIP_KNEE_DB
+    harmonics: Sequence[tuple[int, float]] = ()
+    harmonics_knee_db: float = -40.0
+    sat_tracks_gain: bool = True
     growth_cap_db_per_s: float = 2000.0
+    seed: int = 0
     label: str = "ring"
     kind: str = "FEEDBACK"
 
     def __post_init__(self) -> None:
+        self.randomize(self.seed)
         self.reset()
 
     # -- state ---------------------------------------------------------------------------------
+    def randomize(self, seed: int) -> None:
+        """(Re)draw the wander processes from ``seed`` (the renderer calls this with its own seed)."""
+        lo = max(0.05, self.wander_hz * 0.3)
+        self._wander = Wobble(seed * 11 + 1, 4, lo, max(lo * 4.0, self.wander_hz * 3.0)) if self.wander_db else _ZERO_WOBBLE
+        self._ewander = Wobble(seed * 11 + 2, 3, *self.excess_wander_hz) if self.excess_wander_db else _ZERO_WOBBLE
+        self._fdrift = Wobble(seed * 11 + 3, 3, 0.02, 0.3) if self.freq_drift_cents else _ZERO_WOBBLE
+
     def reset(self) -> None:
         self.level_db: float = self.sat_db if self.established else self.start_db
         self.e_eff: float = self.excess_db
+        self.sat_now: float = self.sat_db
         self.t: float = -1e9
 
     def base_excess_db(self, t: float) -> float:
         if self.excess_points:
             pts = self.excess_points
             if t <= pts[0][0]:
-                return pts[0][1]
-            prev = pts[0]
-            for p in pts[1:]:
-                if t < p[0]:
-                    if p[0] == prev[0]:
-                        return p[1]
-                    return prev[1] + (p[1] - prev[1]) * (t - prev[0]) / (p[0] - prev[0])
-                prev = p
-            return prev[1]
-        return self.excess_db
+                e = pts[0][1]
+            else:
+                prev = pts[0]
+                e = prev[1]
+                for p in pts[1:]:
+                    if t < p[0]:
+                        e = p[1] if p[0] == prev[0] else prev[1] + (p[1] - prev[1]) * (t - prev[0]) / (p[0] - prev[0])
+                        break
+                    prev = p
+                else:
+                    e = prev[1]
+        else:
+            e = self.excess_db
+        if self.excess_wander_db:
+            e += self.excess_wander_db * self._ewander(t)
+        return e
 
     def current_hz(self, t: float) -> float:
         f = self.freq_hz
         if self.hop_at_s is not None and t >= self.hop_at_s:
             f *= 2.0 ** (self.hop_cents / 1200.0)
+        if self.freq_drift_cents:
+            f *= 2.0 ** (self.freq_drift_cents * self._fdrift(t) / 1200.0)
         return f
 
     def active(self, t: float) -> bool:
         return self.established or t >= self.t_on
 
-    def step(self, t: float, dt: float, *, common_db: float, geq_gain_db: float, excitation_db: float) -> None:
+    def regen_extra_db(self, e_db: float, f_hz: float, lines: Sequence[tuple[float, float]], bed_db: float) -> float:
+        """Regenerated extra power (dB) the loop adds at the tap for round-trip excess ``e_db`` (<0 meaningful;
+        clamped at −0.25 dB), given programme ``lines`` [(f, L)] near the mode and the bed power in the band."""
+        g = 10.0 ** (min(e_db, 0.0) / 20.0)
+        c = 10.0 ** (self.excite_coupling_db / 10.0)
+        tau = self.tau_loop_s
+        # the constant on-mode floor (room noise in the mode) is not rendered by anyone else: full comb gain
+        extra = 10.0 ** (self.excitation_db / 10.0) * comb_gain_lin(g, 0.0, tau)
+        if bed_db > -150.0:
+            extra += 10.0 ** (bed_db / 10.0) * c * max(0.0, comb_band_mean_lin(g, BAND_REL_BW * f_hz, tau) - 1.0)
+        for lf, lv in lines:
+            extra += 10.0 ** (lv / 10.0) * c * max(0.0, comb_gain_lin(g, lf - f_hz, tau) - 1.0)
+        return 10.0 * math.log10(extra) if extra > 1e-20 else -200.0
+
+    def step(self, t: float, dt: float, *, common_db: float, geq_gain_db: float, excitation_db: float | None = None,
+             lines: Sequence[tuple[float, float]] = (), bed_db: float = -200.0, prog_gain_db: float = 0.0) -> None:
         """Advance the loop by ``dt`` to time ``t``. ``common_db`` = common-mode gain × loop coupling,
-        ``geq_gain_db`` = (negative) GEQ gain at the ring frequency, ``excitation_db`` = programme level
-        near f at the tap (already coupled) or -inf."""
+        ``geq_gain_db`` = (negative) GEQ gain at the ring frequency, ``lines``/``bed_db`` = programme near the
+        mode at the tap (uncoupled levels), ``prog_gain_db`` = gain between mic and tap applied to programme
+        (moves a downstream-set plateau). ``excitation_db`` (legacy): an on-mode line level, already coupled."""
         self.t = t
         if not self.active(t):
             self.e_eff = -60.0
@@ -644,26 +807,54 @@ class FeedbackRing:
             return
         e = self.base_excess_db(t) + common_db + geq_gain_db
         self.e_eff = e
-        exc = max(self.excitation_db, excitation_db)
+        sat = self.sat_db
+        if sat < 0.0 and self.sat_tracks_gain:
+            sat = min(-0.5, sat + prog_gain_db)
+        self.sat_now = sat
+        f = self.current_hz(t)
+        if excitation_db is not None and excitation_db > -150.0:
+            lines = tuple(lines) + ((f, excitation_db - self.excite_coupling_db),)
         L = self.level_db
         if e > 0.0:
             rate = min(self.growth_cap_db_per_s, e / self.tau_loop_s)
-            L = min(self.sat_db, L + rate * dt)
-            floor = exc  # the loop output is at least the excitation passing through it
+            L = min(sat, L + rate * dt)
+            floor = min(sat, self.seed_db(f, lines, bed_db))   # what recirculates before any build-up
             if L < floor:
-                L = min(self.sat_db, floor)
+                L = floor
         else:
-            target = min(self.sat_db, exc + regen_boost_db(e))
-            rate = max(abs(e), 0.5) / self.tau_loop_s
+            target = min(sat, self.regen_extra_db(e, f, lines, bed_db))
+            # build-up and ring-down both converge at |e| dB per round trip (critical slowing near threshold:
+            # T60 = 60·τ/|e|); the 0.1 dB floor only stops the state freezing at e == 0 exactly
+            rate = max(abs(e), 0.1) / self.tau_loop_s
             if L > target:
                 L = max(target, L - rate * dt)
             else:
                 L = min(target, L + rate * dt)
         self.level_db = max(-160.0, L)
 
+    def seed_db(self, f_hz: float, lines: Sequence[tuple[float, float]], bed_db: float) -> float:
+        """Level the oscillation starts from when the loop goes over threshold with no prior build-up: the coupled
+        excitation inside the loop's capture range (comb shape at g=0.7: half-width ≈0.057/τ Hz) — the bed power
+        within that width and any programme line that close — plus the on-mode floor. No regenerative gain."""
+        c = 10.0 ** (self.excite_coupling_db / 10.0)
+        tau = self.tau_loop_s
+        p = 10.0 ** (self.excitation_db / 10.0)
+        if bed_db > -150.0:
+            frac = min(1.0, (0.114 / tau) / max(1e-9, BAND_REL_BW * f_hz))
+            p += 10.0 ** (bed_db / 10.0) * c * frac
+        norm = comb_gain_lin(0.7, 0.0, tau)
+        for lf, lv in lines:
+            p += 10.0 ** (lv / 10.0) * c * comb_gain_lin(0.7, lf - f_hz, tau) / norm
+        return 10.0 * math.log10(p) if p > 1e-20 else -200.0
+
     def display_level_db(self, t: float) -> float:
-        wob = self.wander_db * math.sin(2.0 * math.pi * self.wander_hz * t + self.wander_phase) if self.wander_db else 0.0
-        return min(0.0 if self.sat_db >= 0.0 else self.sat_db + abs(self.wander_db), self.level_db + wob)
+        wob = self.wander_db * self._wander(t) if self.wander_db else 0.0
+        cap = 0.0 if self.sat_db >= 0.0 else self.sat_now + abs(self.wander_db)
+        return min(cap, self.level_db + wob)
+
+    def harmonics_active(self, level_db: float | None = None) -> bool:
+        L = self.level_db if level_db is None else level_db
+        return bool((self.sat_db >= -0.5 and L > self.clip_knee_db) or (self.harmonics and L > self.harmonics_knee_db))
 
     def tones(self, t: float) -> list[tuple[float, float]]:
         if not self.active(t) or self.level_db <= -130.0:
@@ -678,6 +869,12 @@ class FeedbackRing:
                 fk = f * k
                 if fk < 20000.0:
                     out.append((fk, L + rel - 20.0 * (1.0 - ramp)))
+        if self.harmonics and L > self.harmonics_knee_db:
+            over = L - self.harmonics_knee_db
+            for k, rel in self.harmonics:
+                fk = f * k
+                if fk < 20000.0:
+                    out.append((fk, L + rel - max(0.0, 20.0 - 2.0 * over)))   # 2 dB/dB fade-in over the first 10 dB
         return out
 
 

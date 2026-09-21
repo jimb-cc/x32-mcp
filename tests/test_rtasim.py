@@ -15,7 +15,7 @@ from rtasim.sources import (
     CommonModeGain, FeedbackRing, HarmonicNote, PinkBed, band_centre_hz, note_hz,
 )
 
-FLAT = AnalyserSettings(noise_sd_scale=0.0)      # dead-flat beds: exact arithmetic checks
+FLAT = AnalyserSettings(noise_sd_scale=0.0, frame_jitter_s=0.0)      # dead-flat beds, exact timestamps: arithmetic checks
 
 
 def settle(an: Analyser, tones=(), noise=(), n_frames=40):
@@ -159,7 +159,7 @@ def test_common_mode_step_moves_programme_bands_equally_but_not_a_ring():
     organ = HarmonicNote(f0_hz=RTA_BAND_HZ[50], t_on=-5.0, dur=100.0, level_db=-30.0, timbre=(0.0, -3.0))
     master = CommonModeGain(points=((0.0, 0.0), (1.0, 0.0), (1.0, 4.0)))
     ring = FeedbackRing(freq_hz=RTA_BAND_HZ[75], excess_db=-6.0, tau_loop_s=0.01, t_on=-5.0, start_db=-80.0, sat_db=-5.0,
-                        excitation_db=-60.0, excite_from_programme=False, wander_db=0.0)
+                        excitation_db=-60.0, excite_from_programme=False, wander_db=0.0, excess_wander_db=0.0)
     sc = Scene(2.5, sources=[PinkBed(level_1k_db=-60.0, tilt_db_per_oct=0.0), organ], rings=[ring], master=master, analyser=FLAT)
     r = Renderer(sc, 1)
     fr = r.run()
@@ -176,7 +176,7 @@ def test_common_mode_step_moves_programme_bands_equally_but_not_a_ring():
 def test_ring_growth_rate_matches_excess_over_tau_and_plateaus():
     for excess, tau in ((0.3, 0.010), (1.0, 0.005), (0.5, 0.035)):
         ring = FeedbackRing(freq_hz=RTA_BAND_HZ[70], excess_db=excess, tau_loop_s=tau, t_on=0.5, start_db=-70.0, sat_db=-10.0,
-                            excite_from_programme=False, wander_db=0.0)
+                            excite_from_programme=False, wander_db=0.0, excess_wander_db=0.0)
         rate = excess / tau
         sc = Scene(0.5 + 62.0 / rate + 1.5, sources=[PinkBed(level_1k_db=-75.0, tilt_db_per_oct=0.0)], rings=[ring], analyser=FLAT)
         r = Renderer(sc, 1)
@@ -200,7 +200,7 @@ def test_geq_cut_deeper_than_excess_stops_growth_and_bell_shape():
     assert -2.6 < peaking_gain_db(1000.0 * 2 ** (1 / 6), 1000.0, -3.0, 3.0) < -1.5
     assert peaking_gain_db(2000.0, 1000.0, -3.0, 3.0) > -0.6
     ring = FeedbackRing(freq_hz=2500.0, excess_db=0.5, tau_loop_s=0.010, t_on=0.2, start_db=-80.0, sat_db=-5.0,
-                        excite_from_programme=False, excitation_db=-90.0, wander_db=0.0)
+                        excite_from_programme=False, excitation_db=-90.0, wander_db=0.0, excess_wander_db=0.0)
     sc = Scene(4.0, sources=[PinkBed(level_1k_db=-75.0, tilt_db_per_oct=0.0)], rings=[ring], analyser=FLAT,
                geq_schedule=[(1.0, 22, -3.0)])     # GEQ band 22 = 2.5 kHz
     r = Renderer(sc, 1)
@@ -216,7 +216,7 @@ def test_geq_cut_deeper_than_excess_stops_growth_and_bell_shape():
     assert fr[k_cut + 20][1][70] < lv_cut - 30.0
     # a -3 dB cut on a ring with 4 dB excess only slows it
     ring2 = FeedbackRing(freq_hz=2500.0, excess_db=4.0, tau_loop_s=0.010, t_on=0.2, start_db=-70.0, sat_db=-5.0,
-                         excite_from_programme=False, wander_db=0.0)
+                         excite_from_programme=False, wander_db=0.0, excess_wander_db=0.0)
     sc2 = Scene(2.0, sources=[PinkBed(level_1k_db=-75.0, tilt_db_per_oct=0.0)], rings=[ring2], analyser=FLAT, geq_schedule=[(0.3, 22, -3.0)])
     r2 = Renderer(sc2, 1)
     fr2 = r2.run()
@@ -265,8 +265,10 @@ def test_ground_truth_is_derived_from_frames():
     assert abs(e["band"] - 73) <= 1
     fr = frames("S3_ring_during_music", 1)
     k = int(round(e["t_prom"] / FRAME_S))
-    assert max(prominence_at(fr[k][1], b) for b in (72, 73, 74)) >= 12.0
-    assert max(prominence_at(fr[k - 4][1], b) for b in (72, 73, 74)) < 12.0
+    from rtasim.render import cluster_prominence_at
+    both = lambda vals: max(max(prominence_at(vals, b), cluster_prominence_at(vals, b)) for b in (72, 73, 74))
+    assert both(fr[k][1]) >= 12.0
+    assert both(fr[k - 4][1]) < 12.0
     # controls have no events; established ring is an event from t=0 with t_prom = 0
     assert ground_truth("S1_bass_under_quiet_music", 1)["events"] == []
     e2 = ground_truth("S2a_established_ring_8k", 1)["events"][0]

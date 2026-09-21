@@ -71,10 +71,17 @@ def room_noise(level_1k_db: float = -80.0) -> PinkBed:
     return PinkBed(level_1k_db=level_1k_db, tilt_db_per_oct=-4.5, f_lo=25.0, f_hi=12000.0, label="room")
 
 
-def music_bed(level_1k_db: float = -50.0, tilt: float = -2.0, lfo_db: float = 2.0, **kw) -> PinkBed:
-    """Dense programme residue (everything that is not a resolvable line) as a pink-ish bed."""
+def music_bed(level_1k_db: float = -50.0, tilt: float = -2.0, lfo_db: float = 2.0, seed: int | None = None, **kw) -> PinkBed:
+    """Dense programme residue (everything that is not a resolvable line) as a pink-ish bed. With a ``seed`` the bed
+    gets 4 random ±4 dB humps (sigma 2-6 bands), a ±0.5 dB/oct tilt change, non-periodic dynamics (lfo_db) and
+    independent ±1.5 dB slow modulation of ~octave-wide regions (spectral flux): the neighbour median a detector
+    uses is neither flat nor static, and differs per song."""
+    extra = {}
+    if seed is not None:
+        extra = dict(seed=int(seed) * 13 + 7, random_humps=4, hump_db=4.0, region_mod_db=1.5)
+    extra.update(kw)
     return PinkBed(level_1k_db=level_1k_db, tilt_db_per_oct=tilt, f_lo=45.0, f_hi=14000.0, lfo_db=lfo_db,
-                   lfo_hz=0.37, label="mix_bed", **kw)
+                   lfo_hz=0.37, label="mix_bed", **extra)
 
 
 # ==================================================================================================
@@ -102,7 +109,7 @@ def _c1(seed, st):
             hits.append(DrumHit("crash", t, -34.0))
         t += beat
         i += 1
-    return Scene(12.0, sources=[room_noise(), music_bed(-46.0, lfo_db=3.0), Group(hits, "drums", "TRANSIENT")])
+    return Scene(12.0, sources=[room_noise(), music_bed(-46.0, lfo_db=3.0, seed=seed), Group(hits, "drums", "TRANSIENT")])
 
 
 # ==================================================================================================
@@ -114,7 +121,7 @@ def _c1(seed, st):
 def _s1(seed, st):
     bass = BassLine(notes=["E1", "A1", "D2", "G1"], t_start=0.6, t_end=15.5, note_s=0.45, gap_s=0.15,
                     level_db=-38.0, timbre="bass_gtr", seed=seed, decay_db_per_s=5.0)
-    return Scene(16.0, sources=[room_noise(), music_bed(-58.0, tilt=-2.2, lfo_db=1.5), bass])
+    return Scene(16.0, sources=[room_noise(), music_bed(-58.0, tilt=-2.2, lfo_db=1.5, seed=seed), bass])
 
 
 @scenario("S2a_established_ring_8k", "ring ALREADY at its plateau when the detector arms: 8.12 kHz at -8 dBFS, "
@@ -123,7 +130,7 @@ def _s1(seed, st):
 def _s2a(seed, st):
     ring = FeedbackRing(freq_hz=8122.5, excess_db=1.0, tau_loop_s=TAU_LOOP_TOPS_S, sat_db=-8.0, established=True,
                         wander_db=0.3, wander_hz=0.6, label="ring_8k")
-    return Scene(8.0, sources=[room_noise(), music_bed(-60.0, tilt=-1.5, lfo_db=1.0)], rings=[ring])
+    return Scene(8.0, sources=[room_noise(), music_bed(-60.0, tilt=-1.5, lfo_db=1.0, seed=seed)], rings=[ring])
 
 
 @scenario("S2b_established_ring_8k_steep", "as S2a with steep (N=5) skirts: prominence ~55 dB = the M7 datum "
@@ -138,7 +145,7 @@ def _s2b(seed, st):
           "FEEDBACK from t=0; detect <= 300 ms despite odd partners", 8.0, tags=("feedback", "established", "clip"))
 def _s2c(seed, st):
     ring = FeedbackRing(freq_hz=2405.0, excess_db=2.0, sat_db=0.0, established=True, wander_db=0.0, label="howl_clip")
-    return Scene(8.0, sources=[room_noise(), music_bed(-60.0)], rings=[ring])
+    return Scene(8.0, sources=[room_noise(), music_bed(-60.0, seed=seed)], rings=[ring])
 
 
 @scenario("S3_ring_during_music", "ring emerging DURING music: organ melody + bed -45 + cymbal every 2 s; loop at 3.15 kHz "
@@ -151,7 +158,7 @@ def _s3(seed, st):
     cym = Group([DrumHit("crash", 1.0 + 2.0 * i, -33.0) for i in range(6)], "cymbals", "TRANSIENT")
     ring = FeedbackRing(freq_hz=band_centre_hz(73, 25.0), excess_db=0.3, tau_loop_s=0.010, t_on=4.0, start_db=-70.0,
                         sat_db=-6.0, label="ring_3k15")
-    return Scene(12.0, sources=[room_noise(), music_bed(-45.0), mel, cym], rings=[ring])
+    return Scene(12.0, sources=[room_noise(), music_bed(-45.0, seed=seed), mel, cym], rings=[ring])
 
 
 @scenario("S4a_vocal_vibrato", "sustained vocal A4 (+5 c) 4 s: H1 -30, H2 -28, H3 -33, H4 -38 ..., vibrato 5.5 Hz ramping to "
@@ -160,7 +167,7 @@ def _s4a(seed, st, cents=5.0):
     v = HarmonicNote(f0_hz=note_hz("A4", cents), t_on=1.0, dur=4.0, level_db=-30.0, timbre="voice", attack_s=0.06,
                      vib_rate_hz=5.5, vib_cents=80.0, vib_delay_s=0.2, vib_ramp_s=0.4, glide_cents=-150.0, glide_s=0.12,
                      am_db=1.0, am_hz=6.8, release_db_per_s=120.0, label="vocal_A4")
-    return Scene(7.0, sources=[room_noise(), music_bed(-58.0, lfo_db=1.0), v])
+    return Scene(7.0, sources=[room_noise(), music_bed(-58.0, lfo_db=1.0, seed=seed), v])
 
 
 @scenario("S4b_vocal_vibrato_band_edge", "as S4a but centred on the band 45/46 edge (457 Hz): peak band hops ~50 % of frames",
@@ -169,7 +176,7 @@ def _s4b(seed, st):
     v = HarmonicNote(f0_hz=band_centre_hz(45.5), t_on=1.0, dur=4.0, level_db=-30.0, timbre="voice", attack_s=0.06,
                      vib_rate_hz=5.5, vib_cents=80.0, vib_delay_s=0.2, vib_ramp_s=0.4, glide_cents=-150.0, glide_s=0.12,
                      am_db=1.0, am_hz=6.8, release_db_per_s=120.0, label="vocal_edge")
-    return Scene(7.0, sources=[room_noise(), music_bed(-58.0, lfo_db=1.0), v])
+    return Scene(7.0, sources=[room_noise(), music_bed(-58.0, lfo_db=1.0, seed=seed), v])
 
 
 @scenario("S5_guitar_note_decays_to_sine", "held E3 (164.8 Hz, -12 c) 6 s: full series at onset (H1 -32 .. H6 -45), Hk decaying at "
@@ -179,7 +186,7 @@ def _s5(seed, st):
     g = HarmonicNote(f0_hz=note_hz(164.8, -12.0), t_on=1.0, dur=6.0, level_db=-32.0, timbre="el_guitar",
                      decay_db_per_s=5.0, partial_decay_db_per_s=2.0, vib_rate_hz=5.0, vib_cents=25.0, vib_delay_s=1.0,
                      vib_ramp_s=0.5, release_db_per_s=60.0, label="guitar_E3")
-    return Scene(9.0, sources=[room_noise(), music_bed(-60.0, lfo_db=1.0), g])
+    return Scene(9.0, sources=[room_noise(), music_bed(-60.0, lfo_db=1.0, seed=seed), g])
 
 
 @scenario("S6_master_ramp_feedback_watch", "operator raises the master: organ chord C3-G3-E4-C5 (+H2s): 8 lines 15-25 dB prominent over bed -58, sounding "
@@ -192,7 +199,7 @@ def _s6(seed, st):
     chord = ChordPad(chords=[["C3", "G3", "E4", "C5"]], t_start=-2.0, t_end=10.7, chord_s=12.7, level_db=-32.0,
                      timbre=(0.0, -4.0, -30.0), chorus_db=0.4, chorus_hz=0.9, seed=seed)
     master = CommonModeGain(points=((0.0, 0.0), (3.0, 0.0), (3.9, 9.0), (7.0, 9.0), (7.0, 4.0)), label="operator")
-    return Scene(11.0, sources=[room_noise(), music_bed(-58.0), chord], master=master)
+    return Scene(11.0, sources=[room_noise(), music_bed(-58.0, seed=seed), chord], master=master)
 
 
 @scenario("S6b_ringout_steps_latent_loop", "ring_out: server steps the master +1 dB every 1.5 s from t=2 over an organ chord (8 lines) + bed -55; latent loop at "
@@ -204,9 +211,12 @@ def _s6b(seed, st):
     chord = ChordPad(chords=[["C3", "G3", "E4", "C5"]], t_start=-2.0, t_end=15.7, chord_s=17.7, level_db=-32.0,
                      timbre=(0.0, -4.0, -30.0), chorus_db=0.4, seed=seed)
     master = CommonModeGain.ring_out_steps(t_first=2.0, dwell_s=1.5, step_db=1.0, n_steps=8)
+    # prog_coupling 1.0: everything at the tap arrives through the open mic (PA spill + room), so the loop sees all of
+    # it (excite_coupling 0 dB). Band 70 spans ~1.7 comb periods (1/tau = 100 Hz): the noise-driven over-response is
+    # the band MEAN of the comb, +3 dB @ e=-3, +6.9 @ -1, +9.6 @ -0.5 — weaker and later than the on-mode line table.
     ring = FeedbackRing(freq_hz=2500.0, excess_db=-7.5, tau_loop_s=0.010, t_on=0.0, start_db=-80.0, sat_db=-6.0,
-                        label="latent_2k5")
-    return Scene(16.0, sources=[room_noise(), music_bed(-55.0), chord], rings=[ring], master=master)
+                        excite_coupling_db=0.0, label="latent_2k5")
+    return Scene(16.0, sources=[room_noise(), music_bed(-55.0, seed=seed), chord], rings=[ring], master=master)
 
 
 @scenario("S7_808_sub_bassline", "808/sine sub-bass: 0.5-7 s F1 G1 Bb1 C2 (43.7-65.4 Hz) 0.9 s notes with +300 c glide over 150 ms, "
@@ -219,7 +229,7 @@ def _s7(seed, st):
     kick = DrumPattern(t_start=0.5, t_end=7.0, bpm=120.0, pattern="kick_only", level_db=-32.0, seed=seed)
     pad = BassLine(notes=["C2", "G1"], t_start=7.5, t_end=11.8, note_s=2.0, gap_s=0.15, level_db=-28.0,
                    timbre="synth_sine_bass", seed=seed, decay_db_per_s=0.0)
-    return Scene(12.0, sources=[room_noise(), music_bed(-66.0, tilt=-1.6, lfo_db=1.0), sub, kick, pad])
+    return Scene(12.0, sources=[room_noise(), music_bed(-66.0, tilt=-1.6, lfo_db=1.0, seed=seed), sub, kick, pad])
 
 
 @scenario("S8a_organ_melody", "Hammond 8'-only melody C5-C6 (523-1047 Hz), 0.3-1.2 s legato, H1 -28, H2 -52, H3 -58, Leslie AM "
@@ -227,7 +237,7 @@ def _s7(seed, st):
 def _s8a(seed, st):
     mel = Melody(t_start=0.4, t_end=11.6, low="C5", high="C6", note_s=(0.3, 1.2), level_db=-28.0, timbre="organ_flue",
                  seed=seed, vib_rate_hz=0.8, vib_cents=10.0, legato=True, am_db=1.5, am_hz=0.8)
-    return Scene(12.0, sources=[room_noise(), music_bed(-50.0), mel])
+    return Scene(12.0, sources=[room_noise(), music_bed(-50.0, seed=seed), mel])
 
 
 @scenario("S8b_flute_held_note", "flute: melody 600 Hz-1.6 kHz (H2 -15) with one 3 s held note, vibrato +-20 c 5 Hz, breath bed",
@@ -238,7 +248,7 @@ def _s8b(seed, st):
     held = HarmonicNote(f0_hz=note_hz("A5", 12.0), t_on=7.3, dur=3.0, level_db=-29.0, timbre="flute", attack_s=0.05,
                         vib_rate_hz=5.0, vib_cents=20.0, vib_delay_s=0.3, am_db=0.8, am_hz=5.0, label="flute_held")
     breath = PinkBed(level_1k_db=-62.0, tilt_db_per_oct=0.0, f_lo=800.0, f_hi=9000.0, label="breath")
-    return Scene(12.0, sources=[room_noise(), music_bed(-54.0), breath, mel, held])
+    return Scene(12.0, sources=[room_noise(), music_bed(-54.0, seed=seed), breath, mel, held])
 
 
 @scenario("S8c_whistle", "human whistling 1.2-2.2 kHz, 0.5-1.5 s notes, +-60 c 6 Hz vibrato, ~35 dB prominent, no family, in the "
@@ -246,7 +256,7 @@ def _s8b(seed, st):
 def _s8c(seed, st):
     mel = Melody(t_start=0.5, t_end=9.5, low="D6", high="C#7", note_s=(0.5, 1.5), gap_s=(0.1, 0.4), level_db=-22.0,
                  timbre="whistle", seed=seed, vib_rate_hz=6.0, vib_cents=60.0, attack_s=0.05, glide_cents=-80.0, glide_s=0.08)
-    return Scene(10.0, sources=[room_noise(), music_bed(-52.0), mel])
+    return Scene(10.0, sources=[room_noise(), music_bed(-52.0, seed=seed), mel])
 
 
 @scenario("S9_clipped_howl_fast", "fast howl: 2.0 kHz (-20 c) crosses threshold at t=2 with 0.8 dB excess, tau 7 ms -> 115 dB/s "
@@ -255,7 +265,7 @@ def _s8c(seed, st):
 def _s9(seed, st):
     ring = FeedbackRing(freq_hz=band_centre_hz(67, -20.0), excess_db=0.8, tau_loop_s=0.007, t_on=2.0, start_db=-75.0,
                         sat_db=0.0, label="howl_2k")
-    return Scene(6.0, sources=[room_noise(), music_bed(-55.0, lfo_db=1.0)], rings=[ring])
+    return Scene(6.0, sources=[room_noise(), music_bed(-55.0, lfo_db=1.0, seed=seed)], rings=[ring])
 
 
 @scenario("S10_ring_between_bands", "ring exactly on the band 70/71 edge (2588 Hz): two equal bands at -3, 20 dB/s from -65 at t=1 to "
@@ -264,7 +274,7 @@ def _s9(seed, st):
 def _s10(seed, st):
     ring = FeedbackRing(freq_hz=band_centre_hz(70.5), excess_db=0.2, tau_loop_s=0.010, t_on=1.0, start_db=-65.0,
                         sat_db=-15.0, wander_db=0.3, wander_hz=1.5, label="ring_edge_2k59")
-    return Scene(8.0, sources=[room_noise(), music_bed(-60.0, lfo_db=1.0)], rings=[ring])
+    return Scene(8.0, sources=[room_noise(), music_bed(-60.0, lfo_db=1.0, seed=seed)], rings=[ring])
 
 
 @scenario("S11a_two_rings", "two simultaneous non-harmonic rings: 1.25 kHz 15 dB/s from t=1 and 3.55 kHz 25 dB/s from t=1.6",
@@ -273,7 +283,7 @@ def _s11a(seed, st):
     a = FeedbackRing(freq_hz=1250.0, excess_db=0.15, tau_loop_s=0.010, t_on=1.0, start_db=-62.0, sat_db=-10.0, label="ring_1k25")
     b = FeedbackRing(freq_hz=band_centre_hz(75, 7.0), excess_db=0.25, tau_loop_s=0.010, t_on=1.6, start_db=-65.0,
                      sat_db=-8.0, label="ring_3k55")
-    return Scene(8.0, sources=[room_noise(), music_bed(-58.0, lfo_db=1.0)], rings=[a, b])
+    return Scene(8.0, sources=[room_noise(), music_bed(-58.0, lfo_db=1.0, seed=seed)], rings=[a, b])
 
 
 @scenario("S11b_two_rings_near_octave", "two rings at 1.25 kHz and 2.52 kHz (x2.02, inside an H2 tolerance): different onsets and rates, "
@@ -281,7 +291,7 @@ def _s11a(seed, st):
 def _s11b(seed, st):
     a = FeedbackRing(freq_hz=1250.0, excess_db=0.15, tau_loop_s=0.010, t_on=1.0, start_db=-62.0, sat_db=-10.0, label="ring_1k25")
     b = FeedbackRing(freq_hz=2520.0, excess_db=0.25, tau_loop_s=0.010, t_on=1.6, start_db=-65.0, sat_db=-8.0, label="ring_2k52")
-    return Scene(8.0, sources=[room_noise(), music_bed(-58.0, lfo_db=1.0)], rings=[a, b])
+    return Scene(8.0, sources=[room_noise(), music_bed(-58.0, lfo_db=1.0, seed=seed)], rings=[a, b])
 
 
 @scenario("S12_acoustic_guitar_wedge_ring_196Hz", "acoustic guitar strums (G-C-D every 2 s, body hump +8 dB at bands 21-26) through wedges; loop at "
@@ -304,9 +314,11 @@ def _s12(seed, st):
           "useless at 3 < 6 dB/s)", 16.0, tags=("feedback", "slow", "music"), latency_budget_ms=1000.0)
 def _s13(seed, st):
     hats = DrumPattern(t_start=0.5, t_end=15.5, bpm=120.0, pattern="hats_only", level_db=-32.0, seed=seed)
-    ring = FeedbackRing(freq_hz=band_centre_hz(80, 12.0), excess_db=0.03, tau_loop_s=0.010, t_on=1.0, start_db=-70.0,
-                        sat_db=-38.0, wander_db=0.4, wander_hz=1.0, label="slow_5k")
-    return Scene(16.0, sources=[room_noise(), music_bed(-52.0, tilt=-1.0, lfo_db=1.0), hats], rings=[ring])
+    # a loop cannot be held 0.03 dB over threshold for 10 s: model it as 0.035 ± 0.02 dB wander (1.5-5.5 dB/s,
+    # mean ~3.5) so the ramp is slow AND irregular but never actually stalls
+    ring = FeedbackRing(freq_hz=band_centre_hz(80, 12.0), excess_db=0.035, excess_wander_db=0.02, tau_loop_s=0.010, t_on=1.0,
+                        start_db=-70.0, sat_db=-38.0, wander_db=0.4, wander_hz=1.0, label="slow_5k")
+    return Scene(16.0, sources=[room_noise(), music_bed(-52.0, tilt=-1.0, lfo_db=1.0, seed=seed), hats], rings=[ring])
 
 
 @scenario("S14_ring_masked_by_cymbal", "crash at t=2.0 (+22 dB bands 58-97, 12 dB/s decay); ring 4.2 kHz crosses threshold at t=2.1, 40 dB/s "
@@ -316,7 +328,7 @@ def _s13(seed, st):
 def _s14(seed, st):
     crash = DrumHit("crash", 2.0, -28.0)
     ring = FeedbackRing(freq_hz=4200.0, excess_db=0.4, tau_loop_s=0.010, t_on=2.1, start_db=-70.0, sat_db=-8.0, label="ring_4k2")
-    return Scene(8.0, sources=[room_noise(), music_bed(-50.0), crash], rings=[ring])
+    return Scene(8.0, sources=[room_noise(), music_bed(-50.0, seed=seed), crash], rings=[ring])
 
 
 @scenario("S15_long_rta_decay_tails", "RTA decay pref left LONG (16 -> 3.75 dB/s release): S1 bass + S7 808 notes leave flat, prominent, "
@@ -330,7 +342,7 @@ def _s15(seed, st):
                    timbre="808", seed=seed, decay_db_per_s=12.0, glide_cents=300.0, glide_s=0.15)
     ring = FeedbackRing(freq_hz=band_centre_hz(73, 25.0), excess_db=0.3, tau_loop_s=0.010, t_on=3.0, start_db=-70.0,
                         sat_db=-6.0, label="ring_3k15")
-    return Scene(16.0, sources=[room_noise(), music_bed(-58.0, tilt=-2.2, lfo_db=1.5), bass, sub], rings=[ring],
+    return Scene(16.0, sources=[room_noise(), music_bed(-58.0, tilt=-2.2, lfo_db=1.5, seed=seed), bass, sub], rings=[ring],
                  geq_schedule=[(8.0, 23, -9.0)])   # operator/other system kills it hard at t=8 (GEQ 3.15 kHz)
 
 
@@ -342,14 +354,14 @@ def _s16(seed, st):
                      vib_rate_hz=5.5, vib_cents=60.0, am_db=1.0, am_hz=6.8, label="vocal_A4")
     mel = Melody(t_start=4.5, t_end=9.5, low="C5", high="C6", note_s=(0.3, 1.0), level_db=-28.0, timbre="organ_flue",
                  seed=seed, vib_rate_hz=0.8, vib_cents=10.0, legato=True, am_db=1.5, am_hz=0.8)
-    return Scene(10.0, sources=[room_noise(), music_bed(-52.0), v, mel])
+    return Scene(10.0, sources=[room_noise(), music_bed(-52.0, seed=seed), v, mel])
 
 
 @scenario("S17_kick_pattern", "four-on-the-floor kick 124 bpm: thump 62->50 Hz over 120 ms, -30 peak, 25 dB/s, beater click; RTA decay "
           "1.0 keeps bands 14-17 pumped at 2 Hz with no family", "TRANSIENT; 0 detections", 10.0, tags=("music", "lf"))
 def _s17(seed, st):
     kick = DrumPattern(t_start=0.4, t_end=9.6, bpm=124.0, pattern="kick_only", level_db=-30.0, seed=seed)
-    return Scene(10.0, sources=[room_noise(), music_bed(-64.0, tilt=-1.4, lfo_db=1.0), kick])
+    return Scene(10.0, sources=[room_noise(), music_bed(-64.0, tilt=-1.4, lfo_db=1.0, seed=seed), kick])
 
 
 @scenario("S18_vibrato_on_band_edge", "G5-ish note ON the band 53/54 edge (797 Hz), +-70 c @ 6 Hz for 3 s, H1 -30, H2 -36, H3 -40: peak band "
@@ -359,7 +371,7 @@ def _s18(seed, st):
     v = HarmonicNote(f0_hz=band_centre_hz(53.5), t_on=1.0, dur=3.0, level_db=-30.0, timbre=(0.0, -6.0, -10.0, -16.0),
                      attack_s=0.05, vib_rate_hz=6.0, vib_cents=70.0, vib_delay_s=0.15, vib_ramp_s=0.3, am_db=0.5, am_hz=6.0,
                      label="note_edge_797")
-    return Scene(6.0, sources=[room_noise(), music_bed(-58.0), v])
+    return Scene(6.0, sources=[room_noise(), music_bed(-58.0, seed=seed), v])
 
 
 @scenario("S19_driven_room_mode", "43 Hz axial room mode (Q 20, +10 dB, T60 1.5 s) DRIVEN by the S1 bass line, recurring at a fixed centroid "
@@ -370,14 +382,14 @@ def _s19(seed, st):
                     timbre="bass_gtr", seed=seed, decay_db_per_s=5.0)
     mode = DrivenResonance(band_centre_hz(11, 35.0), [bass], gain_db=10.0, q=20.0, t60_s=1.5, bw_bands=1.5)
     master = CommonModeGain.ring_out_steps(t_first=3.0, dwell_s=1.5, step_db=1.0, n_steps=6)
-    return Scene(14.0, sources=[room_noise(), music_bed(-58.0, tilt=-2.2, lfo_db=1.0), bass, mode], master=master)
+    return Scene(14.0, sources=[room_noise(), music_bed(-58.0, tilt=-2.2, lfo_db=1.0, seed=seed), bass, mode], master=master)
 
 
 @scenario("S20_song_start_stop_crowd", "t=1 full mix starts (+35 dB broadband; HF in a frame, LF per tau_a), t=9 stops (release-limited fall), "
           "t=10-14 applause bed +15 dB 0.5-4 kHz with two crowd whistles (1.8/2.3 kHz, 0.8 s, ~30 dB prominent, +-50 c wobble)",
           "COMMON_MODE + NOTE; 0 detections", 16.0, tags=("music", "common_mode", "trap"))
 def _s20(seed, st):
-    bed = music_bed(-44.0, lfo_db=2.0, t_on=1.0, t_off=9.0, release_db_per_s=60.0)
+    bed = music_bed(-44.0, lfo_db=2.0, t_on=1.0, t_off=9.0, release_db_per_s=60.0, seed=seed)
     chords = ChordPad(chords=[["A3", "C#4", "E4"], ["F#3", "A3", "C#4"], ["D3", "F#3", "A3"], ["E3", "G#3", "B3"]],
                       t_start=1.0, t_end=9.0, chord_s=2.0, level_db=-34.0, timbre="piano", decay_db_per_s=3.0, seed=seed)
     bass = BassLine(notes=["A1", "F#1", "D2", "E2"], t_start=1.0, t_end=9.0, note_s=1.8, gap_s=0.2, level_db=-36.0, seed=seed)
@@ -401,7 +413,7 @@ def _s21(seed, st):
                   attack_s=1.5, release_db_per_s=30.0, chorus_db=3.0, chorus_hz=1.2, seed=seed + 1)
     for n in p1.children + p2.children:
         n.attack_range_db = 30.0
-    return Scene(13.0, sources=[room_noise(), music_bed(-55.0), p1, p2])
+    return Scene(13.0, sources=[room_noise(), music_bed(-55.0, seed=seed), p1, p2])
 
 
 @scenario("S22_speech_ringing_then_feedback", "speech (F0 110-140 Hz syllables + formant noise 1-3 kHz) through a loop at 2.8 kHz sitting at -2.5 dB: "
@@ -415,7 +427,7 @@ def _s22(seed, st):
     master = CommonModeGain(points=((0.0, 0.0), (6.0, 0.0), (6.0, 3.0)), label="operator+3")
     ring = FeedbackRing(freq_hz=2800.0, excess_db=-2.5, tau_loop_s=0.009, t_on=0.0, start_db=-80.0, sat_db=-8.0,
                         excite_coupling_db=-4.0, excite_bw_oct=0.15, label="lectern_2k8")
-    return Scene(10.0, sources=[room_noise(), music_bed(-60.0, lfo_db=0.5), sp, form], rings=[ring], master=master)
+    return Scene(10.0, sources=[room_noise(), music_bed(-60.0, lfo_db=0.5, seed=seed), sp, form], rings=[ring], master=master)
 
 
 @scenario("S23a_autogain_drift", "RTA autogain accidentally ON: S1 material with a common-mode drift of -0.5 dB/s for 8 s then a +4 dB "
@@ -425,7 +437,7 @@ def _s23a(seed, st):
     bass = BassLine(notes=["E1", "A1", "D2", "G1"], t_start=0.6, t_end=11.5, note_s=0.45, gap_s=0.15, level_db=-38.0,
                     timbre="bass_gtr", seed=seed, decay_db_per_s=5.0)
     master = CommonModeGain(points=((0.0, 0.0), (1.0, 0.0), (9.0, -4.0), (9.0, 0.0)), label="autogain")
-    return Scene(12.0, sources=[room_noise(), music_bed(-58.0, tilt=-2.2, lfo_db=1.5), bass], master=master)
+    return Scene(12.0, sources=[room_noise(), music_bed(-58.0, tilt=-2.2, lfo_db=1.5, seed=seed), bass], master=master)
 
 
 @scenario("S23b_gain_offset_clip", "RTA manual gain left at +24 dB: S7 808 material shifted up so sub-bass peaks hit the 0.0 clip flag",
@@ -434,7 +446,7 @@ def _s23a(seed, st):
 def _s23b(seed, st):
     sub = BassLine(notes=["F1", "G1", "Bb1", "C2"], t_start=0.5, t_end=9.5, note_s=0.9, gap_s=0.1, level_db=-25.0,
                    timbre="808", seed=seed, decay_db_per_s=12.0, glide_cents=300.0, glide_s=0.15)
-    return Scene(10.0, sources=[room_noise(), music_bed(-62.0, tilt=-1.6, lfo_db=1.0), sub])
+    return Scene(10.0, sources=[room_noise(), music_bed(-62.0, tilt=-1.6, lfo_db=1.0, seed=seed), sub])
 
 
 @scenario("S24_bells_triangle_glock", "triangle hit (2.1 kHz, x2.19, x3.48; 25-30 dB prominent, 6 dB/s, no vibrato) then glockenspiel notes "
@@ -445,7 +457,7 @@ def _s24(seed, st):
     gl = Group([TonalBurst(f_hz=note_hz(n), t_on=5.5 + i * 1.0, level_db=-26.0, decay_db_per_s=15.0, dur=1.2,
                            partials=((1.0, 0.0), (2.76, -8.0), (5.4, -14.0)), label="glock")
                 for i, n in enumerate(["C6", "E6", "G6", "C7"])], "glock", "NOTE")
-    return Scene(10.0, sources=[room_noise(), music_bed(-55.0), tri, gl])
+    return Scene(10.0, sources=[room_noise(), music_bed(-55.0, seed=seed), tri, gl])
 
 
 # ==================================================================================================
@@ -464,7 +476,7 @@ def _m1(seed, st):
                  vib_rate_hz=5.5, vib_cents=50.0, attack_s=0.05, glide_cents=-120.0, glide_s=0.1)
     ring = FeedbackRing(freq_hz=band_centre_hz(72, -25.0), excess_db=1.0, tau_loop_s=TAU_LOOP_WEDGE_S, t_on=5.0,
                         start_db=-60.0, sat_db=-4.0, label="wedge_2k83")
-    return Scene(12.0, sources=[room_noise(), music_bed(-32.0, lfo_db=3.0), drums, bass, gtr, vox], rings=[ring])
+    return Scene(12.0, sources=[room_noise(), music_bed(-32.0, lfo_db=3.0, seed=seed), drums, bass, gtr, vox], rings=[ring])
 
 
 @scenario("M2_quiet_music_ringout_two_modes", "M7 replica end-to-end: quiet background music (bed -50, organ melody -34, bass -40) while ring_out steps "
@@ -478,10 +490,10 @@ def _m2(seed, st):
     bass = BassLine(notes=["C2", "G1", "A1", "F1"], t_start=0.4, t_end=15.5, note_s=0.7, gap_s=0.1, level_db=-40.0, seed=seed)
     master = CommonModeGain.ring_out_steps(t_first=2.0, dwell_s=1.5, step_db=1.0, n_steps=9)
     a = FeedbackRing(freq_hz=band_centre_hz(80, 12.0), excess_db=-2.6, tau_loop_s=0.010, t_on=0.0, start_db=-80.0,
-                     sat_db=-6.0, label="mode_5k")
+                     sat_db=-6.0, excite_coupling_db=-3.0, label="mode_5k")
     b = FeedbackRing(freq_hz=band_centre_hz(87, -10.0), excess_db=-5.3, tau_loop_s=0.010, t_on=0.0, start_db=-80.0,
-                     sat_db=-6.0, label="mode_8k")
-    return Scene(16.0, sources=[room_noise(), music_bed(-50.0), mel, bass], rings=[a, b], master=master, prog_coupling=0.5)
+                     sat_db=-6.0, excite_coupling_db=-3.0, label="mode_8k")
+    return Scene(16.0, sources=[room_noise(), music_bed(-50.0, seed=seed), mel, bass], rings=[a, b], master=master, prog_coupling=0.5)
 
 
 @scenario("M3_jazz_trio_lav_ring_400Hz", "piano comping + walking upright-ish bass + ride, lav/lectern loop at 412 Hz (band 44 +15 c) with 0.5 dB "
@@ -496,7 +508,7 @@ def _m3(seed, st):
     ride = Group([DrumHit("ride", 0.4 + 0.4 * i, -30.0) for i in range(33)], "ride", "TRANSIENT")
     ring = FeedbackRing(freq_hz=band_centre_hz(44, 15.0), excess_db=0.5, tau_loop_s=0.022, t_on=4.0, start_db=-70.0,
                         sat_db=-18.0, label="lav_412")
-    return Scene(14.0, sources=[room_noise(), music_bed(-52.0), piano, bass, ride], rings=[ring])
+    return Scene(14.0, sources=[room_noise(), music_bed(-52.0, seed=seed), piano, bass, ride], rings=[ring])
 
 
 # ==================================================================================================
