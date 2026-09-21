@@ -555,7 +555,7 @@ def test_policy_detector_ringout_mics_values(dev):
     assert det["weights"] == {"prominence": 0.3, "persistence": 0.2, "growth": 0.5} and det["confidence_threshold"] == 0.7
     assert det["notch_step_db"] == -3 and det["notch_max_db"] == -9 and det["notch_budget_default"] == 6
     assert dev["ringout"] == {"step_db": 1.0, "dwell_ms": 1500, "safety_margin_db": 3, "abort_backoff_db": 6, "master_ceiling_db": 0, "start_warn_db": -10}
-    assert dev["mics"] == {"send_floor_db": -40, "mute_group_convention": 6}
+    assert dev["mics"] == {"send_floor_db": -40, "signal_floor_db": -80, "mute_group_convention": 6}
 
 
 def test_guarded_globs(dev):

@@ -832,4 +832,7 @@ ringout:
 
 mics:
   send_floor_db: -40
+  # An open mic hears the room: with typical gain a live vocal mic idles at -70..-55 dBFS, an input with nothing
+  # plugged in reads the preamp floor (DOC: ~-100). Below this a candidate is flagged "no input signal" (not excluded).
+  signal_floor_db: -80
   mute_group_convention: 6

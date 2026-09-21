@@ -310,6 +310,9 @@ class FakeDesk:
         # faults
         self.silent = False
         self.latency_ms = 0.0
+        # Realism switch: channels with nothing plugged in. A real input with no source reads the preamp's own
+        # floor on the meters whatever the fader says; the default fake gives every channel programme.
+        self.unplugged: set[int] = set()
         self._drop_left = 0
 
         self.rx_count = 0
@@ -931,6 +934,8 @@ class FakeDesk:
         """Synthetic linear level for one strip. ``pre_fade`` ignores the fader and the mute
         (meters.md §3: ``/meters/6`` word 0 is the post-trim, *pre*-fade level)."""
         wobble = 0.85 + 0.15 * math.sin(2.0 * math.pi * 0.7 * t + salt)
+        if prefix.startswith("/ch/") and int(prefix[4:6]) in self.unplugged:
+            return SILENCE_LIN  # nothing plugged in: the meter shows the input floor, fader or no fader
         if pre_fade:
             return max(SILENCE_LIN, min(8.0, 0.25 * wobble))
         on = self.state.get(f"{prefix}/mix/on", 1)
