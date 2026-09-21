@@ -63,10 +63,12 @@ Errors are :class:`DeskError` (``code`` + ``to_dict()`` for the tool envelope) �
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import contextvars
 import logging
 import math
 import time
-from typing import Any, Iterable, Literal, Mapping, Sequence
+from typing import Any, Iterable, Iterator, Literal, Mapping, Sequence
 
 from .connection import ConnectionState, NotConnected, RequestTimeout, X32Connection
 from .descriptor import Descriptor, DescriptorError, NodePath, ParamSpec
@@ -85,9 +87,27 @@ from .scales import NEG_INF_DB, ScaleError, enum_to_index, format_db
 from .settle import read_until
 from .targets import Target, TargetError, parse_target
 
-__all__ = ["DeskError", "Desk", "ALL_FAMILIES"]
+__all__ = [
+    "priority_writes","DeskError", "Desk", "ALL_FAMILIES"]
 
 log = logging.getLogger(__name__)
+
+# Writes issued inside ``priority_writes()`` take the rate limiter's emergency lane (as panic() does).
+# Reserved for *protective, level-lowering* writes that must never wait behind (or be refused because
+# of) somebody else's burst: CFS²'s back-off after an abort, its retreat when the operator intervenes.
+# A context variable rather than a parameter so it reaches the write through set_level → ramp task
+# (asyncio copies the context into the task) without every signature growing a flag.
+_PRIORITY_WRITE: contextvars.ContextVar[bool] = contextvars.ContextVar("x32mcp_priority_write", default=False)
+
+
+@contextlib.contextmanager
+def priority_writes(on: bool = True) -> Iterator[None]:
+    token = _PRIORITY_WRITE.set(bool(on) or _PRIORITY_WRITE.get())
+    try:
+        yield
+    finally:
+        _PRIORITY_WRITE.reset(token)
+
 
 ALL_FAMILIES: tuple[str, ...] = ("ch", "auxin", "fxrtn", "bus", "mtx", "main", "dca")
 _PANIC_FAMILIES: tuple[str, ...] = ("main", "bus", "mtx")  # fx_routing_scenes.md §11 option 1
@@ -936,7 +956,7 @@ class Desk:
         if tier >= Tier.GUARDED and not guarded:
             raise DeskError("GUARDED", self._guarded_msg(address, target), address=address)
         await self.ensure_pre_write_snapshot()
-        await self._policy.acquire_write()
+        await self._policy.acquire_write(panic=_PRIORITY_WRITE.get())
         try:
             await self._conn.set(address, raw)
         except NotConnected as e:

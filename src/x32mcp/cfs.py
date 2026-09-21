@@ -85,7 +85,7 @@ from pathlib import Path
 from typing import Any, Callable, Sequence
 
 from .connection import ConnectionError as X32ConnectionError, ConnectionState, NotConnected
-from .desk import Desk, DeskError
+from .desk import Desk, DeskError, priority_writes
 from .detector import Detection, DetectorConfig, FeedbackDetector, Notch, NotchController, NotchPlan
 from .events import Event, EventBus
 from .meters import FrameSource, LiveMeters, MeterFrame, RtaSourceError, RtaSourceResult, rta_band_hz, set_rta_source
@@ -951,11 +951,23 @@ class CfsManager:
             log.warning("pre-write snapshot before arming on %s failed: %s", ses.target.label, e)
         try:
             ses.rta = await set_rta_source(self._conn, self._d, ses.target)
+            if not ses.rta.verified:  # the desk did not confirm it re-pointed the analyser: once more, then refuse
+                log.warning("RTA source read-back for %s did not verify (%s); retrying once", ses.target.label, ses.rta.stat_actual)
+                ses.rta = await set_rta_source(self._conn, self._d, ses.target)
         except RtaSourceError as e:
             raise CfsError("BAD_ARGUMENT", str(e)) from None
         except NotConnected as e:
             raise CfsError("NOT_CONNECTED", str(e)) from None
         self._desk.invalidate("/-prefs/rta")
+        if not ses.rta.verified:
+            # Every notch and every raise downstream assumes /meters/15 carries THIS bus post-EQ. If the desk
+            # says otherwise (or says nothing), the detector would be scoring some other signal and writing
+            # its conclusions into this bus's GEQ. Do not arm on a guess.
+            raise CfsError("RTA_UNVERIFIED",
+                           f"the desk did not confirm the RTA now analyses {ses.target.label} "
+                           f"({self._d.rta.get('stat_param', '/-stat/rtasource')} = {ses.rta.stat_actual}, expected {ses.rta.stat_expected}); "
+                           "not arming — check the METERS → RTA page on the console and retry",
+                           rta=_rta_dict(ses.rta))
         self._ses = ses
         self._queue = asyncio.Queue(maxsize=16)
         self._bad_frame_logged = False
@@ -1204,11 +1216,16 @@ class CfsManager:
     async def _write_master(self, ses: _Session, db: float, *, force: bool = False) -> float:
         """Move the bus master to ``db`` (single step) through the Desk; returns what was written.
         ``force`` bypasses the relative clamp — used for every *lowering* write (back-off), which is
-        always safe and must never be refused by show mode (``set_main_level`` forces it already)."""
-        if ses.target.family == "main":
-            res = await self._desk.set_main_level("st", db, ramp_ms=0)
-        else:
-            res = await self._desk.set_level(ses.target, db, ramp_ms=0, force=force)
+        always safe and must never be refused by show mode (``set_main_level`` forces it already).
+        A lowering write also takes the rate limiter's emergency lane (``priority_writes``): the
+        back-off after an abort must not queue behind — or be refused because of — somebody else's
+        burst of writes, or the bus is left parked at the loudest level of the run."""
+        lowering = force or (not math.isinf(db) and not math.isinf(ses.master_db) and db < ses.master_db) or math.isinf(db)
+        with priority_writes(lowering):
+            if ses.target.family == "main":
+                res = await self._desk.set_main_level("st", db, ramp_ms=0)
+            else:
+                res = await self._desk.set_level(ses.target, db, ramp_ms=0, force=force)
         after = res.get("after_db")
         return NEG_INF_DB if after is None else float(after)
 
