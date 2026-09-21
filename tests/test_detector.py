@@ -75,15 +75,21 @@ class SyntheticRta:
         self.floor_noise_db = floor_noise_db
         self.melody = melody
         self.rings: list[tuple[float, float, float, float]] = []   # (hz, start_t, start_db, rate_db_s)
-        self.notes: list[tuple[float, float, float, float, float]] = []  # (hz, t_on, rise_s, level_db_over_floor, t_off)
+        # (hz, t_on, rise_s, level_db_over_floor, t_off, partials): a musical note carries a harmonic family
+        # (the melody above uses +10/+16 bands too); a family-less faded-in sine is the documented irreducible
+        # case (analyser brief 4.3) and is exercised separately.
+        self.notes: list[tuple[float, float, float, float, float, tuple]] = []
         self.extra_noise_db = 0.0
 
     # -- components --
     def add_ring(self, hz: float, *, start_t: float, start_db: float = -40.0, rate_db_s: float = 15.0) -> None:
         self.rings.append((hz, start_t, start_db, rate_db_s))
 
-    def add_note(self, hz: float, *, t_on: float, rise_s: float, above_floor_db: float, t_off: float = 1e9) -> None:
-        self.notes.append((hz, t_on, rise_s, above_floor_db, t_off))
+    NOTE_PARTIALS = ((10, -6.0), (16, -10.0))   # H2, H3 in RTA bands, dB re the fundamental
+
+    def add_note(self, hz: float, *, t_on: float, rise_s: float, above_floor_db: float, t_off: float = 1e9,
+                 partials=NOTE_PARTIALS) -> None:
+        self.notes.append((hz, t_on, rise_s, above_floor_db, t_off, tuple(partials)))
 
     def floor_db(self, i: int, t: float) -> float:
         lvl = -30.0 - 0.22 * i                       # gentle HF tilt
@@ -120,11 +126,14 @@ class SyntheticRta:
                 for band, lvl in ((fund, 16.0), (fund + 10, 12.0), (fund + 16, 8.0)):
                     steady = self.floor_db(band, t) + lvl + gain + rng.uniform(-0.2, 0.2)
                     self._tone(vals, band, steady)
-        for hz, t_on, rise_s, above, t_off in self.notes:
+        for hz, t_on, rise_s, above, t_off, partials in self.notes:
             if t_on <= t <= t_off:
                 i_c = nearest_band(self.band_hz, hz)
                 frac = 1.0 if rise_s <= 0 else min(1.0, (t - t_on + FRAME_S) / rise_s)
                 self._tone(vals, i_c, self.floor_db(i_c, t) + above * frac)
+                for off, rel in partials:
+                    if 0 <= i_c + off < self.n:
+                        self._tone(vals, i_c + off, self.floor_db(i_c + off, t) + above * frac + rel)
         for hz, start_t, start_db, rate in self.rings:
             if t >= start_t:
                 i_c = nearest_band(self.band_hz, hz)
@@ -171,8 +180,15 @@ def test_config_from_descriptor(d, cfg):
     assert cfg.merge_adjacent_bands == 1 and cfg.band_tolerance == 1 and cfg.cooldown_s == 1.0
     assert cfg.frame_period_s == 0.05
     assert cfg.to_dict()["weights"] == cfg.weights
-    # a plateau can never reach the threshold: prominence + persistence alone stay below it
-    assert cfg.w_prominence + cfg.w_persistence < cfg.confidence_threshold
+    # The weighted sum is no longer the decision (it made growth mandatory: w_p + w_s = 0.5 < 0.7, so a
+    # plateaued howl was unreachable). The predicates' keys come through with the yaml values:
+    assert cfg.mode == "watch" and cfg.window_hz == (y["window_lo_hz"], y["window_hi_hz"])
+    assert cfg.sustain_frames == y["sustain_frames"] and cfg.narrow_db == y["narrow_db"]
+    ring = DetectorConfig.from_dict({**y, "mode": "ringout", "lf_feedback_possible": 1})
+    assert ring.window_hz == (y["lf_window_lo_hz"], y["window_hi_hz"])
+    assert DetectorConfig.from_dict({**y, "mode": "ringout"}).window_hz[0] == y["ringout_window_lo_hz"]
+    with pytest.raises(ValueError):
+        DetectorConfig(mode="bogus")
 
 
 def test_config_validation():
@@ -213,6 +229,12 @@ def test_clean_music_no_detections(cfg, band_hz):
 
 
 def test_held_note_not_detected(cfg, band_hz):
+    """A held note with a 0.25 s swell-in and its harmonic family is never notched, however long it holds.
+
+    (The pre-redesign version of this stream had no partials at all: a family-less sine fading in
+    dB-linearly at 80 dB/s and then holding is, passively, the signature of a loop with 0.4 dB excess on a
+    5 ms path - the old detector rejected it only through the 60 dB/s onset guard that also threw away
+    most real howls. That irreducible case is asserted the other way round below.)"""
     src = SyntheticRta(band_hz, seed=3, melody=False)
     # rises to +20 dB over neighbours across 5 frames (0.25 s), then holds for 100 frames
     src.add_note(330.0, t_on=1.0, rise_s=5 * FRAME_S, above_floor_db=20.0)
@@ -222,6 +244,15 @@ def test_held_note_not_detected(cfg, band_hz):
     assert prominence(frames[124], band) > 18.0
     dets = run(cfg, band_hz, frames, "b:note")
     assert dets == []
+
+
+def test_family_less_ramp_is_a_ring(cfg, band_hz):
+    """The same envelope with NO partials is what a regenerating loop looks like (80 dB/s dB-linear ramp to a
+    plateau, one band wide, nothing at 2f/3f): it is reported, by the growth lane, within 6 frames."""
+    src = SyntheticRta(band_hz, seed=3, melody=False)
+    src.add_note(330.0, t_on=1.0, rise_s=5 * FRAME_S, above_floor_db=20.0, partials=())
+    dets = run(cfg, band_hz, src.frames(20 + 5 + 20), "b2:sine-ramp")
+    assert dets and "growth" in dets[0][1].reasons and 20 <= dets[0][0] <= 26
 
 
 # -- (c) regenerating ring ------------------------------------------------------------------------
@@ -307,9 +338,11 @@ def test_plateau_and_transient_do_not_detect(cfg, band_hz):
 
 
 def test_vibrato_rejected_with_longer_persistence(d, band_hz):
-    """A held note wobbling ±1 band / ±2 dB at 5 Hz: each rising half-cycle (2 frames at 20 fps) looks like
-    +40 dB/s growth to a 3-frame window, so persistence_frames=3 reports it (known limitation of the
-    DESIGN heuristic). persistence_frames=6 (yaml knob) rejects it while the 15 dB/s ring is still caught."""
+    """A held note wobbling ±1 band / ±2 dB at 5 Hz. The DESIGN heuristic read each rising half-cycle
+    (2 frames at 20 fps) as +40 dB/s growth and reported it at persistence_frames=3 (the old version of this
+    test asserted that flaw and worked around it with persistence 6). The step-onset test, the centroid
+    wander test and the growth-shape test now reject it at the default persistence too, and
+    persistence_frames=6 still catches the 15 dB/s ring."""
 
     def stream(src: SyntheticRta, n: int) -> list[list[float]]:
         frames = []
@@ -324,7 +357,7 @@ def test_vibrato_rejected_with_longer_persistence(d, band_hz):
         return frames
 
     cfg3 = DetectorConfig.from_descriptor(d)
-    assert run(cfg3, band_hz, stream(SyntheticRta(band_hz, seed=2, melody=False), 120), "h:vibrato/3") != []
+    assert run(cfg3, band_hz, stream(SyntheticRta(band_hz, seed=2, melody=False), 120), "h:vibrato/3") == []
     cfg6 = DetectorConfig.from_dict({**d.detector, "persistence_frames": 6})
     assert run(cfg6, band_hz, stream(SyntheticRta(band_hz, seed=2, melody=False), 120), "h:vibrato/6") == []
     src = SyntheticRta(band_hz, seed=5, melody=False)
@@ -485,10 +518,14 @@ def _plateaued_ring(band_hz, ring_hz, *, prominence_db, frames, floor_db=-85.0, 
     15 s; by the time anyone looked at it, it had long since reached its ceiling and sat flat.
     """
     idx = min(range(len(band_hz)), key=lambda i: abs(band_hz[i] - ring_hz))
+    rng = random.Random(int(ring_hz))
     out = []
     for n in range(frames):
-        vals = [floor_db] * len(band_hz)
-        vals[idx] = floor_db + prominence_db          # dead flat, frame after frame
+        vals = [floor_db + rng.uniform(-1.0, 1.0) for _ in band_hz]     # a real floor is never bit-identical
+        # no growth whatsoever - but a real plateau breathes a few tenths of a dB (air movement, loop-gain
+        # wander) and int16/256 quantisation shows it; a band repeating EXACTLY is the RTA peak-hold display
+        # and is refused on purpose (test below)
+        vals[idx] = floor_db + prominence_db + 0.3 * math.sin(0.7 * n) + rng.uniform(-0.05, 0.05)
         out.append((vals, n * period))
     return idx, out
 
@@ -505,26 +542,50 @@ def test_an_established_plateaued_howl_is_caught(cfg, band_hz):
     assert fired, "an established 60 dB-prominent ring must be emitted even with zero growth"
     first = fired[0]
     assert abs(first.band - idx) <= cfg.band_tolerance
-    assert first.slope_db_per_s == pytest.approx(0.0, abs=0.5), "it really is flat - no growth"
+    assert first.slope_db_per_s == pytest.approx(0.0, abs=3.0), "it really is flat (±0.3 dB breathing) - no growth"
+    assert "growth" not in first.reasons and first.reasons[0].startswith("sustained")
     assert first.confidence >= cfg.confidence_threshold
+    assert first.ts <= 0.3 + 1e-9, "an established ring is emitted sustain_frames after arming"
 
 
 def test_the_override_needs_real_prominence_not_just_patience(cfg, band_hz):
-    """A modest sustained peak must still be ignored: that is what the growth test is for.
-
-    A held vocal note sits a few dB above its neighbours and plateaus. It must not be notched
+    """A held vocal note sits a few dB above its neighbours and plateaus. It must not be notched
     however long it is held, or the system cuts the singer.
+
+    What makes it a note and not a ring is not its modest prominence (a compressor-held howl under
+    music is just as modest: corpus X7) but that it was SEEN TO ARRIVE at full level in one frame and
+    carries a harmonic family - so that is what the stream now contains (the pre-redesign fixture was an
+    onset-less, family-less 15 dB line at -70 dBFS, which only the level floor keeps from being a ring).
     """
+    src = SyntheticRta(band_hz, seed=4, melody=False)
+    src.add_note(330.0, t_on=0.5, rise_s=0.0, above_floor_db=15.0)      # instant onset, H2/H3, held 5.5 s
+    dets = run(cfg, band_hz, src.frames(120), "m7:held-vocal")
+    assert not dets, f"a modest held note must not be notched, got {len(dets)}"
+    # and the onset-less, family-less variant below the plateau-lane level floor stays silent too
     det = FeedbackDetector(cfg, band_hz)
-    # comfortably over the 12 dB qualifying prominence, well under the 25 dB override
     _, frames = _plateaued_ring(band_hz, 330.0, prominence_db=15.0, frames=120)
-    fired = [d for vals, ts in frames for d in det.feed(vals, ts)]
-    assert not fired, f"a modest plateaued peak must not be notched, got {len(fired)}"
+    assert cfg.sustain_min_level_db > -85.0 + 15.0
+    assert not [d for vals, ts in frames for d in det.feed(vals, ts)]
 
 
-def test_override_is_disabled_by_zero(band_hz):
-    """override_prominence_db: 0 restores the pre-M7 behaviour, for anyone who wants it back."""
+def test_frozen_display_is_not_a_plateau(cfg, band_hz):
+    """RTA peak-hold left on: a band repeating bit-for-bit is a held display value, not a measurement, and
+    must never be plateau evidence (corpus S16). The same line with physical wander is caught (above)."""
+    det = FeedbackDetector(cfg, band_hz)
+    idx = min(range(len(band_hz)), key=lambda i: abs(band_hz[i] - 8000.0))
+    fired = []
+    for n in range(40):
+        vals = [-85.0] * len(band_hz)
+        vals[idx] = -25.0                              # dead flat, frame after frame
+        fired += det.feed(vals, n * 0.05)
+    assert not fired
+    assert any("frozen" in c.reasons for c in det.candidates)
+
+
+def test_deprecated_override_keys_still_parse(band_hz):
+    """override_prominence_db / override_persistence_frames are superseded by the sustained lane but stay
+    valid yaml (0 used to disable the override; it changes nothing now)."""
     cfg = DetectorConfig(override_prominence_db=0.0)
     det = FeedbackDetector(cfg, band_hz)
     _, frames = _plateaued_ring(band_hz, 8000.0, prominence_db=60.0, frames=40)
-    assert not [d for vals, ts in frames for d in det.feed(vals, ts)]
+    assert [d for vals, ts in frames for d in det.feed(vals, ts)], "the sustained lane does not depend on the override"

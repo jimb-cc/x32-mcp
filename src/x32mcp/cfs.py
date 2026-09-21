@@ -888,6 +888,9 @@ class CfsManager:
         nc = NotchController(cfg, self._geq_hz, self._policy.validate_notch, budget=budget, existing=existing)
         writer = _DeskGeqWriter(self._desk, self._policy, bus_int, ins.fx_slot, ins.side, existing)
         cfg = await self._calibrate_floor(cfg)
+        # The detector's frequency window and its active-probe lane depend on who owns the gain
+        # (detector.py module doc): ring-out has no programme by contract and steps the master itself.
+        cfg = dataclasses.replace(cfg, mode="ringout" if mode is CfsMode.RINGOUT else "watch")
         det = FeedbackDetector(cfg, self._band_hz)
         start = float(pf.master_db)
         ses = _Session(
@@ -1191,8 +1194,13 @@ class CfsManager:
                 ses.master_db = after
                 reason = f"master clamped at {format_db(after)} dB"
                 break
+            step_done = after - ses.master_db
             ses.master_db = after
             ses.max_master_db = max(ses.max_master_db, after)
+            # Tell the detector the loop gain just went up by a known amount at a known time: a line
+            # that over-responds to it is loop-gain dependent (the active probe, detector.note_gain_step).
+            if step_done > 0:
+                ses.det.note_gain_step(step_done, ses.last_ts if ses.last_ts is not None else self._clock())
             await self._stage(ses, "RAISE")
             await self._dwell(ses, ses.dwell_ms / 1000.0)
         await self._finalize_levels(ses, reason)
@@ -1386,6 +1394,8 @@ class CfsManager:
             "notch_budget": ses.budget, "budget_left": ses.nc.budget_left,
             "geq": {"fx_slot": ses.fx_slot, "side": ses.side, "sel": ses.sel},
             "rta": _rta_dict(ses.rta), "snapshot": ses.snapshot_id,
+            "detector": {"mode": ses.det.cfg.mode, "window_hz": list(ses.det.window_hz),
+                         "lf_feedback_possible": bool(ses.det.cfg.lf_feedback_possible)},
             "notches": mine, "existing_cuts": pre,
             "detections": len(ses.detections), "detection_log": ses.detections[-_MAX_DETECTIONS_IN_REPORT:],
             "notch_log": ses.notch_log, "stages": ses.stages, "frames": ses.frames,
