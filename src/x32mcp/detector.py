@@ -623,10 +623,10 @@ class FeedbackDetector:
                     return False
             return True
         if n < 6:
-            # too little shared history to judge envelopes: a partial that crossed the tracking floor a few
-            # frames after its fundamental (quieter, or slower through the analyser at LF) gets the benefit of
-            # the doubt; a line that turned up seconds later does not
-            return abs(a.born_frame - b.born_frame) <= 12
+            # too little shared history to judge envelopes: a partial that crossed the tracking floor after its
+            # fundamental (quieter, slower through the analyser at LF, or later in a slow swell) gets the
+            # benefit of the doubt for its first frames; the >= 2-partner / born-together rules still apply
+            return True
         if n >= 6:
             ma = sum(xa) / n
             mb = sum(xb) / n
@@ -1180,11 +1180,17 @@ class FeedbackDetector:
             # (rings start alone; two simultaneous rings are rare, three unheard of) [analyser brief §5]
             mates = 0
             for o in getattr(self, "_live", ()):
-                if o is c or abs(o.centroid - c.centroid) < 1.5:
+                if o is c or abs(o.centroid - c.centroid) < 1.5 or len(o.cpows) < 5:
                     continue
                 on, orise, oslope, _st, _rc, olin, _sl = getattr(o, "_rs", (0, 0.0, 0.0, False, 0.0, False, False))
-                if olin and on >= 3 and orise >= 4.0 and oslope >= cfg.growth_min_db_per_s \
-                        and 0.5 * rslope <= oslope <= 2.0 * rslope:
+                mate = olin and on >= 3 and orise >= 4.0 and 0.5 * rslope <= oslope <= 2.0 * rslope
+                if not mate:
+                    # cruder: rising over the last 8 frames at a comparable rate (chorus beating breaks clean runs)
+                    oy = o.cpows[-8:]
+                    ot = o.ts_list[-8:]
+                    osl = _ls_slope(ot, oy)
+                    mate = (oy[-1] - min(oy)) >= 2.5 and 0.5 * rslope <= osl <= 2.0 * rslope
+                if mate:
                     mates += 1
                     if mates >= 2:
                         break
@@ -1292,7 +1298,7 @@ class FeedbackDetector:
                 tier = "A:clip"
             elif loud and c.frames >= K1 and not moving_recent and settled:
                 tier = "A:loud"
-            elif ramp_strong and self._stationary(c, span_k)[0]:
+            elif ramp_strong and self._stationary(c, span_k)[0] and not (c.fam and c.fam[-1]):
                 # stationary over the ramp itself; how the peak got here before the ramp (a neighbour's line the
                 # ring has since swallowed) is not held against it
                 tier = "A:ramp"
