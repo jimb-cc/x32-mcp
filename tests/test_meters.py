@@ -692,3 +692,29 @@ async def test_set_rta_source_unverified_and_read_failures_do_not_raise(d):
     assert [a for a, _ in deaf.sets] == ["/-prefs/rta/source", "/-prefs/rta/pos"]
     with pytest.raises(RtaSourceError):
         await set_rta_source(stale, d, Target("dca", 2))
+
+
+async def test_set_rta_source_forces_analyser_ballistics(d):
+    """Auto-gain, RMS, a long release and peak-hold are all console *display* preferences that
+    corrupt the detector's features; each is forced (only when it differs) and reported."""
+    conn = FakeDeskConn({
+        "/-prefs/rta/source": 0, "/-prefs/rta/pos": 0, "/-prefs/rta/options": 0, "/-stat/rtasource": 0,
+        "/-prefs/rta/autogain": 1, "/-prefs/rta/det": 0, "/-prefs/rta/decay": 0.5, "/-prefs/rta/peakhold": 3,
+        "/-prefs/rta/gain": 0.4,
+    })
+    res = await set_rta_source(conn, d, Target("bus", 1))
+    assert ("/-prefs/rta/autogain", (0,)) in conn.sets and res.autogain_cleared
+    assert ("/-prefs/rta/det", (1,)) in conn.sets and res.detector_set_peak
+    assert ("/-prefs/rta/decay", (0.0,)) in conn.sets and res.decay_set_min
+    assert ("/-prefs/rta/peakhold", (0,)) in conn.sets and res.peakhold_cleared
+    assert res.prefs_before == {"autogain": 1, "det": 0, "decay": 0.5, "peakhold": 3, "options": 0, "gain": 0.4}
+    assert not any(a == "/-prefs/rta/gain" for a, _ in conn.sets)  # reported, never written
+    assert res.verified
+    # already right: nothing is rewritten
+    good = FakeDeskConn({
+        "/-prefs/rta/source": 0, "/-prefs/rta/pos": 0, "/-prefs/rta/options": 0, "/-stat/rtasource": 0,
+        "/-prefs/rta/autogain": 0, "/-prefs/rta/det": 1, "/-prefs/rta/decay": 0.0, "/-prefs/rta/peakhold": 0,
+    })
+    res = await set_rta_source(good, d, Target("bus", 1))
+    assert [a for a, _ in good.sets] == ["/-prefs/rta/source", "/-prefs/rta/pos"]
+    assert not (res.autogain_cleared or res.detector_set_peak or res.decay_set_min or res.peakhold_cleared)

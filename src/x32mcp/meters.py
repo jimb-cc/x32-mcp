@@ -855,6 +855,9 @@ class RtaSourceResult:
     options_cleared: bool  # True when bit 5 (Solo Priority) had to be cleared
     autogain_cleared: bool = False  # True when the RTA's auto-gain had to be switched off
     detector_set_peak: bool = False  # True when the RTA detector had to be moved to PEAK
+    decay_set_min: bool = False  # True when the RTA release ("decay") had to be shortened to its minimum
+    peakhold_cleared: bool = False  # True when the RTA peak-hold had to be switched off
+    prefs_before: dict[str, Any] | None = None  # raw pref values as found, for the report / a later restore
 
 
 async def set_rta_source(
@@ -871,7 +874,9 @@ async def set_rta_source(
     Recipe per meters.md §5.3: write ``rta.source_param`` (``/-prefs/rta/source``) with the
     strip's index, ``rta.pos_param`` (``/-prefs/rta/pos``) 1 = POST / 0 = PRE, clear bit 5
     (Solo Priority) of ``rta.options_param`` if set — bits 0–4 only affect the EQ/GEQ overlay
-    views and are left alone — then read ``rta.stat_param`` (``/-stat/rtasource``) and compare
+    views and are left alone — force the analyser settings the detector depends on (auto-gain OFF,
+    detector PEAK, decay at its minimum, peak-hold OFF; each only written when it differs), then
+    read ``rta.stat_param`` (``/-stat/rtasource``) and compare
     with :func:`rta_stat_expected` (Bus N post-EQ = 146+N−1, Main LR post = 168).
 
     ``conn`` needs ``async get(address)`` and ``async set(address, value)``. Write failures
@@ -923,6 +928,31 @@ async def set_rta_source(
         await conn.set(det_addr, 1)
         detector_set_peak = True
 
+    # Ballistics (meters.md §5.1): ``decay`` is the analyser's release (0.25 … 16, log steps, raw 0.0 =
+    # shortest) and ``peakhold`` freezes past maxima (OFF, 1 … 8). Both are display preferences the
+    # operator may have left anywhere, and both corrupt the detector's temporal features: a long release
+    # makes every note linger for seconds after it stops (persistence then measures the preference, not
+    # the sound), and a held peak is a dead-flat prominent band — exactly what an established ring looks
+    # like. Force the fastest release and no hold so the frames track the signal.
+    decay_set_min = False
+    decay_addr = rta.get("decay_param", "/-prefs/rta/decay")
+    dec = await _read(decay_addr)
+    if isinstance(dec, (int, float)) and not isinstance(dec, bool) and float(dec) > 1e-6:
+        await conn.set(decay_addr, 0.0)
+        decay_set_min = True
+    peakhold_cleared = False
+    ph_addr = rta.get("peakhold_param", "/-prefs/rta/peakhold")
+    ph = await _read(ph_addr)
+    if isinstance(ph, (int, float)) and int(ph) != 0:
+        await conn.set(ph_addr, 0)
+        peakhold_cleared = True
+    # Manual display gain (0..60 dB in 6 dB steps) becomes active once auto-gain is off. Whether it offsets the
+    # /meters/15 values is UNCONFIRMED (meters.md §4.2), and every absolute threshold downstream floats on it, so
+    # it is read and reported with the session rather than silently changed.
+    gain = await _read(rta.get("gain_param", "/-prefs/rta/gain"))
+    prefs_before = {k: v for k, v in (("autogain", ag), ("det", det), ("decay", dec), ("peakhold", ph),
+                                      ("options", opts), ("gain", gain)) if v is not None}
+
     expected = rta_stat_expected(idx, post_eq)
     actual: int | None = None
     for attempt in range(max(1, verify_attempts)):
@@ -938,4 +968,4 @@ async def set_rta_source(
     else:
         log.info("rta source -> %s (%s=%d, %s)", target.label, src_addr, idx, "post-EQ" if post_eq else "pre-EQ")
     return RtaSourceResult(target, idx, post_eq, expected, actual, verified, cleared,
-                           autogain_cleared, detector_set_peak)
+                           autogain_cleared, detector_set_peak, decay_set_min, peakhold_cleared, prefs_before or None)

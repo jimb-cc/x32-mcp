@@ -764,6 +764,12 @@ rta:
   # moves and the detector reads that as the growth signature of feedback; RMS blunts a narrow tone.
   autogain_param: "/-prefs/rta/autogain" # 0/1 - the detector needs absolute levels, so force 0
   det_param: "/-prefs/rta/det"           # 0 RMS, 1 PEAK - force PEAK, feedback is a narrow tone
+  # The analyser's ballistics are display preferences too, and just as able to fool the detector: a long
+  # release ("decay", 0.25..16 log, raw 0.0 = shortest) makes every note linger after it stops, and peak-hold
+  # freezes past maxima into dead-flat prominent bands that look exactly like an established ring.
+  decay_param: "/-prefs/rta/decay"       # force raw 0.0 (shortest release)
+  peakhold_param: "/-prefs/rta/peakhold" # enum OFF,1..8 - force 0 (OFF)
+  gain_param: "/-prefs/rta/gain"         # manual display gain 0..60 dB; read and reported only (effect on /meters/15 UNCONFIRMED)
   frame_period_s: 0.05
 
 geq:
