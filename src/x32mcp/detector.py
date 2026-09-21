@@ -606,12 +606,34 @@ class FeedbackDetector:
         ``partners`` lists the H2..H5 bands found first (``n_up`` of them), then the sub-harmonic evidence."""
         n = len(is_peak)
         tol = self.cfg.family_tol_bands
+        fprom = self.cfg.family_prominence_db
+
+        def shoulder(j: int) -> bool:
+            """A partial masked by a louder line in the next band is not a local maximum but still stands well
+            clear of the local floor (second-lowest of its six neighbours) and within 3 dB of the band beside it."""
+            if j < 1 or j >= n - 1:
+                return False
+            if j < 3 or j >= n - 3 or vals[j] < max(vals[j - 1], vals[j + 1]) - 3.0:
+                return False
+            left = min(vals[j - 3:j])
+            right = min(vals[j + 1:j + 4])
+            return vals[j] - left >= fprom + 2.0 and vals[j] - right >= fprom + 2.0   # clear of the floor on BOTH sides
+
+        def local_line(j: int) -> bool:
+            """A local maximum standing >= family_prominence_db above the lower of its flanks two bands out: in a
+            dense harmonic spectrum (a chord) the ±3-band median is itself made of partials, so 'prominence over the
+            median' under-reads real partials; the exact-position requirement (±0.5 band) carries the specificity."""
+            if j < 2 or j >= n - 2:
+                return False
+            if not (vals[j] > vals[j - 1] and vals[j] >= vals[j + 1]):
+                return False
+            return vals[j] - min(vals[j - 2], vals[j - 1]) >= fprom and vals[j] - min(vals[j + 1], vals[j + 2]) >= fprom
 
         def peak_near(x: float) -> int | None:
             r = int(round(x))
             for j in (r, r - 1, r + 1):
-                if 0 <= j < n and is_peak[j]:
-                    cj, _ = self._centroid(vals, j)
+                if 0 <= j < n and (is_peak[j] or local_line(j) or (j == r and shoulder(j))):
+                    cj, _ = self._centroid(vals, j) if (is_peak[j] or local_line(j)) else (float(j), 0.0)
                     if abs(cj - x) <= tol:
                         return j
             return None
