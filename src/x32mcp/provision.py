@@ -333,7 +333,13 @@ def _side_gains(fx: dict[str, Any], side: str | None) -> tuple[list[float] | Non
     part = geq.get("b") if (side == "B" and geq.get("kind") == "dual") else geq.get("a")
     if not part:
         return None, None
-    bands = [0.0 if b is None else float(b) for b in part.get("bands_db") or []]
+    raw = part.get("bands_db") or []
+    if not raw or any(b is None for b in raw):
+        # A band we could not read (the /node fx/N/par reply never came, or a token did not parse) is
+        # UNKNOWN, not flat. Mapping it to 0.0 made a lost reply look like an empty GEQ and turned the
+        # first "cut" over an operator's deep notch into a boost.
+        return None, None
+    bands = [float(b) for b in raw]
     master = part.get("master_db")
     return bands, (None if master is None else float(master))
 
@@ -411,6 +417,12 @@ async def validate_ringout_eqs(desk: Desk, buses: Sequence[int | str | Target], 
                         elif other.get("side") == side:
                             reasons.append(f"{ins.get('sel')} is also inserted on {other_label} (one insert point per strip, fx_routing_scenes.md §3.4)")
                     bands, master = _side_gains(fx, side)
+                    if bands is None:
+                        # The slot holds a GEQ but its 64 pars did not come back (lost reply / timeout). Arming on
+                        # that would treat every band as flat: the first -3 dB "cut" over an operator's -15 dB is a
+                        # +12 dB boost, and validate_notch (which compares with belief) would not catch it.
+                        reasons.append(f"the band settings of FX slot {slot} could not be read (no reply to /node fx/{slot}/par); "
+                                       "retry — CFS² must know the existing cuts before it writes any")
                     if bands is not None:
                         cuts = {i + 1: g for i, g in enumerate(bands) if g < -_FLAT_EPS}
                         notches = [{"band": b, "freq_hz": geq_hz[b - 1], "depth_db": g} for b, g in sorted(cuts.items())]

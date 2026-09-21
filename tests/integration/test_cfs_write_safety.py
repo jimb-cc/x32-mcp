@@ -209,3 +209,72 @@ async def test_show_mode_on_mid_ringout_aborts_it(rig, fakedesk):
     rep = await asyncio.wait_for(run, timeout=10.0)
     assert rep["final_stage"] == "ABORT" and "show mode" in rep["abort_reason"]
     a.policy.show_mode = False
+
+
+async def test_unreadable_geq_pars_block_arming_instead_of_assuming_flat(rig, fakedesk, monkeypatch):
+    """The operator has 2.5 kHz at -15 dB. If the /node fx/5/par reply is lost at preflight the old code
+    treated the GEQ as flat, so the first detection WROTE -3 dB over -15: a +12 dB boost at a known
+    feedback frequency, by the cuts-only machine. An unreadable GEQ is now a blocker."""
+    a, rta = rig
+    fset(a, fakedesk, PAR_2K5, -15.0)
+    from x32mcp.connection import RequestTimeout
+    orig = a.conn.node
+
+    async def flaky(path: str):
+        if path.strip().lstrip("/") == "fx/5/par":
+            raise RequestTimeout("simulated: /node fx/5/par reply lost")
+        return await orig(path)
+
+    monkeypatch.setattr(a.conn, "node", flaky)
+    res = await srv.feedback_watch(1)
+    assert res["ok"] is False and res["error"]["code"] == "PREFLIGHT_FAILED", res
+    assert "could not be read" in res["error"]["message"]
+    monkeypatch.setattr(a.conn, "node", orig)
+    a.desk.invalidate()
+    res = await srv.feedback_watch(1)
+    assert res["ok"] and res["geq"]["existing_cuts"] and res["geq"]["existing_cuts"][0]["depth_db"] == -15.0
+    await srv.feedback_watch_stop()
+
+
+async def test_arming_is_refused_when_the_desk_does_not_confirm_the_rta_source(rig, fakedesk, monkeypatch):
+    """set_rta_source's read-back said 'not verified' and CFS² armed anyway: every later notch would be
+    scored on whatever the analyser was actually listening to. Now: one retry, then RTA_UNVERIFIED."""
+    a, rta = rig
+    import dataclasses
+    from x32mcp import cfs as cfs_mod
+    real = cfs_mod.set_rta_source
+    calls = {"n": 0}
+
+    async def unverified(conn, d, target, **kw):
+        calls["n"] += 1
+        r = await real(conn, d, target, **kw)
+        return dataclasses.replace(r, verified=False, stat_actual=3)
+
+    monkeypatch.setattr(cfs_mod, "set_rta_source", unverified)
+    res = await srv.feedback_watch(1)
+    assert res["ok"] is False and res["error"]["code"] == "RTA_UNVERIFIED" and calls["n"] == 2, res
+    assert a.cfs._ses is None  # nothing armed
+    monkeypatch.setattr(cfs_mod, "set_rta_source", real)
+    assert (await srv.feedback_watch(1))["ok"]
+    await srv.feedback_watch_stop()
+
+
+async def test_protective_lowering_write_is_not_rate_limited(rig, fakedesk):
+    """A runaway client has drained the write bucket at the moment a ring-out must back off: the raise
+    is (rightly) refused, the lowering write goes through the emergency lane."""
+    a, rta = rig
+    from x32mcp.policy import PolicyError
+    res = await srv.feedback_watch(1)
+    assert res["ok"]
+    ses = a.cfs._ses
+    assert ses is not None and ses.master_db == pytest.approx(-20.0, abs=0.2)
+    a.policy._bucket_tokens = -10_000.0  # somebody else's burst: the next ordinary slot is minutes away
+    with pytest.raises(PolicyError) as ei:
+        await a.cfs._write_master(ses, -19.0)  # a RAISE waits its turn like everyone else -> refused
+    assert ei.value.code == "RATE_LIMITED"
+    after = await a.cfs._write_master(ses, -26.0, force=True)  # the back-off does not
+    assert after == pytest.approx(-26.0, abs=0.2)
+    await settle(a)
+    assert float(fakedesk.value("/bus/01/mix/fader")) == pytest.approx(-26.0, abs=0.2)
+    a.policy._bucket_tokens = 50.0
+    await srv.feedback_watch_stop()
