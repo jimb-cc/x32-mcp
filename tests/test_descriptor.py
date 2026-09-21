@@ -349,6 +349,12 @@ def test_every_param_round_trips_through_reverse_lookup(d):
         ("/-prefs/name", 0),
         ("/save", 2),
         ("/load", 2),
+        ("/main/st/dyn/mgain", 2),  # PA-bus processing is guarded: +24 dB make-up is a level jump
+        ("/main/m/dyn/on", 2),
+        ("/main/st/eq/1/g", 2),
+        ("/main/st/eq/on", 2),
+        ("/bus/01/dyn/mgain", 1),
+        ("/bus/01/eq/1/g", 1),
         ("/xremote", 1),  # unknown → 1 (module doc)
         ("/nope/x", 1),
     ],

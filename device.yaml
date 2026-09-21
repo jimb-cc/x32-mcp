@@ -256,9 +256,31 @@ params:
     mix/on:    {osc: i, scale: bool, node: onoff, tier: 1, inverted_mute: true}
     mix/fader: {osc: f, scale: fader, node: db1, tier: 1, clamp: {max: 0}}            # output master: same ceiling as buses
 
-  main:                                   # §8: st = on fader pan, m = on fader; all mix/* Tier 2 (guarded)
+  main:                                   # §8: st = on fader pan, m = on fader; all mix/*, eq/*, dyn/* Tier 2 (guarded)
     <<: [*blk_config, *blk_dyn_core, *blk_dyn_filter, *blk_insert, *blk_eq, *blk_sends, *blk_grp]
-    "eq/{band}/type": {osc: i, enum: eq_type_mtx, node: enum, tier: 1}
+    # guarded "/main/*/dyn/*" and "/main/*/eq/*": the inherited Tier-1 processing blocks are re-declared Tier 2 here
+    eq/on: {osc: i, scale: bool, node: onoff, tier: 2}
+    "eq/{band}/type": {osc: i, enum: eq_type_mtx, node: enum, tier: 2}
+    "eq/{band}/f": {osc: f, scale: freq, node: freq, tier: 2}
+    "eq/{band}/g": {osc: f, scale: eq_gain, node: db2, tier: 2, clamp: {min: -15, max: 15}}
+    "eq/{band}/q": {osc: f, scale: q, node: float1, tier: 2}
+    dyn/filter/on: {osc: i, scale: bool, node: onoff, tier: 2}
+    dyn/filter/type: {osc: i, enum: filter_type, node: enum, tier: 2}
+    dyn/filter/f: {osc: f, scale: freq, node: freq, tier: 2}
+    dyn/on: {osc: i, scale: bool, node: onoff, tier: 2}
+    dyn/mode: {osc: i, enum: dyn_mode, node: enum, tier: 2}
+    dyn/det: {osc: i, enum: dyn_det, node: enum, tier: 2}
+    dyn/env: {osc: i, enum: dyn_env, node: enum, tier: 2}
+    dyn/thr: {osc: f, scale: dyn_thr, node: float1, tier: 2}
+    dyn/ratio: {osc: i, enum: dyn_ratio, node: enum, tier: 2}
+    dyn/knee: {osc: f, scale: knee, node: int, tier: 2}
+    dyn/mgain: {osc: f, scale: mgain, node: sig3, tier: 2}
+    dyn/attack: {osc: f, scale: ms_attack, node: int, tier: 2}
+    dyn/hold: {osc: f, scale: ms_hold, node: sig3, tier: 2}
+    dyn/release: {osc: f, scale: ms_release, node: int, tier: 2}
+    dyn/pos: {osc: i, enum: pos, node: enum, tier: 2}
+    dyn/mix: {osc: f, scale: pct5, node: pct, tier: 2}
+    dyn/auto: {osc: i, scale: bool, node: onoff, tier: 2}
     mix/on:    {osc: i, scale: bool, node: onoff, tier: 2, inverted_mute: true}
     mix/fader: {osc: f, scale: fader, node: db1, tier: 2, clamp: {max: 0}}            # policy.main_fader_max_db
     mix/pan:   {osc: f, scale: pan, node: sint, tier: 2}                               # /main/st only
@@ -708,6 +730,10 @@ nodes:
 guarded:
   - "/main/st/mix/*"
   - "/main/m/mix/*"
+  # The mains' processing is as much a level control as their faders: +24 dB of compressor make-up
+  # or a +15 dB EQ shelf on Main LR is a house-wide jump with no ramp. Nothing on the PA bus is Tier 1.
+  - "/main/*/dyn/*"
+  - "/main/*/eq/*"
   - "/headamp/*/phantom"
   - "/config/routing/*"
   - "/config/mute/*"
@@ -726,6 +752,9 @@ policy:
   main_fader_max_db: 0
   send_max_db: 0
   eq_gain_abs_max_db: 15
+  # Compressor make-up gain is plain broadband gain after the fader's neighbourhood: through a Tier-1
+  # tool it is bounded like a relative move, not like the desk's 0..24 dB range.
+  dyn_makeup_max_db: 6
   relative_max_db: 6
   relative_max_db_show_mode: 3
   ramp_default_ms: 300

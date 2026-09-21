@@ -865,6 +865,9 @@ class Desk:
         """Refusal text that names the tool to use — a raw OSC address is not a tool argument."""
         if target is not None and target.family == "main" and address.endswith("/mix/on"):
             return f"{target.label} mute is a guarded (Tier 2) parameter; use set_main_mute"
+        if target is not None and target.family == "main" and ("/dyn/" in address or "/eq/" in address):
+            return (f"{target.label} EQ and dynamics are guarded (Tier 2): a boost or make-up gain on the PA bus is a "
+                    "house-wide level jump. There is no confirming tool for them yet; make the change on the console")
         who = f" ({target.label})" if target is not None else ""
         return f"{address}{who} is a guarded (Tier 2) parameter; use the confirming tool for it"
 
@@ -1118,6 +1121,11 @@ class Desk:
         t = self._target(t)
         if self._section_path(t, "dyn") is None:
             raise DeskError("NOT_SUPPORTED", f"{t.label} has no compressor")
+        clamps: list[dict[str, Any]] = []
+        if makeup_db is not None:
+            makeup_db, cl = self._policy.clamp_makeup_gain(_num(makeup_db, "makeup_db"))
+            if cl:
+                clamps.append(cl.to_dict())
         items = [
             ("on", "dyn/on", None if on is None else bool(on)),
             ("threshold_db", "dyn/thr", None if threshold_db is None else _num(threshold_db, "threshold_db")),
@@ -1129,7 +1137,10 @@ class Desk:
             ("mix_pct", "dyn/mix", None if mix_pct is None else _num(mix_pct, "mix_pct")),
         ]
         applied = await self._write_params(t, "set_comp", items)
-        return {"target": t.key, "label": t.label, "applied": applied}
+        out: dict[str, Any] = {"target": t.key, "label": t.label, "applied": applied}
+        if clamps:
+            out["clamped"] = clamps
+        return out
 
     async def set_gate(
         self, t: Target | str | int, *, on: bool | None = None, threshold_db: float | None = None, range_db: float | None = None,
