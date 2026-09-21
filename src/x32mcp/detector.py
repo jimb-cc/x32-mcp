@@ -119,6 +119,8 @@ class DetectorConfig:
     prominence_db: float = 12.0          # dB over the median of the ±neighbour_bins neighbours to *emit*
     neighbour_bins: int = 3              # bands each side used for the median
     track_prominence_db: float = 6.0     # a local maximum this prominent is *tracked* (history before it matters)
+    grow_prominence_db: float = 10.5     # a growing line may be emitted at this prominence: growth is itself evidence,
+                                         # and a ring emerging beside programme partials reads a few dB low
     narrow_db: float = 8.0               # peak − max(level 2 bands outside its footprint): a lone sinusoid leaks only via the
                                          # analyser skirts (≥12 dB down at ±2 even for 2nd-order skirts, analyser
                                          # brief §3); formant humps, cymbal wash and PA ripple are ≥3 bands wide
@@ -364,6 +366,7 @@ class Candidate:
     fam_list: list[bool] = field(default_factory=list)   # family incl. a lone exact-octave partner
     fam_strong: list[bool] = field(default_factory=list) # >= family_partials partners, or somebody's H2/H3/H4
     grow_start: int = 0                # index into the lists where the current monotone ramp starts
+    cen0: float | None = None          # centroid at birth (median of the first frames): where this line lives
     diag: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -756,7 +759,7 @@ class FeedbackDetector:
             d = lvl(rows1, j) - lvl(rows0, j)
             # a weaker partial climbs out of the bed later than the fundamental, so its visible rise is smaller:
             # ask for half the candidate's rise or a clear 4 dB, whichever is less
-            if not (min(0.5 * rise - 2.0, 4.0) <= d <= 2.0 * rise + 3.0):
+            if not (max(1.5, min(0.5 * rise - 2.0, 4.0)) <= d <= 2.0 * rise + 3.0):
                 return False
             if not lone:
                 return True
@@ -1060,11 +1063,14 @@ class FeedbackDetector:
             assigned[ti] = j
             used.add(j)
         survivors: list[Candidate] = []
+        released: set[int] = set()
         for ti, t in enumerate(self._cands):
             best_j = assigned.get(ti, -1)
             if best_j >= 0 and t.cen_list:
                 cl = sorted(t.cen_list[-10:])
-                if abs(clusters[best_j][1] - cl[len(cl) // 2]) > cfg.centroid_tol_bands:
+                cnow = clusters[best_j][1]
+                drifted = t.cen0 is not None and abs(cnow - t.cen0) > cfg.centroid_tol_bands + 0.2
+                if abs(cnow - cl[len(cl) // 2]) > cfg.centroid_tol_bands or drifted:
                     # the line re-appeared a semitone or more away. A ring we are already cutting that re-locks on
                     # the neighbouring loop candidate (hand-held mic, loop brief §2.3) keeps its verdict; anything
                     # else is a different line that must earn its own history — release the cluster so it is born
@@ -1072,8 +1078,10 @@ class FeedbackDetector:
                     if t.feedback:
                         t.hops += 1
                         t.cen_list.clear()
+                        t.cen0 = cnow
                     else:
                         used.discard(best_j)
+                        released.add(best_j)
                         best_j = -1
             if best_j < 0:
                 t.coast += 1
@@ -1112,7 +1120,7 @@ class FeedbackDetector:
             if t is None:
                 t = Candidate(band=b, first_ts=ts, born_frame=k, centroid=c)
                 t.pre_level_db = self._pre_level(b, k)
-                self._backfill(t, b, k)
+                self._backfill(t, b, k, tol=4.0 if j in released else 1.0)
                 if k < cfg.est_arm_frames or (pr >= cfg.prominence_db and self._present_since_arm(b, lp)):
                     t.est = True
                     t.birth = "est"
@@ -1162,7 +1170,7 @@ class FeedbackDetector:
         self.last_ts = ts
         return out
 
-    def _backfill(self, t: Candidate, b: int, k: int) -> None:
+    def _backfill(self, t: Candidate, b: int, k: int, tol: float = 1.0) -> None:
         """Give a newborn track the recent frames in which its band was already a local maximum (the analyser showed
         the line before it was prominent enough to be promoted to a track): a fast ring in a loud mix shows only 2-4
         frames of growth and none may be wasted; a slow one may have been creeping up for seconds under the music.
@@ -1170,6 +1178,9 @@ class FeedbackDetector:
         local maximum for more than two frames (masked or absent)."""
         n = len(self.band_hz)
         floor = t.pre_level_db
+        cur = self._vals[-1][b] if self._vals else None
+        if floor is not None and cur is not None and cur < floor + 6.0:
+            floor = None                     # the line did not come out of that level: it *was* that level
         rows: list[tuple[int, float]] = []
         misses = 0
         for j in range(1, self.HIST):
@@ -1180,7 +1191,8 @@ class FeedbackDetector:
             row = self._vals[i]
             v = max(row[bb] for bb in (b - 1, b, b + 1) if 0 <= bb < n)
             vb = row[b]
-            is_max = vb >= v - 1.0
+            is_max = vb >= v - tol          # the band itself (tol 1) or, for a line that slid off a programme partial's
+                                            # track, the cluster it was part of (tol 4)
             above = floor is None or vb >= floor + 3.0
             if is_max and above and vb > -100.0:
                 rows.append((kk, vb))
@@ -1233,6 +1245,11 @@ class FeedbackDetector:
         t.levels.append(lp)
         t.cen_list.append(c)
         t.ref_list.append(ref)
+        if t.frames <= 5:
+            cl0 = sorted(t.cen_list[-t.frames:]) if t.frames >= 1 else [c]
+            t.cen0 = cl0[len(cl0) // 2]
+        elif t.feedback and t.hops and not t.cen_list[:-1]:
+            t.cen0 = c                      # re-locked ring: its new home
         vals_now = self._vals[-1]
         n_up0, sub, partners = self._family_now(c, is_peak, vals_now)
         # a partner whose level swung by a note's worth while this line did not move is not this line's partial
@@ -1347,7 +1364,7 @@ class FeedbackDetector:
                 verdict = "loud"
                 reasons = ["loud", "narrow", "stationary", "steady", "no-family" if not family else "near-clip"]
             elif (kind and narrow and stationary and t.musical != "sync-onset"
-                  and t.prominence_db >= cfg.track_prominence_db + 3.0
+                  and t.prominence_db >= cfg.grow_prominence_db
                   and not self._fc(t, gi0, k, is_peak, vals)):
                 verdict = "grow-" + kind
                 reasons = [verdict, f"+{net:.0f}dB", f"{slope:.0f}dB/s", "narrow", "stationary", "no-comoving-family"]
