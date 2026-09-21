@@ -196,8 +196,7 @@ class DetectorConfig:
     centroid_wander_bands: float = 0.75  # max centroid range over the sustain window (melody/glide/vibrato move more)
     step_db: float = 9.0                 # single-frame cluster rise that is a programme onset, not a loop
     step_continue_frac: float = 0.3      # ... unless the next frame rises by this fraction of it again (fast ramp)
-    step_release_db: float = 10.0        # a band's step memory clears once its level falls this far below the arrival
-    step_regrow_db: float = 9.0          # ... or rises this far above it (what is there now grew; it is not the arrival)
+    step_release_db: float = 3.0         # a band's step memory clears once its level is back within this of its pre-arrival level
     comove_frames: int = 6               # a partial counts only if its level tracked the candidate's over these frames
     comove_db: float = 3.0               # ... to within this (a note's partials share one envelope; coincidences do not)
     history_frames: int = 8              # per-band pre-qualification history kept (frames)
@@ -215,6 +214,8 @@ class DetectorConfig:
     sustain_drop_db: float = 3.0         # max fall below the window maximum (decaying notes / RTA release fail)
     sustain_min_level_db: float = -45.0  # SUSTAINED lane only: no onset, no growth => level is the last evidence
     clip_level_db: float = -6.0          # narrow line this close to full scale is cut whatever else is true
+    frozen_eps_db: float = 0.002         # a level repeating to within this over the sustain window is a held display
+                                         # value (peak-hold left on), not a measurement: never plateau evidence
     ref_lo_band: int = 25                # spectrum reference = median(level[ref_lo_band .. ref_hi_band])
     ref_hi_band: int = 85
     probe_excess_db: float = 2.0         # ring-out probe: rise beyond the step that marks loop-gain dependence
@@ -255,7 +256,7 @@ class DetectorConfig:
         need(0.0 <= self.family_veto_frac <= 1.0, "family_veto_frac must be in [0, 1]")
         need(self.step_db > 0 and 0.0 <= self.step_continue_frac < 1.0, "step_db/step_continue_frac out of range")
         need(self.history_frames >= 4, "history_frames must be >= 4")
-        need(self.gap_frames >= 0 and self.step_release_db > 0 and self.step_regrow_db > 0, "gap/step release/regrow out of range")
+        need(self.gap_frames >= 0 and self.step_release_db > 0, "gap_frames/step_release_db out of range")
         need(1 <= self.comove_frames <= self.history_frames and self.comove_db > 0, "comove settings out of range")
         need(self.history_frames >= 5, "history_frames must be >= 5 (the step test needs 5)")
         need(self.growth_min_frames >= 3, "growth_min_frames must be >= 3")
@@ -387,9 +388,9 @@ class Candidate:
     missed: int = 0                      # consecutive non-qualifying frames survived (<= gap_frames)
     step_onset: bool = False
     step_level: float = -128.0           # level right after the arrival that flagged step_onset
-    regrown: bool = False                # the line later rose step_regrow_db above that arrival
     at_arm: bool = False                 # already present when the detector armed (no onset observable)
     musical: bool = False
+    frozen: bool = False                 # level exactly constant over the sustain window: held display, not a plateau
     growth: bool = False
     sustained: bool = False
     clip_frames: int = 0
@@ -481,6 +482,7 @@ class FeedbackDetector:
         self._chist: list[list[float]] = []         # per-band cluster levels, last comove_frames frames incl. current
         self._step_alive: list[bool] = [False] * n  # a programme onset (step) arrived on this band and is still sounding
         self._step_ref: list[float] = [-128.0] * n  # level right after that step
+        self._step_floor: list[float] = [-128.0] * n  # level just before it
         self._step_frame: list[int] = [-1] * n      # frame index at which the step was recognised
         self._steps: list[tuple[float, float]] = []  # (ts, delta_db) noted gain steps still open
         self.frames_seen: int = 0
@@ -642,17 +644,20 @@ class FeedbackDetector:
 
     def _update_steps(self, vals: Sequence[float]) -> None:
         """Per-band step memory: a note that stepped in while something else masked its neighbourhood is
-        still a note when it finally qualifies; it stops being one when its level has fallen
-        step_release_db below the arrival (released) or risen step_regrow_db above it (something grew)."""
+        still a note when it finally qualifies, and its release tail (however long the RTA decay stretches
+        it) is still that note. The memory clears when the band is back within step_release_db of its
+        pre-arrival level (the arrival has gone)."""
         cfg = self.cfg
-        alive, ref = self._step_alive, self._step_ref
+        alive, ref, pre = self._step_alive, self._step_ref, self._step_floor
         h = self._hist
         full = len(h) >= 4
         for b in range(len(vals)):
             v = vals[b]
-            if alive[b] and (v < ref[b] - cfg.step_release_db or v > ref[b] + cfg.step_regrow_db):
+            if alive[b] and v < pre[b] + cfg.step_release_db:
                 alive[b] = False
             if full and self._is_step((h[-4][b], h[-3][b], h[-2][b], h[-1][b], v)):
+                if not alive[b]:
+                    pre[b] = min(h[-4][b], h[-3][b])     # a re-attack keeps the original floor
                 alive[b] = True
                 ref[b] = max(h[-1][b], v)
                 self._step_frame[b] = self.frames_seen
@@ -705,17 +710,18 @@ class FeedbackDetector:
         # Step onset: the per-band memory says a programme line arrived on this line's band(s) and is still
         # sounding. Judge what follows an arrival, never the arrival: the growth window restarts whenever
         # a new step lands on the line. A line between two centres owns both bands.
-        near = [q for q in range(max(0, band - 1), min(n, band + 2)) if abs(q - c.centroid) < 0.75]
-        alive = [q for q in near if self._step_alive[q]]
+        # The line's own bands are those within 0.8 of its centroid (a line between two centres owns both;
+        # a neighbour's arrival 1 band from a centred line is not this line's onset); once flagged, the
+        # flag holds while any band within 1.0 still carries the arrival (vibrato swings the centroid).
+        rng = range(max(0, band - 1), min(n, band + 2))
+        alive = [q for q in rng if self._step_alive[q] and abs(q - c.centroid) <= 0.8]
         if alive:
             if not c.step_onset or any(self._step_frame[q] == self.frames_seen for q in alive):
                 self._restart_window(c, 1)
                 c.step_level = max(self._step_ref[q] for q in alive)
             c.step_onset = True
-        elif c.step_onset and c.level_db > c.step_level + cfg.step_regrow_db:
-            # what occupies the band now is step_regrow_db above the thing that arrived: it grew there
-            c.step_onset = False
-            c.regrown = True
+        elif c.step_onset and not any(self._step_alive[q] and abs(q - c.centroid) < 1.0 for q in rng):
+            c.step_onset = False     # the arrival that flagged this line has gone (its bands are back at their old level)
         c.recent.append(c.level_db)
         c.centroids.append(c.centroid)
         if len(c.recent) > cfg.sustain_frames:
@@ -771,7 +777,9 @@ class FeedbackDetector:
         strict = strict and not loud
         # sustained lane: the conditions must hold now; a strongly prominent line needs sustain_frames of track,
         # a moderate one (whose partials could be hiding under the floor) sustain_moderate_frames
-        ok = (not c.step_onset and wander <= cfg.centroid_wander_bands
+        frozen = len(c.recent) >= cfg.sustain_frames and max(c.recent) - min(c.recent) <= cfg.frozen_eps_db
+        c.frozen = frozen
+        ok = (not c.step_onset and wander <= cfg.centroid_wander_bands and not frozen
               and len(c.recent) >= 2 and c.recent[-1] >= max(c.recent) - cfg.sustain_drop_db
               and c.level_db >= cfg.sustain_min_level_db and c.narrow_db >= cfg.narrow_db)
         strong_line = max(c.prominence_db, c.cluster_prominence_db) >= cfg.sustain_strong_prominence_db
@@ -796,12 +804,14 @@ class FeedbackDetector:
                 reasons.append("growth")
             if sustained and not c.musical:
                 verdict = True
-                reasons.append("sustained@arm" if c.at_arm else ("sustained+regrown" if c.regrown else "sustained"))
+                reasons.append("sustained@arm" if c.at_arm else "sustained")
             if probe and not strict:
                 verdict = True
                 reasons.append("probe")
         if c.step_onset:
             reasons.append("step")
+        if c.frozen:
+            reasons.append("frozen")
         c.override = verdict and not growth
         c.reasons = tuple(reasons)
         # reported confidence: monotone in the margins, not the decision variable
@@ -936,6 +946,7 @@ class FeedbackDetector:
         self._chist = []
         self._step_alive = [False] * n
         self._step_ref = [-128.0] * n
+        self._step_floor = [-128.0] * n
         self._step_frame = [-1] * n
         self._steps = []
         self.frames_seen = 0

@@ -829,8 +829,7 @@ detector:
   # any more (the old 60 dB/s onset guard threw away half of all real ring-out howls), instead:
   step_db: 9                 # a single-frame rise this big that does not continue (next frame adds < 30 %
   step_continue_frac: 0.3    # of it) is a programme onset: the track is marked step_onset
-  step_release_db: 10        # the band remembers that arrival until its level falls this far below it (released)
-  step_regrow_db: 9          # ... or rises this far above it (what is there now grew: it is not the arrival)
+  step_release_db: 3         # the band remembers that arrival (and its release tail) until it is back within this of its old level
   comove_frames: 6           # a partial counts only if its level tracked the candidate over these frames
   comove_db: 3               # ... to within this (one envelope); a line merely AT a harmonic offset pulses alone
   history_frames: 8          # frames of per-band history kept so a step before qualification is seen
@@ -858,6 +857,8 @@ detector:
   # compressor-held howl). -45 = the M7 room number; ring_out resolves quieter lines with the probe.
   sustain_min_level_db: -45
   clip_level_db: -6          # a narrow line this close to full scale is cut whatever its family/onset
+  frozen_eps_db: 0.002       # a level repeating to within this over the sustain window is a held display value (RTA
+                             # peak-hold left on), not a plateau: int16/256 quantisation shows any real line's wander
   ref_lo_band: 25            # spectrum reference for common-mode correction = median of bands 25..85
   ref_hi_band: 85
   # --- ring-out active probe (cfs calls note_gain_step after each master step) --------------------
