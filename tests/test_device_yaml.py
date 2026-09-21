@@ -546,11 +546,8 @@ def test_geq_section(dev):
 
 def test_policy_detector_ringout_mics_values(dev):
     assert dev["policy"] == {
-        "ch_fader_max_db": 5, "bus_fader_max_db": 0, "main_fader_max_db": 0, "send_max_db": 0, "eq_gain_abs_max_db": 15,
-        "dyn_makeup_max_db": 6, "relative_max_db": 6, "relative_max_db_show_mode": 3, "ramp_default_ms": 300, "ramp_step_ms": 20, "writes_per_second": 50,
-
         "ch_fader_max_db": 5, "bus_fader_max_db": 0, "main_fader_max_db": 0, "send_max_db": 0, "dca_fader_max_db": 0, "eq_gain_abs_max_db": 15,
-        "relative_max_db": 6, "relative_max_db_show_mode": 3, "ramp_default_ms": 300, "ramp_step_ms": 20, "writes_per_second": 50,
+        "dyn_makeup_max_db": 6, "relative_max_db": 6, "relative_max_db_show_mode": 3, "ramp_default_ms": 300, "ramp_step_ms": 20, "writes_per_second": 50,
         "confirm_token_ttl_s": 300, "read_cache_ttl_s": 2.0, "show_mode_default": False,
     }
     det = dev["detector"]
@@ -558,9 +555,6 @@ def test_policy_detector_ringout_mics_values(dev):
     assert det["weights"] == {"prominence": 0.3, "persistence": 0.2, "growth": 0.5} and det["confidence_threshold"] == 0.7
     assert det["notch_step_db"] == -3 and det["notch_max_db"] == -9 and det["notch_budget_default"] == 6
     assert dev["ringout"] == {"step_db": 1.0, "dwell_ms": 1500, "max_step_db": 3.0, "min_dwell_ms": 250, "safety_margin_db": 3, "abort_backoff_db": 6, "master_ceiling_db": 0, "start_warn_db": -10}
-    assert dev["mics"] == {"send_floor_db": -40, "mute_group_convention": 6}
-
-    assert dev["ringout"] == {"step_db": 1.0, "dwell_ms": 1500, "safety_margin_db": 3, "abort_backoff_db": 6, "master_ceiling_db": 0, "start_warn_db": -10}
     assert dev["mics"] == {"send_floor_db": -40, "signal_floor_db": -80, "mute_group_convention": 6}
 
 
