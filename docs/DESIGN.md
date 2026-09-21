@@ -533,7 +533,10 @@ class RecordingGeqWriter(GeqWriter): writes: list[tuple[int,int,float]]     # fo
 class NotchController:
     def __init__(self, cfg: DetectorConfig, geq_band_hz: Sequence[float], policy_validate: Callable[[float, float], None], *, budget: int, existing: dict[int, float] | None = None)
     def band_for_freq(self, hz: float) -> int
-    def plan(self, det: Detection, bus: int, session_id: str) -> Notch | None    # merges into an adjacent existing notch (≤ merge_adjacent_bands), deepens by notch_step_db to notch_max_db, respects budget (returns None when spent and no existing notch can deepen)
+    def propose(self, det: Detection, bus: int, session_id: str) -> NotchPlan | None   # PURE: merges into an adjacent existing notch (≤ merge_adjacent_bands), deepens by notch_step_db to notch_max_db, respects budget (None when spent / band at max); runs policy_validate
+    def commit(self, plan: NotchPlan) -> Notch                                       # record a plan whose GEQ write has reached the desk (two-phase: propose → write → commit; a failed/cancelled write is never committed)
+    def observe(self, band: int, gain_db: float) -> None                             # the desk pushed a hand-made change: adopt it (never write a band shallower than the desk has it)
+    def plan(self, det, bus, session_id) -> Notch | None                             # propose+commit, offline/tests only
     @property
     def notches(self) -> list[Notch]; budget_left: int; spent: bool
 ```

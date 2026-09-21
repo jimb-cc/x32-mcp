@@ -711,6 +711,32 @@ class Desk:
             "is_geq": geq is not None, "geq": geq, "params": tokens,
         }
 
+    def geq_par_from_push(self, address: str, args: Sequence[Any], fx_type: str | None) -> tuple[int, str, int, float] | None:
+        """Decode a pushed ``/fx/N/par/PP`` update into ``(slot, side, band, gain_db)`` for a GEQ/TEQ of
+        ``fx_type`` (band 1..31, 32 = master; side "A"/"B", stereo types report "A"). None for anything
+        else. Used by CFS² to learn about cuts the engineer makes by hand during a session."""
+        parts = address.strip("/").split("/")
+        if len(parts) != 4 or parts[0] != "fx" or parts[2] != "par" or not args:
+            return None
+        try:
+            slot, par = int(parts[1]), int(parts[3])
+            raw = float(args[0])
+        except (TypeError, ValueError):
+            return None
+        lay = self._geq_layout
+        if fx_type in self._geq_dual:
+            sides = (("A", lay["par_a_first"], lay["par_a_master"]), ("B", lay["par_b_first"], lay["par_b_master"]))
+        elif fx_type in self._geq_stereo:
+            sides = (("A", lay["par_a_first"], lay["par_a_master"]),)
+        else:
+            return None
+        for side, first, master in sides:
+            if par == master:
+                return slot, side, 32, float(self._geq_scale.to_value(raw))
+            if first <= par < first + 31:
+                return slot, side, par - first + 1, float(self._geq_scale.to_value(raw))
+        return None
+
     @staticmethod
     def _geq_token_db(tok: Any) -> float | None:
         # fx_routing_scenes.md §2.2: the desk prints GEQ pars as one-decimal dB
@@ -1601,11 +1627,14 @@ class Desk:
         self._drop(f"/fx/{n}/par")  # the par semantics change with the effect
         return {"slot": n, "type": tokens[i], "index": i}
 
-    async def set_geq_band(self, fx_slot: int, side: str, band: int, gain_db: float) -> None:
+    async def set_geq_band(self, fx_slot: int, side: str, band: int, gain_db: float, *, fx_type: str | None = None) -> None:
         """Raw GEQ write: ``gain_db`` (−15..+15, 0.5 dB grid) to 1-based ``band`` (1..31; 32 = the
         master) of ``side`` ``"A"``/``"B"`` (``"L"``/``"R"`` accepted) of the GEQ/TEQ in ``fx_slot``.
         Stereo types (GEQ/TEQ) use the same pars for both sides. Not a notch policy check — CFS²
-        validates with ``policy.validate_notch`` before calling this."""
+        validates with ``policy.validate_notch`` before calling this. ``fx_type``, when the caller has
+        already validated the slot (CFS² preflight), skips the ``/fx/N`` read: that read is a network
+        round trip whenever the node cache has expired, i.e. a suspension point (and, on a lost
+        datagram, timeout × retries) in the middle of the detect → cut path."""
         n = _int(fx_slot, "fx slot", 1, 8)
         b = _int(band, "band", 1, 32)
         s = str(side).strip().upper()
@@ -1615,7 +1644,8 @@ class Desk:
             s = "B"
         else:
             raise DeskError("BAD_ARGUMENT", f"side must be 'A' or 'B', got {side!r}")
-        fx_type = (await self._section(f"/fx/{n}")).get("type")
+        if fx_type is None:
+            fx_type = (await self._section(f"/fx/{n}")).get("type")
         if fx_type in self._geq_dual:
             first = self._geq_layout["par_b_first" if s == "B" else "par_a_first"]
             master = self._geq_layout["par_b_master" if s == "B" else "par_a_master"]
