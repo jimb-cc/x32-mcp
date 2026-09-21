@@ -6,6 +6,7 @@ reports them (docs/research/meters.md §4.2). Each stream prints the frame index
 
 from __future__ import annotations
 
+import dataclasses
 import math
 import random
 
@@ -171,8 +172,14 @@ def test_config_from_descriptor(d, cfg):
     assert cfg.merge_adjacent_bands == 1 and cfg.band_tolerance == 1 and cfg.cooldown_s == 1.0
     assert cfg.frame_period_s == 0.05
     assert cfg.to_dict()["weights"] == cfg.weights
-    # a plateau can never reach the threshold: prominence + persistence alone stay below it
+    # (legacy) the weighted sum's plateau ceiling — the reason the sequential-evidence discriminator replaced it
     assert cfg.w_prominence + cfg.w_persistence < cfg.confidence_threshold
+    # sequential-evidence thresholds: ring-out emits on weaker evidence than watch (REVIEW_BRIEF Q4) and both sit
+    # inside the clamp; the CURRENT device.yaml loads with defaults for every new key
+    assert cfg.dismiss_llr_watch < 0 < cfg.emit_llr_ringout < cfg.emit_llr_watch < cfg.llr_ceil
+    assert cfg.mode == "watch" and cfg.f_low_hz == cfg.f_low_watch_hz
+    assert cfg.with_mode("ringout").emit_llr == cfg.emit_llr_ringout
+    assert cfg.with_mode("ring_out", lf_feedback_possible=True).f_low_hz == cfg.f_low_lf_optin_hz
 
 
 def test_config_validation():
@@ -213,15 +220,41 @@ def test_clean_music_no_detections(cfg, band_hz):
 
 
 def test_held_note_not_detected(cfg, band_hz):
+    """A held note: it arrives at its level within one analyser rise time at 330 Hz (τ_a ≈ 15-45 ms, i.e. inside one
+    50 ms frame — analyser brief §1) together with its H2/H3 partials (-6/-10 dB), and holds +20 dB over the floor for 5 s.
+
+    (The original fixture rose linearly IN dB at 80 dB/s for 250 ms with no partials and then sat dead flat at -14 dBFS:
+    an exponential amplitude envelope on a family-less, vibrato-less line that stops at a moderate level is the signature of
+    a compressor-caught loop, loop brief §1.3-1.4, and no passive measurement separates it from one — see
+    test_partialless_exponential_swell_is_a_ring below.)"""
     src = SyntheticRta(band_hz, seed=3, melody=False)
-    # rises to +20 dB over neighbours across 5 frames (0.25 s), then holds for 100 frames
-    src.add_note(330.0, t_on=1.0, rise_s=5 * FRAME_S, above_floor_db=20.0)
+    src.add_note(330.0, t_on=1.0, rise_s=0.0, above_floor_db=20.0)
+    src.add_note(660.0, t_on=1.0, rise_s=0.0, above_floor_db=14.0)
+    src.add_note(990.0, t_on=1.0, rise_s=0.0, above_floor_db=10.0)
     frames = src.frames(20 + 5 + 100)
     band = nearest_band(band_hz, 330.0)
     assert prominence(frames[24], band) > 18.0          # the note really is there
     assert prominence(frames[124], band) > 18.0
     dets = run(cfg, band_hz, frames, "b:note")
     assert dets == []
+    # the same, family-less (a flute-top / sine-lead note): still a note — it appeared at full level inside one frame
+    src = SyntheticRta(band_hz, seed=3, melody=False)
+    src.add_note(330.0, t_on=1.0, rise_s=0.0, above_floor_db=20.0)
+    assert run(cfg, band_hz, src.frames(125), "b:sine-note") == []
+
+
+def test_partialless_exponential_swell_is_a_ring(cfg, band_hz):
+    """The original 'held note' fixture: +20 dB linear-in-dB over 5 frames (80 dB/s) at 330 Hz with no partials, then flat.
+    Above ~300 Hz an instrument onset completes inside one frame; a line that climbs at a constant dB-per-frame rate for
+    5 frames is growing exponentially in amplitude — a loop with ≈0.4-0.9 dB of excess (loop brief §1.3: 60-70 % of real
+    ring-out howls exceed the old 60 dB/s 'onset guard'). It must be reported, and within the 300 ms budget."""
+    src = SyntheticRta(band_hz, seed=3, melody=False)
+    src.add_note(330.0, t_on=1.0, rise_s=5 * FRAME_S, above_floor_db=20.0)
+    frames = src.frames(60)
+    band = nearest_band(band_hz, 330.0)
+    t0 = first_crossing(frames, band, cfg.prominence_db)
+    dets = run(cfg, band_hz, frames, "b:swell")
+    assert dets and abs(dets[0][1].band - band) <= 1 and 0 <= dets[0][0] - t0 <= 6
 
 
 # -- (c) regenerating ring ------------------------------------------------------------------------
@@ -267,7 +300,9 @@ def test_two_rings_both_detected(cfg, band_hz):
         t0 = first_crossing(frames, target, cfg.prominence_db)
         i = next(i for i, dd in dets if abs(dd.band - target) <= 1)
         print(f"[d:two] band {target}: crossing at frame {t0}, detected at frame {i}")
-        assert t0 is not None and 0 <= i - t0 <= 6
+        # a growing line's cluster prominence (power sum of ±1 over the ±2..±4 median) leads the single-band figure by
+        # up to ~3 dB, i.e. a few frames at 10 dB/s: emitting slightly BEFORE the single-band crossing is earlier, not wrong
+        assert t0 is not None and -6 <= i - t0 <= 6
 
 
 # -- (e) noise robustness --------------------------------------------------------------------------
@@ -281,9 +316,11 @@ def test_ring_detected_with_noise(cfg, band_hz):
     noisy plateau from a slow ring (see module docstring). Real RTA bins dominated by a steady tone are
     steady; the floor is what is noisy, and that is what this stream exercises.
     """
-    src = SyntheticRta(band_hz, seed=5, melody=False)
+    # floor jitter ±3.5 dB (i.i.d., every band, every frame); the tone-dominated bins themselves are steady, exactly as the
+    # docstring above says and as the analyser brief §1 states ("a band dominated by a steady tone fluctuates ≈ 0 dB") —
+    # the original fixture also jittered the ring's own bin by ±2 dB, which no PEAK/RMS detector on a sinusoid produces
+    src = SyntheticRta(band_hz, seed=5, melody=False, floor_noise_db=3.5)
     src.add_ring(2400.0, start_t=1.0, start_db=-40.0, rate_db_s=15.0)
-    src.extra_noise_db = 2.0
     frames = src.frames(120)
     band = nearest_band(band_hz, 2400.0)
     t0 = first_crossing(frames, band, cfg.prominence_db)
@@ -323,8 +360,10 @@ def test_vibrato_rejected_with_longer_persistence(d, band_hz):
             frames.append(f)
         return frames
 
+    # A line whose energy hops between two adjacent bands at 5 Hz is frequency-modulated: a loop's frequency is fixed by
+    # geometry (loop brief §2.3, analyser brief §4.4). It is musical at ANY persistence setting — no knob required.
     cfg3 = DetectorConfig.from_descriptor(d)
-    assert run(cfg3, band_hz, stream(SyntheticRta(band_hz, seed=2, melody=False), 120), "h:vibrato/3") != []
+    assert run(cfg3, band_hz, stream(SyntheticRta(band_hz, seed=2, melody=False), 120), "h:vibrato/3") == []
     cfg6 = DetectorConfig.from_dict({**d.detector, "persistence_frames": 6})
     assert run(cfg6, band_hz, stream(SyntheticRta(band_hz, seed=2, melody=False), 120), "h:vibrato/6") == []
     src = SyntheticRta(band_hz, seed=5, melody=False)
@@ -485,10 +524,14 @@ def _plateaued_ring(band_hz, ring_hz, *, prominence_db, frames, floor_db=-85.0, 
     15 s; by the time anyone looked at it, it had long since reached its ceiling and sat flat.
     """
     idx = min(range(len(band_hz)), key=lambda i: abs(band_hz[i] - ring_hz))
+    rng = random.Random(int(ring_hz) + frames)
     out = []
     for n in range(frames):
-        vals = [floor_db] * len(band_hz)
-        vals[idx] = floor_db + prominence_db          # dead flat, frame after frame
+        # no growth whatsoever — but a LIVE display: the floor breathes ±1 dB and the ring wanders ±0.2 dB (air movement,
+        # int16/256 quantisation). Exactly repeated frames are what RTA peak-hold produces, which the detector flags as a
+        # misconfigured analyser rather than trusting (analyser brief §2, §7 S16).
+        vals = [floor_db + rng.uniform(-1.0, 1.0) for _ in band_hz]
+        vals[idx] = floor_db + prominence_db + rng.uniform(-0.2, 0.2)
         out.append((vals, n * period))
     return idx, out
 
@@ -523,8 +566,16 @@ def test_the_override_needs_real_prominence_not_just_patience(cfg, band_hz):
 
 
 def test_override_is_disabled_by_zero(band_hz):
-    """override_prominence_db: 0 restores the pre-M7 behaviour, for anyone who wants it back."""
+    """The legacy override key is parsed but no longer gates anything (the plateaued howl is reached on evidence, not on a
+    magic prominence). What an operator CAN still do is demand more evidence: an emit threshold above the clamp ceiling
+    turns the detector into a pure candidate publisher (nothing is ever emitted)."""
     cfg = DetectorConfig(override_prominence_db=0.0)
     det = FeedbackDetector(cfg, band_hz)
     _, frames = _plateaued_ring(band_hz, 8000.0, prominence_db=60.0, frames=40)
-    assert not [d for vals, ts in frames for d in det.feed(vals, ts)]
+    assert [d for vals, ts in frames for d in det.feed(vals, ts)], "override 0 must not re-break the M7 case"
+    quiet = DetectorConfig(emit_llr_watch=7.9, llr_ceil=8.0)
+    det = FeedbackDetector(dataclasses.replace(quiet, llr_ceil=7.95, emit_llr_watch=7.94), band_hz)
+    det = FeedbackDetector(DetectorConfig(emit_llr_watch=7.99, llr_ceil=8.0), band_hz)
+    fired = [d for vals, ts in frames for d in det.feed(vals, ts)]
+    assert all(d.llr >= 7.99 for d in fired)
+    assert det.candidates and det.candidates[0].state in ("feedback", "watching")
