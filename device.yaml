@@ -831,14 +831,14 @@ detector:
   step_continue_frac: 0.3    # of it) is a programme onset: the track is marked step_onset
   step_release_db: 3         # the band remembers that arrival (and its release tail) until it is back within this of its old level
   comove_frames: 6           # a partial counts only if its level tracked the candidate over these frames
-  comove_db: 3               # ... to within this (one envelope); a line merely AT a harmonic offset pulses alone
+  comove_db: 5               # ... to within this (one envelope); a line merely AT a harmonic offset pulses alone
   history_frames: 8          # frames of per-band history kept so a step before qualification is seen
   gap_frames: 2              # non-qualifying frames a track survives (hat hits, threshold flicker)
   # --- growth lane (fast, never required) ----------------------------------------------------------
   growth_min_db_per_s: 6     # reference-corrected LS slope (level minus spectrum median: a fader or
                              # common-mode move is not growth)
   growth_min_frames: 3       # window samples above ~300 Hz; below, the window must span
-  growth_lf_periods: 2.0     # this many 1/bandwidth (no filter resolving df can fake a ramp that long):
+  growth_lf_periods: 4.0     # this many 1/bandwidth (no filter resolving df can fake a ramp that long):
                              # 3 fr >= 300 Hz, 5 @ 125 Hz, 8 @ 80 Hz, 10 @ 63 Hz, 15 @ 40 Hz
   growth_rise_db: 6          # corrected rise over the window
   growth_step_share: 0.7     # the two largest single-frame increments may carry at most this share of the rise

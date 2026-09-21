@@ -719,8 +719,10 @@ class FeedbackDetector:
         if alive:
             newest = max(self._step_frame[q] for q in alive)
             if (not c.step_onset and newest > self.frames_seen - len(c.levels)) or newest == self.frames_seen:
-                # the arrival lies inside the growth window: judge what follows it, not the arrival itself
+                # the arrival lies inside the growth window: judge what follows it, not the arrival itself;
+                # a probe measurement straddling an arrival is void
                 self._restart_window(c, 1)
+                c.probe_base = None
             if not c.step_onset:
                 c.step_level = max(self._step_ref[q] for q in alive)
             c.step_onset = True
@@ -793,8 +795,9 @@ class FeedbackDetector:
         need_frames = cfg.sustain_frames if strong_line else cfg.sustain_moderate_frames
         sustained = ok and c.frames >= need_frames and len(c.recent) >= cfg.sustain_frames
         c.sustained = sustained
-        # probe (ring-out)
-        if c.probe_base is not None and ts <= c.probe_until:
+        # probe (ring-out): an over-response of THIS line to the server's step; a line that arrived (stepped in)
+        # after the step is a new note, not a response
+        if c.probe_base is not None and ts <= c.probe_until and not c.step_onset:
             if (c.level_db - self.ref_db) - c.probe_base > c.probe_delta + cfg.probe_excess_db:
                 c.probe_hits += 1
                 c.probe_base = None          # one hit per step
