@@ -314,6 +314,18 @@ async def test_recall_scene_by_index_and_name_and_save_dance(app, fakedesk):
     pend = await srv.save_scene(9, "Soundcheck 2")
     assert "OVERWRITES the existing scene 'Soundcheck'" in pend["action_summary"]
     assert_err(await srv.save_scene(9, "   "), "BAD_ARGUMENT")
+    # the slot's occupancy is bound into the token: 'slot is empty' confirmed, then someone (X32-Edit)
+    # saves 'Main Show' into slot 10 -> the confirmed call must not overwrite it unseen
+    pend = await srv.save_scene(10, "Monitors")
+    token = assert_pending(pend)
+    assert "(slot is empty)" in pend["action_summary"]
+    fakedesk.scenes[10] = {"name": "Main Show", "notes": "", "state": fakedesk._scene_state_copy()}
+    fakedesk.set_value(fakedesk._scene_addr(10, "name"), "Main Show")
+    fakedesk.set_value(fakedesk._scene_addr(10, "hasdata"), 1)
+    assert_err(await srv.save_scene(10, "Monitors", confirm_token=token), "BAD_TOKEN")  # not the request that was confirmed
+    assert fakedesk.scenes[10]["name"] == "Main Show"  # nothing overwritten
+    again = await srv.save_scene(10, "Monitors")
+    assert "OVERWRITES the existing scene 'Main Show'" in again["action_summary"]
 
 
 # ---------------------------------------------------------------------------------------- snapshots
