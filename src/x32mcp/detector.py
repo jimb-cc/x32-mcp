@@ -580,6 +580,8 @@ class FeedbackDetector:
             cp = _db(p[i - 1] + p[i] + p[i + 1])
             lo2 = v[i - 2] if i >= 2 else -128.0
             hi2 = v[i + 2] if i + 2 < n else -128.0
+            # narrowness: clearance over the ±2 bands (a single line clears the analyser's ±2 skirt by > 20 dB;
+            # formant humps, cymbal wash and bed bumps do not)
             narrow = vi - max(lo2, hi2)
             # cluster prominence: the whole line (b-1..b+1) over the ring of bands ±2..±4 — the fair measure for a
             # line sitting between two centres (each band then reads -3 dB) [analyser brief §3]
@@ -596,6 +598,21 @@ class FeedbackDetector:
         if a.onset == "at_arm" and b.onset == "at_arm":
             return True
         return abs(a.born_frame - b.born_frame) <= 2 and a.onset != "at_arm" and b.onset != "at_arm"
+
+    @staticmethod
+    def _coramping(pa: "_Peak", pb: "_Peak") -> bool:
+        """Both lines are climbing now (>= 3 dB over their last 8 frames, positive slope) at comparable level."""
+        a, b = pa.track, pb.track
+        if a is None or b is None or a is b or abs(pa.level - pb.level) > 10.0:
+            return False
+        out = []
+        for c in (a, b):
+            ys = c.cpows[-8:]
+            ts = c.ts_list[-8:]
+            if len(ys) < 4:
+                return False
+            out.append((ys[-1] - min(ys)) >= 3.0 and _ls_slope(ts, ys) >= 4.0)
+        return out[0] and out[1]
 
     @staticmethod
     def _cogrowing(a: "Candidate | None", b: "Candidate | None") -> bool:
@@ -758,8 +775,12 @@ class FeedbackDetector:
                     pk.family = True
                     best_ks = (found[0][0],)
                     break
-                if len(found) == 1 and found_d <= 0.2 and m <= 3 and undetermined(pk.track, found[0][1].track):
-                    pk.pending = True
+                if len(found) == 1 and found_d <= 0.2 and m <= 3 and (
+                        undetermined(pk.track, found[0][1].track) or self._coramping(pk, found[0][1])):
+                    pk.pending = True      # hold growth-based cuts while an exact-ratio partner of comparable
+                                           # level is itself climbing (a chorused pad's partials beat at different
+                                           # rates, so their envelopes need not match; two rings do not do this
+                                           # at matched level for long)
                 if m == 1:
                     best_ks = tuple(k for k, _ in found)
             pk.partner_ks = best_ks
@@ -1077,8 +1098,11 @@ class FeedbackDetector:
             xm = sum(xs) / m_
             ym = sum(ys) / m_
             resid = math.sqrt(sum((y - ym - sl * (x - xm)) ** 2 for x, y in zip(xs, ys)) / m_)
-            if resid > max(0.6, (0.12 if m_ >= 12 else 0.06) * rise):
-                continue                                    # (a long fit may carry more band noise per point)
+            tol_r = max(0.6, 0.06 * rise)
+            if m_ >= 12 and sl >= 12.0:
+                tol_r = max(tol_r, 0.12 * rise)             # a long, brisk climb may carry more band noise per point
+            if resid > tol_r:
+                continue
             h = m_ // 2
             s1 = _ls_slope(xs[:h], ys[:h]) if h >= 3 else sl
             s2 = _ls_slope(xs[h:], ys[h:]) if m_ - h >= 3 else sl
@@ -1325,9 +1349,9 @@ class FeedbackDetector:
         lts = c.ts_list[-LW:]
         slow_rise = False
         wslope = 0.0
-        if len(llv) >= max(24, K2 + 4):
+        if len(llv) >= max(16, K2 + 1):
             wslope = _ls_slope(lts, llv)
-            if 0.8 <= wslope < max(cfg.growth_min_db_per_s, 8.0):
+            if 0.8 <= wslope < max(cfg.growth_min_db_per_s, 8.0) and wslope * (lts[-1] - lts[0]) >= 3.0:
                 n_ = len(llv)
                 tm = sum(lts) / n_
                 vm = sum(llv) / n_
