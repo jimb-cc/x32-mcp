@@ -469,6 +469,15 @@ class X32Connection:
         return self._state is ConnectionState.CONNECTED
 
     @property
+    def host(self) -> str | None:
+        """Resolved IP of the desk this connection targets (None before the first connect)."""
+        return self._host
+
+    @property
+    def port(self) -> int | None:
+        return self._port
+
+    @property
     def state(self) -> ConnectionState:
         return self._state
 

@@ -10,8 +10,8 @@ Decisions where DESIGN.md is silent:
 * **Level floor.** Anything below −90 dB is the fader's bottom stop (float 0.0, printed ``-oo``,
   docs/research/scales_params.md §2.4), so :meth:`Policy.clamp_level` maps a finite request below
   −90 dB to ``-inf`` and *reports* it as a :class:`Clamped`; ``-inf`` itself passes untouched.
-  ``mtx`` masters use the bus ceiling (device.yaml gives them the same clamp); ``dca`` the channel
-  ceiling (a DCA fader is a channel-side offset, +10 dB top like a channel).
+  ``mtx`` masters use the bus ceiling (device.yaml gives them the same clamp); ``dca`` its own
+  ``dca_fader_max_db`` (0 dB: a DCA raises every member strip at once).
 * **Rate limiter.** A token bucket with capacity = refill rate = ``writes_per_second``. A caller
   that finds the bucket empty *reserves* a token and sleeps until it would have refilled, so a
   burst is spread at exactly the configured rate. When the queued wait would exceed
@@ -188,6 +188,7 @@ class Policy:
         self.bus_fader_max_db = float(p["bus_fader_max_db"])
         self.main_fader_max_db = float(p["main_fader_max_db"])
         self.send_max_db = float(p["send_max_db"])
+        self.dca_fader_max_db = float(p.get("dca_fader_max_db", 0.0))  # a DCA offsets every member: 0 dB top, like a bus
         self.eq_gain_abs_max_db = abs(float(p["eq_gain_abs_max_db"]))
         self.relative_max_db = abs(float(p["relative_max_db"]))
         self.relative_max_db_show_mode = abs(float(p["relative_max_db_show_mode"]))
@@ -249,7 +250,9 @@ class Policy:
             return self.main_fader_max_db
         if fam in ("bus", "mtx"):
             return self.bus_fader_max_db
-        return self.ch_fader_max_db  # ch, auxin, fxrtn, dca
+        if fam == "dca":
+            return self.dca_fader_max_db
+        return self.ch_fader_max_db  # ch, auxin, fxrtn
 
     def clamp_level(
         self, target: Target, db: float, *, kind: Literal["fader", "send"] = "fader"

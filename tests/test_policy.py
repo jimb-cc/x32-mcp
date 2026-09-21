@@ -129,7 +129,7 @@ def test_tier_for(pol):
         (Target("ch", 5), 3.2, 3.2, None),
         (Target("auxin", 2), 6.0, 5.0, 5.0),
         (Target("fxrtn", 1), 9.9, 5.0, 5.0),
-        (Target("dca", 3), 7.0, 5.0, 5.0),
+        (Target("dca", 3), 7.0, 0.0, 0.0),  # DCA: bus-like 0 dB ceiling (it raises every member strip)
         (Target("bus", 3), 2.0, 0.0, 0.0),
         (Target("bus", 3), -3.0, -3.0, None),
         (Target("mtx", 1), 1.0, 0.0, 0.0),
