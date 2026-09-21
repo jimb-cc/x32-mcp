@@ -24,85 +24,110 @@ The M7 detector scored ``0.3·prominence + 0.2·persistence + 0.5·growth`` agai
 made growth mandatory (0.3 + 0.2 < 0.7: a plateaued howl was unreachable) while the growth it measured
 below ~300 Hz was manufactured by the analyser (a 1/10-octave band cannot settle faster than ~1/Δf,
 Δf = 0.069·f, so an instant bass onset renders as a 6..60 dB/s ramp) and nothing looked at the one
-thing that separates a note from a ring in a single frame: a note has a harmonic family. The three
-mechanisms are removed as follows; the tracking structure (prominence → qualifying peaks →
-:class:`Candidate` streaks → verdict, per-band cooldown, re-emission for deepening) is unchanged.
+thing that separates a note from a ring in a single frame: a note has a harmonic family. Those three
+mechanisms are replaced by explicit physical predicates; the tracking structure (prominence → qualifying
+peaks → :class:`Candidate` streaks → verdict, per-band cooldown, re-emission for deepening) is unchanged.
 
 Per frame, per band ``i``:
 
-* ``prominence[i] = level[i] - median(level[i-k .. i+k] without i)``, ``k = neighbour_bins``.
-* ``narrowness[i] = level[i] - max(level[i±2], level[i±3])``. A lone sinusoid on a 1/10-octave bank
-  clears ≥ 24 dB at ±2 for any plausible skirt; a formant hump, cymbal wash or a broadband bump does not.
-* A band *qualifies* when ``prominence >= prominence_db`` and ``narrowness >= narrow_db`` and
-  ``level >= min_level_db`` and its centre lies inside the session's frequency window (below).
-  Adjacent qualifying bands are one peak (the loudest); the peak carries a power **centroid** over
-  ``b-1..b+1`` (a line between two centres reads -3/-3 dB in both) and the cluster level.
-* **Harmonic family (single frame).** Partial ``Hk`` of a peak at ``b`` sits ``10·log2(k)`` bands up
-  (H2 +10, H3 +16, H4 +20, H5 +23). ``Hk`` is *present* when a band within ±1 of that offset is itself a
-  local maximum with prominence ``>= harmonic_presence_db`` and within ``harmonic_rel_db`` of the
-  candidate's prominence (a clipping howl's odd partials sit ≥ 10–17 dB under it and appear only near
-  full scale; musical partials sit 0..-15 dB). The frame is *family-positive* for the peak when ≥
-  ``family_min_partials`` of H2..H5 are present, or when the peak is itself H2/H3 of a lower present
-  peak that owns at least one other partial (the bass-note-shows-as-its-H2 case: the M7 40/80 Hz pair).
+* ``prominence[i] = level[i] - median(level[i-k .. i+k] without i)``, ``k = neighbour_bins``; the
+  *cluster prominence* (power sum of ``i-1..i+1`` over the median of ``i±2..i±4``) is used as an
+  alternative so a line sitting between two centres (-3/-3 dB in both) is not under-read.
+* ``narrowness[i] = level[i]`` minus the second loudest of the four bands at ``i±2, i±3`` — a line, not
+  a hump: a lone sinusoid clears ≥ 24 dB there on any plausible skirt; a formant hump, cymbal wash or PA
+  ripple is ≥ 3 bands wide. (The loudest of the four is forgiven: one unrelated partial two bands away
+  is common in music and says nothing about the width of this line.)
+* A band *qualifies* when (prominence or cluster prominence) ``>= prominence_db``, ``narrowness >=
+  narrow_db``, ``level >= min_level_db`` and its centre lies inside the frequency window (below).
+  Adjacent qualifying bands are one peak (the loudest); each peak carries a power **centroid** over
+  ``b-1..b+1`` (sub-band frequency, used for harmonic matching, stability and the reported ``freq_hz``).
+* **Step memory** (per band, independent of qualification): a rise of ``>= step_db`` confined to at most
+  ``step_max_frames`` consecutive frames, with the frame before and the frame after each carrying less
+  than ``step_continue_frac`` of it, is an *arrival* (programme reaches full level within one analyser
+  rise time, or an 80–150 ms portamento/scoop); the band remembers it, with its pre-arrival level, until
+  the band is back within ``step_release_db`` of that level. A loop growing even at 2×step_db per frame
+  rises on more consecutive frames than that and is never an arrival. This replaces the 60 dB/s onset
+  guard, which discarded about half of all real ring-out howls (1 dB excess on a 5 ms wedge loop =
+  200 dB/s) and then scored the decelerating tail of every LF note onset as growth.
+* **Harmonic family** (single frame, sub-band precision): partial ``Hk`` of a line with centroid ``c``
+  sits at ``c + 10·log2(k)`` (H2 +10, H3 +15.85, H4 +20, H5 +23.2). It is *present* when a local-maximum
+  band within ``harmonic_tol_bands`` of that position has prominence ``>= max(harmonic_presence_db,
+  own prominence - harmonic_rel_db)`` and has **co-moved** with the candidate since the candidate was
+  born (range of their cluster-level difference ``<= comove_db`` over up to ``comove_frames``: partials
+  of one note share an envelope; a programme line that merely sits at a harmonic offset of a ring pulses,
+  decays or holds on its own). The frame is a *family* (2) when ``family_min_partials`` of H2..H5 are
+  present, or when the line is itself partial k of a lower present line that owns another partial and
+  is plausibly its fundamental for level (the line may exceed it by ``parent_excess_low_db`` for k=2,3 —
+  open vowels, HPF'd bass — but only by ``parent_excess_high_db`` for k=4,5); it is a *pair* (1) when
+  exactly one H2/H3 is present within ``single_partial_rel_db`` of the line's own level, dead on
+  (``single_partial_tol_bands``) and tightly co-moving (``single_partial_comove_db``), or when such a
+  line sits exactly an octave below (organ 8'+4', octave doubling, low flute; a loop never produces a
+  subharmonic). Two coexisting rings a near-octave apart form at most a pair and grow at their own rates.
 
-Per candidate (a peak tracked within ``±band_tolerance`` from frame to frame):
+Per candidate (a peak tracked within ``±band_tolerance``; a track survives ``gap_frames`` frames of
+threshold flicker or masking):
 
-* ``family_frac`` = family-positive frames / frames. ``MUSICAL`` once ``frames >= 3`` and
-  ``family_frac >= family_veto_frac``, or the centroid has wandered more than ``centroid_wander_bands``
-  over the sustain window (melody, glide, vibrato wider than a band), unless the level is within
-  ``clip_level_db`` of full scale (anything that loud and that narrow is cut whatever it is).
-* **Step onset** (programme arrives at full level within one analyser rise time; a loop has to grow
-  through every level at e/τ dB/s): a single-frame rise of the cluster level ``>= step_db`` that is not
-  followed by a further rise of at least ``step_continue_frac`` of it on the next frame marks the track
-  ``step_onset`` and restarts the growth window after the step. The pre-qualification history of the band
-  (``history_frames`` frames are kept) is prepended when a track starts, so a note that qualifies on its
-  first full frame still shows its step. This replaces the 60 dB/s onset guard, which discarded ~half of
-  all real ring-out howls (1 dB excess on a 5 ms wedge loop = 200 dB/s) and then scored the decelerating
-  tail of every LF note onset as growth.
-* **GROWTH evidence** (fast lane, never required): over the growth window (restarted by a drop of more
-  than ``monotonic_tolerance_db`` or by a step) of at least ``n_g(band)`` samples the least-squares slope
-  of the *reference-corrected* level (level minus the frame's spectrum reference = median of bands
-  ``ref_lo_band..ref_hi_band``, so a fader/common-mode move is not growth) is ``>= growth_min_db_per_s``,
-  the corrected rise is ``>= growth_rise_db``, the two largest single-frame increments carry no more than
-  ``growth_step_share`` of the rise and at least ``growth_min_steps`` frames each carry half a mean
-  increment (a continuous ramp, not one or two jumps), and the later half of the window carries at least
-  ``growth_late_share`` of it (an analyser-smeared step decelerates to nothing; a loop's dB-linear ramp
-  does not). ``n_g(band) = max(growth_min_frames, ceil(growth_lf_periods / (Δf·frame_period)))``:
-  the window must span ``growth_lf_periods``/Δf so that no filter resolving Δf can fill it with a steady
-  ramp from a step (3 frames above ~300 Hz, 5 at 125 Hz, 10 at 63 Hz). There is no upper slope bound.
-* **SUSTAINED evidence** (the plateau lane): ``frames >= sustain_frames``, no step onset seen, the
-  centroid stayed within ``centroid_wander_bands``, the level did not fall more than ``sustain_drop_db``
-  below its window maximum (plucked/struck notes and RTA release tails decay; an intact loop does not),
-  still narrow and prominent, and ``level >= sustain_min_level_db`` (the one place an absolute level is
-  used: with no onset and no growth observed, level is the only passive evidence left, and a -50 dBFS
-  line at a pre-fader bus tap is not a howl worth a notch).
-* **CLIP**: ``level >= clip_level_db`` for ``persistence_frames`` frames, narrow: emitted regardless of
-  family (a clipping howl grows odd harmonics) or onset.
-* A detection is emitted when ``frames >= persistence_frames`` and (CLIP or (not MUSICAL and (GROWTH or
-  SUSTAINED))) and the band (±band_tolerance) is not in its ``cooldown_s``. A candidate that keeps
+* ``MUSICAL``: a *family* on ``>= family_veto_frac`` of the last ``family_window_frames`` (blocks every
+  lane but CLIP); a *pair* on that fraction, or a pair/family on ``>= family_lifetime_frac`` of the whole
+  track (blocks the plateau lane and the probe); or the centroid wandered more than
+  ``centroid_wander_bands`` over the sustain window (melody, glide, vibrato; a ring's centroid sd is
+  < 0.05 band). A line within ``clip_level_db`` of full scale is never MUSICAL.
+* ``step_onset``: the step memory of the line's own band(s) (within 0.8 band of its centroid) holds an
+  arrival. The growth window restarts when an arrival lands inside it (judge what follows an arrival,
+  never the arrival), and the band's pre-qualification history (``history_frames``) seeds the window when
+  a track starts, so an onset that completed before the band qualified is still in view.
+* **GROWTH** (fast lane, never required): over the growth window (restarted by a drop of more than
+  ``monotonic_tolerance_db``) of at least ``n_g(band)`` samples, both the physical level and the
+  *reference-corrected* level (minus the frame's spectrum median over ``ref_lo_band..ref_hi_band``: a
+  fader or common-mode move is not growth, a steady line over a fading mix is not growth) have
+  least-squares slope ``>= growth_min_db_per_s`` and rise ``>= growth_rise_db``; the two largest
+  single-frame increments carry at most ``growth_step_share`` of the rise and at least
+  ``growth_min_steps`` frames each carry half a mean increment (a continuous ramp, not one or two jumps);
+  and the later half of the window carries at least ``growth_late_share`` of it (an analyser-smeared step
+  decelerates to nothing; a loop's dB-linear ramp does not). ``n_g(band) = max(growth_min_frames,
+  ceil(growth_lf_periods / (Δf·frame_period)))``: 3 frames above ~400 Hz, 5 at 250 Hz, 8 at 160 Hz, 11 at
+  110 Hz, 19 at 63 Hz — long enough that no filter resolving Δf can fill it with a steady ramp from a
+  step. There is no upper slope bound. A *family* on the current frame, or on any frame of a track
+  younger than ``sustain_frames``, defers the growth verdict (a swelling note's low partials surface after
+  its high ones; a voiced syllable glides into place).
+* **SUSTAINED** (plateau lane): not MUSICAL, no ``step_onset``, centroid within
+  ``centroid_wander_bands``, current level within ``sustain_drop_db`` of the sustain-window maximum
+  (plucked/struck notes and RTA release tails decay; an intact loop does not), the level actually moving
+  from frame to frame (a value repeating to ``frozen_eps_db`` on most frames is the RTA peak-hold display,
+  not a measurement), narrow, ``level >= sustain_min_level_db`` (the one absolute level left: with no
+  onset and no growth observed, level is the only passive evidence, and a -50 dBFS line at a pre-fader
+  bus tap is not a howl worth a notch), and the track is ``sustain_frames`` old if the line is at least
+  ``sustain_strong_prominence_db`` prominent, else ``sustain_moderate_frames`` (at 12–18 dB the absence
+  of a family proves little: the partials may be under the floor).
+* **CLIP**: ``level >= clip_level_db`` on ``persistence_frames`` consecutive frames, narrow — emitted
+  whatever the family or onset (a clipping howl grows odd harmonics and may arrive in two frames).
+* **PROBE** (ring-out): after ``note_gain_step(delta_db, ts)`` a candidate that is not MUSICAL, has no
+  arrival since the step, and whose reference-corrected level (held over 3 frames) rose more than
+  ``delta_db + probe_excess_db`` within ``probe_window_s``, on ``probe_confirmations`` steps, is
+  loop-gain dependent: regenerating within a few dB of threshold (an EARLY detection is the point).
+* A detection is emitted when ``frames >= persistence_frames`` and (CLIP ∨ GROWTH ∨ SUSTAINED ∨ PROBE
+  as qualified above) and the band (±band_tolerance) is not in its ``cooldown_s``; a candidate that keeps
   ringing is re-emitted once per cooldown so the notch can be deepened. ``Detection.reasons`` names the
-  predicates that fired; ``confidence`` is a monotone function of the margins for the dashboard and is
-  ``>= confidence_threshold`` exactly when the predicates say feedback (it is reported, not decided on).
-* **Frequency window**: ``window_lo_hz..window_hi_hz`` (``mode='watch'``: programme present, vocal-mic
-  loop gain is 20–30 dB down below ~150 Hz) or ``ringout_window_lo_hz`` (``mode='ringout'``: no
-  programme by contract, a missed LF mode is what a ring-out exists to find); ``lf_feedback_possible``
-  (kick/tom/acoustic-pickup mics on a bus that reaches subs) lowers the edge to ``lf_window_lo_hz``.
-  ``cfs`` may narrow it further from what the desk knows (0.7 × the lowest open channel HPF).
-* **Active probe** (optional, ring-out): ``note_gain_step(delta_db, ts)`` records a server-owned master
-  step; a tracked candidate whose reference-corrected level then rises by more than
-  ``delta_db + probe_excess_db`` within ``probe_window_s`` on ``probe_confirmations`` steps is
-  loop-gain-dependent (regenerating within a few dB of threshold) and is emitted with reason ``probe``.
+  predicates that fired (plus ``step``/``frozen``/``family``/``pair``/``wander`` context) and ``freq_hz``
+  is the centroid frequency; ``confidence`` is a monotone function of the margins for the dashboard,
+  ``>= confidence_threshold`` exactly when the predicates say feedback — reported, not decided on.
+* **Frequency window**: ``window_lo_hz..window_hi_hz`` in ``mode='watch'`` (programme present; a vocal
+  mic's loop gain is 20–30 dB down below ~150 Hz: far-field mic roll-off × HPF × tops), from
+  ``ringout_window_lo_hz`` in ``mode='ringout'`` (no programme by contract; a missed LF mode is what a
+  ring-out exists to find); ``lf_feedback_possible`` (kick/tom/acoustic-pickup mic open on a bus that
+  reaches subs) lowers the edge to ``lf_window_lo_hz``. ``cfs`` sets the mode per session and may narrow
+  the low edge further from what the desk knows (0.7 × the lowest open channel's HPF).
 
-Kept from the previous heuristic and still meaningful: ``prominence_db``, ``neighbour_bins``,
+Kept from the previous heuristic with their meaning: ``prominence_db``, ``neighbour_bins``,
 ``persistence_frames`` (minimum age of any verdict), ``growth_min_db_per_s``, ``monotonic_tolerance_db``,
-``band_tolerance``, ``cooldown_s``, ``growth_window_frames``, all notch/verify keys. Deprecated (parsed,
-validated, no longer decision variables): ``w_*``/``weights`` and ``growth_ref_db_per_s`` shape the
-reported confidence only; ``growth_max_db_per_s`` (the onset guard) is superseded by the step test;
-``override_prominence_db``/``override_persistence_frames`` are superseded by the SUSTAINED lane (a
-25 dB / 6-frame line with no family, no step onset and a stable centroid is exactly what SUSTAINED
-emits; one *with* a step onset — whistle, flute, organ, sine lead, bell — is exactly what the override
-got wrong); ``min_level_db`` keeps its meaning as the qualification gate but defaults to -90 (prominence
-and narrowness are the spatial floor; ``sustain_min_level_db`` is the level prior where one is physical).
+``band_tolerance``, ``cooldown_s``, ``growth_window_frames``, all notch/verify keys; ``min_level_db``
+stays the qualification gate but defaults low (prominence and narrowness are the spatial floor).
+Deprecated (parsed, validated, no longer decision variables): ``w_*``/``weights`` and
+``growth_ref_db_per_s`` shape the reported confidence only; ``growth_max_db_per_s`` (the onset guard) is
+superseded by the step memory; ``override_prominence_db``/``override_persistence_frames`` are superseded
+by the SUSTAINED lane — a 25 dB, 6-frame, family-free line with a stable centroid and no arrival is
+exactly what SUSTAINED emits; one *with* an arrival (whistle, flute, organ, sine lead, bell) is exactly
+what the override notched wrongly.
 
 * ``decay_verify_frames`` (extension, default 2) belongs to the VERIFY stage in ``cfs.py``: the notched
   band must sit ``decay_verify_db`` below its level at the cut on that many *consecutive* frames.
@@ -198,6 +223,7 @@ class DetectorConfig:
     centroid_wander_bands: float = 0.75  # max centroid range over the sustain window (melody/glide/vibrato move more)
     step_db: float = 9.0                 # single-frame cluster rise that is a programme onset, not a loop
     step_continue_frac: float = 0.3      # ... unless the next frame rises by this fraction of it again (fast ramp)
+    step_max_frames: int = 3             # the arrival may take up to this many frames (portamento, scoop, partial frames)
     step_release_db: float = 3.0         # a band's step memory clears once its level is back within this of its pre-arrival level
     comove_frames: int = 6               # a partial counts only if its level tracked the candidate's over these frames
     comove_db: float = 3.0               # ... to within this (a note's partials share one envelope; coincidences do not)
@@ -260,7 +286,7 @@ class DetectorConfig:
         need(self.history_frames >= 4, "history_frames must be >= 4")
         need(self.gap_frames >= 0 and self.step_release_db > 0, "gap_frames/step_release_db out of range")
         need(1 <= self.comove_frames <= self.history_frames and self.comove_db > 0, "comove settings out of range")
-        need(self.history_frames >= 5, "history_frames must be >= 5 (the step test needs 5)")
+        need(1 <= self.step_max_frames <= 3 and self.history_frames >= 6, "step_max_frames 1..3, history_frames >= 6 (the step test)")
         need(self.growth_min_frames >= 3, "growth_min_frames must be >= 3")
         need(self.growth_rise_db > 0, "growth_rise_db must be > 0")
         need(0.0 < self.growth_step_share <= 1.0 and 0.0 <= self.growth_late_share < 1.0, "growth share bounds out of range")
@@ -633,17 +659,23 @@ class FeedbackDetector:
 
     # -- onset shape (per band, independent of qualification) -----------------------------------
     def _is_step(self, w: Sequence[float]) -> bool:
-        """``w`` = five consecutive levels l0..l4 of one band. True when the rise l1 -> l3 (at most two
-        frames) is >= step_db and neither the frame before (l0 -> l1) nor the frame after (l3 -> l4)
-        carries step_continue_frac of it: an arrival, not a ramp. A loop growing at up to ~2 x step_db per
-        frame rises on >= 3 consecutive frames and never satisfies this; programme above ~300 Hz always
-        does (one partially integrated frame at most), LF programme does once the analyser has settled."""
+        """``w`` = six consecutive levels l0..l5 of one band, l4 being the candidate arrival frame's end. True
+        when a rise of >= step_db is confined to at most ``step_max_frames`` consecutive frames ending at l4
+        and neither the frame before that span nor the frame after it (l4 -> l5) carries step_continue_frac
+        of it: an arrival (instant onset, one partially integrated frame, an 80-150 ms portamento or scoop),
+        not a ramp. A loop growing even at 2 x step_db per frame rises on more consecutive frames than that
+        and never satisfies this (it is the growth lane's business); LF programme satisfies it once the
+        analyser has settled."""
         cfg = self.cfg
-        core = w[3] - w[1]
-        if core < cfg.step_db:
-            return False
-        lim = cfg.step_continue_frac * core
-        return (w[1] - w[0]) < lim and (w[4] - w[3]) < lim
+        after = w[5] - w[4]
+        for k in range(1, cfg.step_max_frames + 1):
+            core = w[4] - w[4 - k]
+            if core < cfg.step_db:
+                continue
+            lim = cfg.step_continue_frac * core
+            if (w[4 - k] - w[3 - k]) < lim and after < lim:
+                return True
+        return False
 
     def _update_steps(self, vals: Sequence[float]) -> None:
         """Per-band step memory: a note that stepped in while something else masked its neighbourhood is
@@ -653,14 +685,14 @@ class FeedbackDetector:
         cfg = self.cfg
         alive, ref, pre = self._step_alive, self._step_ref, self._step_floor
         h = self._hist
-        full = len(h) >= 4
+        full = len(h) >= 5
         for b in range(len(vals)):
             v = vals[b]
             if alive[b] and v < pre[b] + cfg.step_release_db:
                 alive[b] = False
-            if full and self._is_step((h[-4][b], h[-3][b], h[-2][b], h[-1][b], v)):
+            if full and self._is_step((h[-5][b], h[-4][b], h[-3][b], h[-2][b], h[-1][b], v)):
                 if not alive[b]:
-                    pre[b] = min(h[-4][b], h[-3][b])     # a re-attack keeps the original floor
+                    pre[b] = min(h[-5][b], h[-4][b])     # a re-attack keeps the original floor
                 alive[b] = True
                 ref[b] = max(h[-1][b], v)
                 self._step_frame[b] = self.frames_seen

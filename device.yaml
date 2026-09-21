@@ -823,13 +823,14 @@ detector:
   family_veto_frac: 0.4      # family-positive fraction of the last family_window_frames => musical
   family_window_frames: 12   # (a note keeps its partials for life; a ring's coincidences in dense music come and go)
   family_lifetime_frac: 0.5  # ... or of the track's whole life (also vetoes the plateau lane)
-  centroid_wander_bands: 0.5   # centroid range over the sustain window above this => melody/glide/vibrato
+  centroid_wander_bands: 0.35  # centroid range over the sustain window above this => melody/glide/vibrato
   # --- onset shape ---------------------------------------------------------------------------------
   # Programme arrives at full level within one analyser rise time (a step); a loop must grow through
   # every level at excess/loop-delay dB/s (1..500 dB/s, loop brief 1.3) - so there is NO upper slope bound
   # any more (the old 60 dB/s onset guard threw away half of all real ring-out howls), instead:
-  step_db: 9                 # a single-frame rise this big that does not continue (next frame adds < 30 %
-  step_continue_frac: 0.3    # of it) is a programme onset: the track is marked step_onset
+  step_db: 9                 # a rise this big confined to <= step_max_frames consecutive frames, with the frame
+  step_continue_frac: 0.3    # before and the frame after each carrying < this fraction of it, is an ARRIVAL
+  step_max_frames: 3         # (instant onset, partial frames, 80-150 ms portamento/scoop): the band remembers it
   step_release_db: 3         # the band remembers that arrival (and its release tail) until it is back within this of its old level
   comove_frames: 6           # a partial counts only if its level tracked the candidate over these frames
   comove_db: 5               # ... to within this (one envelope); a line merely AT a harmonic offset pulses alone
@@ -838,9 +839,10 @@ detector:
   # --- growth lane (fast, never required) ----------------------------------------------------------
   growth_min_db_per_s: 6     # reference-corrected LS slope (level minus spectrum median: a fader or
                              # common-mode move is not growth)
-  growth_min_frames: 3       # window samples above ~300 Hz; below, the window must span
-  growth_lf_periods: 4.0     # this many 1/bandwidth (no filter resolving df can fake a ramp that long):
-                             # 3 fr >= 300 Hz, 5 @ 125 Hz, 8 @ 80 Hz, 10 @ 63 Hz, 15 @ 40 Hz
+  growth_min_frames: 3       # window samples above ~400 Hz; below, the window must span
+  growth_lf_periods: 4.0     # this many 1/bandwidth (no filter resolving df can fake a ramp that long, and the
+                             # smeared onset then sits in the FIRST half of it): 3 fr >= 400 Hz, 5 @ 250 Hz,
+                             # 8 @ 160 Hz, 11 @ 110 Hz, 19 @ 63 Hz, 30 @ 40 Hz
   growth_rise_db: 6          # corrected rise over the window
   growth_step_share: 0.7     # the two largest single-frame increments may carry at most this share of the rise
   growth_late_share: 0.25    # the later half of the window must carry at least this (smeared step decelerates)
