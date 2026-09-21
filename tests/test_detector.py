@@ -171,8 +171,16 @@ def test_config_from_descriptor(d, cfg):
     assert cfg.merge_adjacent_bands == 1 and cfg.band_tolerance == 1 and cfg.cooldown_s == 1.0
     assert cfg.frame_period_s == 0.05
     assert cfg.to_dict()["weights"] == cfg.weights
-    # a plateau can never reach the threshold: prominence + persistence alone stay below it
-    assert cfg.w_prominence + cfg.w_persistence < cfg.confidence_threshold
+    # CHANGED (predicate redesign): the old assertion here was `w_prominence + w_persistence < confidence_threshold`,
+    # i.e. it *required* that a plateaued line be unreachable without growth -- the M7 false negative, encoded as a
+    # test. The weights are now legacy keys (loaded, unused); the decision is the predicate procedure, whose keys
+    # take documented defaults when device.yaml does not carry them.
+    assert cfg.mode == "watch" and cfg.window_low_hz == cfg.window_low_hz_watch == 160.0
+    assert DetectorConfig.from_dict({**y, "mode": "ringout"}).window_low_hz == cfg.window_low_hz_ringout
+    assert DetectorConfig.from_dict({**y, "lf_feedback_possible": True}).window_low_hz == cfg.window_low_hz_lf
+    assert cfg.stable_frames == 5 and cfg.rise_db == 6.0 and cfg.narrow_db == 8.0
+    with pytest.raises(ValueError):
+        DetectorConfig(mode="bogus")
 
 
 def test_config_validation():
@@ -239,7 +247,15 @@ def test_ring_detected_quickly(cfg, band_hz):
     i, first = dets[0]
     print(f"[c:ring] prominence first >= {cfg.prominence_db} dB at frame {t0}; detected at frame {i} (+{i - t0})")
     assert abs(first.band - band) <= 1
-    assert 0 <= i - t0 <= 6
+    # CHANGED (was `<= 6`): the predicate detector needs `rise_db` (6 dB: a doubling of amplitude, 2.4 dB above the
+    # largest expressive swell/flutter measured on the programme corpus) of OBSERVED rise, counted from the frame after
+    # the line first becomes trackable (6 dB prominent). A 15 dB/s ring supplies 6 dB in 8 frames; in this stream a
+    # melody note lifts the neighbourhood so the line is trackable only 4 frames before the 12 dB crossing, hence
+    # crossing + 8 (400 ms) is the physical bound for THIS ring. Rings >= 20 dB/s (the wedge/tops norm, loop brief
+    # §1.3) land inside 6 frames; `growth_rise_db: 4` restores +4 here at the price of a thinner programme margin.
+    assert 0 <= i - t0 <= 1 + math.ceil(cfg.rise_db / 15.0 / FRAME_S)
+    assert "narrow" in first.reasons and "no_family" in first.reasons
+    assert any(r.startswith("rise") or r.startswith("growth") for r in first.reasons)
     assert first.slope_db_per_s == pytest.approx(15.0, abs=3.0)
     assert first.confidence >= cfg.confidence_threshold
     assert all(abs(dd.band - band) <= 1 for _, dd in dets)
@@ -307,9 +323,11 @@ def test_plateau_and_transient_do_not_detect(cfg, band_hz):
 
 
 def test_vibrato_rejected_with_longer_persistence(d, band_hz):
-    """A held note wobbling ±1 band / ±2 dB at 5 Hz: each rising half-cycle (2 frames at 20 fps) looks like
-    +40 dB/s growth to a 3-frame window, so persistence_frames=3 reports it (known limitation of the
-    DESIGN heuristic). persistence_frames=6 (yaml knob) rejects it while the 15 dB/s ring is still caught."""
+    """A held note wobbling ±1 band / ±2 dB at 5 Hz. CHANGED: the old test asserted that the default config
+    (persistence 3) DOES report this note (each rising half-cycle read as +40 dB/s growth) and that persistence 6
+    rejects it. The predicate detector rejects it at any setting -- a line hopping a whole band every few frames
+    fails P3 (centroid stable within ±0.5 band for K1 frames) and its ±2 dB wobble is not a 6 dB rise -- and
+    `persistence_frames` is a legacy key, so both configs must now give no detection; the ring is still caught."""
 
     def stream(src: SyntheticRta, n: int) -> list[list[float]]:
         frames = []
@@ -324,7 +342,7 @@ def test_vibrato_rejected_with_longer_persistence(d, band_hz):
         return frames
 
     cfg3 = DetectorConfig.from_descriptor(d)
-    assert run(cfg3, band_hz, stream(SyntheticRta(band_hz, seed=2, melody=False), 120), "h:vibrato/3") != []
+    assert run(cfg3, band_hz, stream(SyntheticRta(band_hz, seed=2, melody=False), 120), "h:vibrato/3") == []
     cfg6 = DetectorConfig.from_dict({**d.detector, "persistence_frames": 6})
     assert run(cfg6, band_hz, stream(SyntheticRta(band_hz, seed=2, melody=False), 120), "h:vibrato/6") == []
     src = SyntheticRta(band_hz, seed=5, melody=False)
@@ -333,7 +351,6 @@ def test_vibrato_rejected_with_longer_persistence(d, band_hz):
     band = nearest_band(band_hz, 2400.0)
     dets = run(cfg6, band_hz, frames, "h:ring/6")
     t0 = first_crossing(frames, band, cfg6.prominence_db)
-    # persistence 6 needs 3 more frames than the default; the streak may also restart once at the threshold
     print(f"[h:ring/6] crossing at frame {t0}, detected at frame {dets[0][0]} (+{dets[0][0] - t0})")
     assert dets and abs(dets[0][1].band - band) <= 1 and 0 <= dets[0][0] - t0 <= 9
 
@@ -522,9 +539,14 @@ def test_the_override_needs_real_prominence_not_just_patience(cfg, band_hz):
     assert not fired, f"a modest plateaued peak must not be notched, got {len(fired)}"
 
 
-def test_override_is_disabled_by_zero(band_hz):
-    """override_prominence_db: 0 restores the pre-M7 behaviour, for anyone who wants it back."""
+def test_override_key_is_legacy_and_established_ring_is_always_caught(band_hz):
+    """CHANGED: this test asserted that `override_prominence_db: 0` restores the pre-M7 behaviour (an established
+    60 dB-prominent ring is NOT emitted). That behaviour was the M7 false negative; there is no longer a mode in which
+    an established, narrow, family-less, stable line 60 dB above its neighbours at arm is ignored. The key is still
+    accepted (device.yaml carries it) and has no effect."""
     cfg = DetectorConfig(override_prominence_db=0.0)
     det = FeedbackDetector(cfg, band_hz)
     _, frames = _plateaued_ring(band_hz, 8000.0, prominence_db=60.0, frames=40)
-    assert not [d for vals, ts in frames for d in det.feed(vals, ts)]
+    fired = [d for vals, ts in frames for d in det.feed(vals, ts)]
+    # the line sits at -25 dBFS (floor -85 + 60): below arm_fast_level_db, so it is emitted once it has outlasted a note
+    assert fired and "established_at_arm" in fired[0].reasons and fired[0].ts <= DetectorConfig().arm_confirm_s + 0.1

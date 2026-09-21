@@ -888,7 +888,8 @@ class CfsManager:
         nc = NotchController(cfg, self._geq_hz, self._policy.validate_notch, budget=budget, existing=existing)
         writer = _DeskGeqWriter(self._desk, self._policy, bus_int, ins.fx_slot, ins.side, existing)
         cfg = await self._calibrate_floor(cfg)
-        det = FeedbackDetector(cfg, self._band_hz)
+        # detector mode: ring_out owns the gain (wider LF window, active probe via note_gain_step); watch does not
+        det = FeedbackDetector(cfg, self._band_hz, mode="ringout" if mode is CfsMode.RINGOUT else "watch")
         start = float(pf.master_db)
         ses = _Session(
             session_id=self._new_id(mode.value, t), mode=mode, target=t, bus=bus_label(t), bus_int=bus_int, bus_name=pf.bus_name,
@@ -1191,6 +1192,9 @@ class CfsManager:
                 ses.master_db = after
                 reason = f"master clamped at {format_db(after)} dB"
                 break
+            # tell the detector about our own gain step: a line that answers a +1 dB step with much more than
+            # +1 dB is loop-gain dependent (the active probe, loop brief §1.5); one that follows it 1 dB/dB is not
+            ses.det.note_gain_step(after - ses.master_db, ses.last_ts if ses.last_ts is not None else self._clock())
             ses.master_db = after
             ses.max_master_db = max(ses.max_master_db, after)
             await self._stage(ses, "RAISE")

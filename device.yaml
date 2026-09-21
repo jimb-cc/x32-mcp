@@ -780,47 +780,109 @@ geq:
   insert_sel_enum: insert_sel   # 0 OFF, 1 FX1L, 2 FX1R, … 16 FX8R, 17-22 AUX1-6 (23 entries)
 
 detector:
-  prominence_db: 12
-  neighbour_bins: 3
-  # Candidates quieter than this are ignored. Calibrated UP at arm time to sit
-  # floor_margin_db above the room's measured noise floor (see cfs._calibrate_floor): at M7 this
-  # -60 dB sat 8 dB BELOW the studio's own 48 Hz rumble (-51.7 dB peak), so room noise qualified
-  # as feedback and spent the notch budget before a fader moved. A pub, a field and a studio all
-  # differ, so this is a lower bound, not the answer. floor_margin_db 0 disables calibration.
-  # Candidates quieter than this are ignored. -60 was measured WRONG on real hardware at M7: the
-  # loudest band in a silent studio was -51.7 dB (48 Hz rumble), so the room's own noise floor
-  # cleared the gate by 8 dB and ordinary rumble qualified as feedback, spending the whole notch
-  # budget before a fader moved. -45 sits above that floor and still leaves ~20 dB of headroom
-  # below the -25 dB howl that was actually missed.
-  # NOTE: this is one room. A noisier venue needs it higher, and calibrating it automatically from
-  # a measured floor at arm time is the proper fix (attempted 2026-09-20, backed out unfinished).
+  # ---------------------------------------------------------------------------------------------------------------
+  # CFS² feedback discriminator — explicit physical predicates (src/x32mcp/detector.py module docstring).
+  # A tracked spectral LINE is emitted as feedback when it is
+  #   BASE   = NARROW (P1) ∧ NO-FAMILY (P2) ∧ STABLE (P3) ∧ SUSTAINED (P4) ∧ NEW-or-AT-ARM (P5) ∧ IN-WINDOW (P6)
+  #   STRONG = BASE ∧ one piece of positive evidence: RISE (observed growth, any rate, after the analyser settled)
+  #            | LOUD (>= loud_line_db and above everything else) | AT-ARM (established when we armed) | PROBE
+  #            (over-responds to ring_out's own +1 dB steps) | CONFIRMED (already cut once and still there).
+  # watch emits STRONG only; ring_out additionally uses the probe. Every key below has a default in DetectorConfig;
+  # keys absent here take it. Detection.reasons lists the predicates that fired (for the notch report).
+  # ---------------------------------------------------------------------------------------------------------------
+  # P1 NARROW / qualification
+  prominence_db: 12            # cluster prominence (line power over the median of the bands ±2..±4 beyond it) to qualify
+  neighbour_bins: 3            # bands each side for the single-band prominence median
+  track_prominence_db: 6       # a local max this prominent is a *line*: tracked (history starts) but not yet judged
+  narrow_db: 8                 # peak - max(level at ±2 outside the line's 1-2-band cluster); humps/washes read ~0-6
+  cluster_merge_db: 6          # a neighbour within this of the peak is the same line (tone between two centres = -3/-3)
+  track_match_bands: 0.6       # a line continues the track whose centroid is within this (a ring moves < 0.05/frame)
+  coast_frames: 8              # a track survives this many frames without its line (cymbal/hat masking)
+  # P2 NO HARMONIC FAMILY (single frame, presence-as-peak, partials at +10 / +15.85 / +20 / +23.2 bands)
+  partial_prominence_db: 6     # a partial is present when it is itself a local peak this prominent ...
+  partial_tol_bands: 0.6       # ... within ± this of centroid + offset
+  family_min_partials: 2       # >= this many of H2..H5 => family (a lone exact H2 counts only if born with the line)
+  family_veto_fraction: 0.4    # family on >= 40 % of the last 20 frames (or most of the last 5) => MUSICAL
+  comove_tol_db: 3             # partials must co-move with the line (level change over 5 frames within this)
+  partial_rel_db: 18           # ... and sit within 18 dB of its LEVEL (instrument partials run 0..-15 dB re H1)
+  subharm_hi_margin_db: 3      # a line is somebody's H4/H5 only if that somebody is >= 3 dB louder (speech formants)
+  late_partials_rise_db: 12    # a family that first appears after the line rose this much is distortion (amp clip)
+  # P3 STABLE / P4 SUSTAINED
+  stable_frames: 5             # K1: 250 ms of centroid within ±centroid_tol_bands (binding latency term)
+  centroid_tol_bands: 0.25     # ±30 cents; vibrato >= ±30 c on an edge, scoops, glides fail; a ring's sd < 0.05 band
+  drift_max_bands: 1.0         # a line that walked > 1 band within 10 frames is re-born as a new track (glide / hop)
+  decay_db_per_s: 3            # falling faster than this by >= 1.5 dB => decaying (plucked/struck note, RTA release
+  decay_drop_db: 1.5           #   of a killed ring: no re-emission, no wasted deepening)
+  sag_db: 4                    # more than this under the recent max => not sustained
+  # P5 NEW ENERGY (per-band slow low-percentile baseline seeded at arm; replaces the absolute min_level_db gate)
+  baseline_excess_db: 10
+  arm_frames: 3                # a line present in the first 3 frames was "already there" (cannot be new) ...
+  arm_line_min_level_db: -40   # ... it is emitted ~250 ms after arm iff >= this level and >= strong_prominence_db
+  strong_prominence_db: 18     #     (the M7 established-howl case; hum/HVAC/rumble sit below -40 and/or have a family)
+  arm_fast_level_db: -20       # at-arm line >= -20 dBFS: emitted at K1 (250 ms); quieter: after arm_confirm_s (a family-less
+  arm_confirm_s: 0.8           #   note sounding at arm is identical until it ends; melody notes end within ~0.3-1 s)
+  arm_range_db: 6              # ... only while steady (range <= 6 dB over 16 frames) and present >= 80 % of frames since
+  arm_presence: 0.8            #   arm (a kick/bass pattern present at arm pumps and re-triggers; a howl does neither)
+  # P6 FREQUENCY WINDOW (session prior; cfs may derive the low edge from the open mics' HPF: 0.7 x f_hpf)
+  window_low_hz_watch: 160     # programme present: vocal-mic loops do not ring below ~150 Hz (SM58 far field, HPF)
+  window_low_hz_ringout: 63    # no programme by contract: wide
+  window_low_hz_lf: 40         # when lf_feedback_possible (kick/tom/bass-cab/acoustic pickup near subs)
+  window_high_hz: 12500        # condensers/headsets ring to 10-12 kHz; SM58 dies above ~10 kHz
+  lf_feedback_possible: false  # operator declaration; on the corpus the LF analyser-settle logic alone gives 0 LF FP
+  # EVIDENCE
+  rise_db: 6                   # observed rise (net of common mode) since the band settled: a doubling of amplitude,
+                               #   2.4 dB above the largest expressive swell/flutter measured on programme (3.6 dB)
+  analyser_rise_k: 1.0         # band settle time = k/Δf (uncertainty bound): rises are counted only after 1.5x that
+                               #   (1 frame above 300 Hz, 4 frames at 100 Hz, 11 at 40 Hz) -> the M7 40/80 Hz mechanism
+  onset_step_db: 4             # a >4 dB single-frame jump out of a line that was not climbing is an onset landing on
+                               #   the track (re-struck note, syllable): the presence run restarts; also after > K1
+                               #   missed frames. LF: lf_onset_step_db 6 over one settle window, restart_drop_db 6.
+  cm_deadband_db: 2            # rises are net of common-mode moves (median change of the signal-carrying bands 25..85)
+                               #   beyond this dead band (a mix breathes +-1-2 dB; a fader shove is larger)
+  cogrowth_lines: 2            # >= 2 OTHER lines rising >= 3 dB while I rise = programme swell/fade-in, not a loop
+  growth_rise_db: 6            # = rise_db: the optional GROWTH early-upgrade is OFF (4 buys 100-200 ms on 10-15 dB/s
+                               #   rings; fired on a 10 dB/s pad-swell partial on a hold-out seed)
+  loud_line_db: -10            # LOUD: >= this AND >= 4 dB above every band outside its neighbourhood (limiter/clip
+  loud_margin_db: 4            #   territory, loop brief §4.3 tier A). -15 = tier B (also catches -12 dBFS amp-clipped
+                               #   howls in loud mixes, at the price of cutting loud solo sine-like notes)
+  clip_db: -1                  # the analyser clip flag (0.0 dBFS = "clipping occurred", meters.md §4.2)
+  # ring_out active probe (cfs calls note_gain_step after each master step)
+  probe_over_db: 2             # response >= step + 2 dB while the reference moved <= step + 0.5 => over-response
+  probe_min_hits: 2            # two over-responding steps => PROBE evidence (one can be a coincident crescendo)
+  probe_window_s: 1.4          # judged within this after the step (< ringout.dwell_ms)
+  ringout_emit_moderate: false # emit BASE-only lines after K2 when no step could test them: only in a verified
+  confirm_frames: 12           #   programme-free room (226 FP on the music corpus when true); K2
+  mode: watch                  # default construction mode; cfs passes ringout for ring_out sessions
+  # emission / planner (unchanged)
+  band_tolerance: 1            # cooldown radius (RTA bands)
+  cooldown_s: 1.0              # a line still STRONG is re-emitted once per cooldown (that is how a cut deepens)
+  notch_step_db: -3
+  notch_max_db: -9
+  notch_budget_default: 6
+  merge_adjacent_bands: 1
+  decay_verify_db: 6           # ring must drop >= this within decay_verify_s after a notch (cfs VERIFY)
+  decay_verify_s: 1.5
+  decay_verify_frames: 2       # consecutive frames that must show the drop (one dip is RTA noise)
+  frame_period_s: 0.05
+  # ---------------------------------------------------------------------------------------------------------------
+  # LEGACY keys (loaded, NOT used by the decision). Kept so older tooling and cfs._calibrate_floor still load.
+  # The weighted sum 0.3·prominence + 0.2·persistence + 0.5·growth made a plateaued howl unreachable (0.5 < 0.7:
+  # M7, 60 dB line at 0.50 for 15 s) and its 6..60 dB/s growth window is exactly what a 1/10-octave band's own step
+  # response manufactures at 40-160 Hz from any bass onset (M7's 40/80 Hz cuts); min_level_db -45 was one room's
+  # music floor. See docs and detector.py.
+  # ---------------------------------------------------------------------------------------------------------------
   min_level_db: -45
   floor_margin_db: 8
-  floor_sample_s: 2.0        # time cap
-  floor_sample_frames: 40    # enough frames (2 s at 20 fps); whichever comes first
+  floor_sample_s: 2.0
+  floor_sample_frames: 40
   persistence_frames: 3
   growth_min_db_per_s: 6
   growth_ref_db_per_s: 20
   monotonic_tolerance_db: 1.0
   weights: {prominence: 0.3, persistence: 0.2, growth: 0.5}
-  confidence_threshold: 0.7
-  # Established-feedback override (added after M7, 2026-09-20). Without growth the weighted score
-  # cannot exceed prominence+persistence = 0.5, below the 0.7 threshold, so a howl that has already
-  # plateaued could never be emitted: a 60 dB-prominent 8 kHz ring sat at 0.50 for 15 s on the real
-  # desk. Musical content is harmonically spread, so this much prominence in one band is feedback by
-  # construction. 0 disables the override.
+  confidence_threshold: 0.7    # still the display contract: emitted detections report confidence >= this
   override_prominence_db: 25
   override_persistence_frames: 6
-  band_tolerance: 1
-  cooldown_s: 1.0
-  notch_step_db: -3
-  notch_max_db: -9
-  notch_budget_default: 6
-  merge_adjacent_bands: 1
-  decay_verify_db: 6         # ring must drop >= this within decay_verify_s after a notch
-  decay_verify_s: 1.5
-  decay_verify_frames: 2     # consecutive frames that must show the drop (one dip is RTA noise)
-  frame_period_s: 0.05
 
 ringout:
   step_db: 1.0
