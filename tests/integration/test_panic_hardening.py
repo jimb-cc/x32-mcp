@@ -154,3 +154,27 @@ async def test_unconfirmed_panic_is_reasserted_when_the_desk_comes_back(app, fak
     await wait_for_state(app.conn, ConnectionState.CONNECTED, timeout=8.0)
     await wait_until(lambda: all_muted(fakedesk), timeout=3.0, what="panic re-asserted after reconnect")
     assert app.desk._panic_reassert is False
+
+
+async def test_panic_reads_the_mutes_back_and_resends_a_lost_one(app, fakedesk, monkeypatch):
+    """A SET has no ack: 'sent' is not 'muted'. After the sends, panic reads the 24 mix/on back;
+    an output that still reads open (a lost datagram) is sent again and the result says so."""
+    real_set = app.conn.set
+    dropped = {"n": 0}
+
+    async def lossy(address, *args, **kw):
+        if address == "/bus/07/mix/on" and dropped["n"] == 0:
+            dropped["n"] += 1  # this one datagram never reaches the desk
+            app.conn.invalidate(address)
+            return
+        return await real_set(address, *args, **kw)
+
+    monkeypatch.setattr(app.conn, "set", lossy)
+    p = await srv.panic()
+    assert p["ok"] and p["delivered"] == "confirmed" and p["resent"] == ["bus.7"] and p["confirmed"] == 24
+    assert "read back muted" in p["summary"]
+    await settle(app)
+    assert fakedesk.get("/bus/07/mix/on") == 0
+    # opt-out keeps the fire-and-forget contract
+    q = await app.desk.panic(verify_s=0)
+    assert q["delivered"] == "sent" and "confirmed" not in q

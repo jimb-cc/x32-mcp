@@ -1070,11 +1070,19 @@ async def panic() -> dict[str, Any]:
     confirms the emergency is over via clear_panic (or re-opens Main LR with set_main_mute). Tier 1."""
     desk = _desk()
     res = await desk.panic()
+    delivered = res.get("delivered")
+    if delivered == "confirmed":
+        tail = f"; all {res.get('confirmed')} read back muted"
+    elif delivered == "partial":
+        tail = (f"; {res.get('confirmed')} read back muted, NOT CONFIRMED: {', '.join(res.get('unconfirmed') or [])}"
+                " — check them on X32-Edit or the front panel NOW")
+    elif delivered == "unconfirmed":
+        tail = "; the desk is degraded — verify on X32-Edit or the front panel; the mutes will be re-sent when it reconnects"
+    else:
+        tail = ""
     return _ok(
-        f"PANIC: {res['count']} outputs muted in {res['elapsed_ms']} ms ({res['delivered']})"
+        f"PANIC: {res['count']} mutes sent in {res['elapsed_ms']} ms ({delivered}){tail}"
         + (f"; {res['cancelled_ramps']} running fader ramp(s) cancelled" if res.get("cancelled_ramps") else "")
-        + ("; the desk is degraded — verify on X32-Edit or the front panel; the mutes will be re-sent when it reconnects"
-           if res.get("delivered") == "unconfirmed" else "")
         + ". Outputs stay latched until clear_panic is confirmed.",
         **res,
     )

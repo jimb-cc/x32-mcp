@@ -90,6 +90,8 @@ log = logging.getLogger(__name__)
 
 ALL_FAMILIES: tuple[str, ...] = ("ch", "auxin", "fxrtn", "bus", "mtx", "main", "dca")
 _PANIC_FAMILIES: tuple[str, ...] = ("main", "bus", "mtx")  # fx_routing_scenes.md §11 option 1
+_PANIC_VERIFY_S = 0.6    # after the sends: read the mutes back until they all show muted, at most this long
+_PANIC_REVERIFY_S = 0.3  # after re-sending the ones that did not
 _SCENE_VERIFY_S = 2.0
 _SCENE_POLL_S = 0.05
 _NAME_MAX = 12  # scales_params.md §4.1
@@ -1194,10 +1196,15 @@ class Desk:
             out["quote_replaced"] = True
         return out
 
-    async def panic(self) -> dict[str, Any]:
+    async def panic(self, *, verify_s: float | None = None) -> dict[str, Any]:
         """Mute Main LR, Main M/C, every bus and every matrix as fast as possible: fire-and-forget
         ``mix/on 0``, no ramps, no snapshot, rate limiter bypassed (Tier 1, never blocked).
-        Silences every POST-tapped output (fx_routing_scenes.md §11 option 1).
+        Silences every POST-tapped output (fx_routing_scenes.md §11 option 1). The sends always go
+        out first; *afterwards* the 24 mutes are read back until they all show muted or ``verify_s``
+        (0.6 s) passes, anything still reading unmuted is sent once more and re-checked, and the
+        result says ``delivered`` = ``"confirmed"`` / ``"partial"`` (``unconfirmed`` lists the rest) /
+        ``"sent"`` (``verify_s=0``) / ``"unconfirmed"`` (desk degraded). A SET has no ack and a
+        datagram can be lost (transport.md §5.2), so "sent" is not "muted".
 
         Before the mutes go out, everything this server was itself writing is stopped: running
         fader ramps are cancelled and :attr:`panic_count` is bumped so that a ``restore()`` in
@@ -1245,17 +1252,80 @@ class Desk:
         self._panic_reassert = unconfirmed or bool(failed)
         self.last_panic = {"ts": time.time(), "count": self.panic_count, "muted": list(done), "failed": list(failed),
                            "delivered": delivered if done else "not sent", "cancelled_ramps": len(ramps)}
-        self._events.publish("desk.panic", elapsed_ms=round(elapsed, 1), count=len(done), failed=len(failed), delivered=delivered,
-                             cancelled_ramps=len(ramps), reassert_pending=self._panic_reassert)
-        log.warning("PANIC: %d outputs muted in %.1f ms%s%s%s", len(done), elapsed,
+        out: dict[str, Any] = {"muted": done, "count": len(done), "failed": failed, "elapsed_ms": round(elapsed, 1), "delivered": delivered,
+                               "cancelled_ramps": len(ramps), "latched": True}
+        vs = _PANIC_VERIFY_S if verify_s is None else max(0.0, float(verify_s))
+        if done and not unconfirmed and vs > 0:
+            try:
+                out.update(await self._verify_panic([t for t in targets if t.key in done], vs))
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:  # verification is advice; it must never cost the panic result
+                log.warning("panic verification failed: %s", e)
+                out["verify_error"] = str(e)
+            if out.get("unconfirmed"):
+                self._panic_reassert = True  # something still reads open: re-send again on the next reconnect too
+        out["reassert_pending"] = self._panic_reassert
+        self._events.publish("desk.panic", elapsed_ms=round(elapsed, 1), count=len(done), failed=len(failed), delivered=out["delivered"],
+                             cancelled_ramps=len(ramps), reassert_pending=self._panic_reassert,
+                             confirmed=out.get("confirmed"), unconfirmed=len(out.get("unconfirmed") or []))
+        log.warning("PANIC: %d outputs muted in %.1f ms (%s)%s%s%s%s", len(done), elapsed, out["delivered"],
+                    f", {len(out['unconfirmed'])} NOT CONFIRMED: {', '.join(out['unconfirmed'])}" if out.get("unconfirmed") else "",
                     " (desk degraded, unconfirmed; will re-send on reconnect)" if unconfirmed else "",
                     f", {len(failed)} NOT SENT (will re-send on reconnect): {', '.join(failed)}" if failed else "",
                     f"; {len(ramps)} ramp(s) cancelled" if ramps else "")
         if not done:
             raise DeskError("NOT_CONNECTED", f"panic could not reach the desk: {last}; the mutes will be sent the moment it reconnects",
                             muted=done, failed=failed, reassert_pending=True)
-        return {"muted": done, "count": len(done), "failed": failed, "elapsed_ms": round(elapsed, 1), "delivered": delivered,
-                "cancelled_ramps": len(ramps), "latched": True, "reassert_pending": self._panic_reassert}
+        return out
+
+    async def _verify_panic(self, targets: Sequence[Target], verify_s: float) -> dict[str, Any]:
+        """Read ``mix/on`` of ``targets`` back until all show muted (bounded); re-send the rest once."""
+        paths = {t.key: f"{t.osc_prefix}/mix" for t in targets}
+        loop = asyncio.get_running_loop()
+        t0 = loop.time()
+        attempts = 0
+
+        async def poll(deadline_s: float) -> dict[str, Any]:
+            nonlocal attempts
+            deadline = loop.time() + deadline_s
+            delay = 0.03
+            vals: dict[str, Any] = {}
+            while True:
+                attempts += 1
+                for p in paths.values():
+                    self._drop(p)  # every attempt asks the desk, never our cache
+                try:
+                    secs = await asyncio.wait_for(self._read_sections(list(paths.values()), concurrency=24),
+                                                  timeout=max(0.05, deadline - loop.time()))
+                    vals = {k: (secs.get(p) or {}).get("mix/on") for k, p in paths.items()}  # True = ON = unmuted; None = no answer
+                except (asyncio.TimeoutError, DeskError):
+                    pass
+                if vals and all(v is False for v in vals.values()):
+                    return vals
+                if loop.time() + delay >= deadline:
+                    return vals
+                await asyncio.sleep(delay)
+                delay = min(0.2, delay * 1.6)
+
+        vals = await poll(verify_s)
+        pending = [k for k in paths if vals.get(k) is not False]
+        resent: list[str] = []
+        if pending:
+            for t in targets:
+                if t.key in pending:
+                    try:
+                        await self._conn.send_raw(f"{t.osc_prefix}/mix/on", 0)  # emergency path: no limiter, like the first round
+                        resent.append(t.key)
+                    except (NotConnected, OSError) as e:
+                        log.debug("panic re-send %s failed: %s", t.key, e)
+            vals = await poll(_PANIC_REVERIFY_S) or vals
+            pending = [k for k in paths if vals.get(k) is not False]
+        return {
+            "confirmed": len(paths) - len(pending), "unconfirmed": pending, "resent": resent,
+            "delivered": "confirmed" if not pending else "partial",
+            "verify": {"attempts": attempts, "elapsed_ms": round((loop.time() - t0) * 1000.0, 1)},
+        }
 
     # -- panic latch / re-assert -----------------------------------------------------------------------
 
