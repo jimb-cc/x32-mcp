@@ -354,6 +354,7 @@ class Candidate:
     hops: int = 0
     coast: int = 0
     last_emit_ts: float = -1e9
+    emit_level_db: float = -128.0       # level at the most recent emission (a deeper cut needs the line still there)
     probe_hits: int = 0                # consecutive super-linear step responses
     probe_linear: int = 0              # consecutive linear (≤1 dB/dB) step responses
     probe_last_excess_db: float = 0.0
@@ -367,6 +368,7 @@ class Candidate:
     fam_strong: list[bool] = field(default_factory=list) # >= family_partials partners, or somebody's H2/H3/H4
     grow_start: int = 0                # index into the lists where the current monotone ramp starts
     cen0: float | None = None          # centroid at birth (median of the first frames): where this line lives
+    _last_growth: tuple | None = None  # (frame, kind, net, slope, start) of the last frame a ramp qualified
     diag: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -1196,6 +1198,7 @@ class FeedbackDetector:
             if t.birth == "new":
                 t.birth = "grow"
             t.last_emit_ts = ts
+            t.emit_level_db = max(t.level_db, t.emit_level_db - 3.0) if t.emitted > 1 else t.level_db
             self._cooldown[t.band] = ts + cfg.cooldown_s
             log.debug("feedback: band %d (%.0f Hz) %.1f dB prom %.1f [%s]", t.band, t.freq_hz, t.level_db,
                       t.prominence_db, ",".join(t.reasons))
@@ -1354,6 +1357,13 @@ class FeedbackDetector:
         kind, net, slope, gi0 = getattr(t, "_gk", None) or self._growth(t)
         if kind and self._n_growing >= 3:
             kind = ""            # synchronous growth elsewhere: common cause, not a loop
+        if kind:
+            t._last_growth = (k, kind, net, slope, gi0)
+        elif t._last_growth is not None and k - t._last_growth[0] <= 2 and lp >= max(lv[-4:-1]) - 1.0:
+            # the ramp has just topped out (limiter reached) — its evidence does not evaporate in one frame; this
+            # matters when the frame that qualified was vetoed by a passing coincidence at a partner position
+            _, kind, net, slope, gi0 = t._last_growth
+            gi0 = min(gi0, len(lv) - 2)
         t.slope_db_per_s = slope
         t.growth_score = min(1.0, net / cfg.growth_fast_total_db) if kind else 0.0
 
@@ -1371,10 +1381,17 @@ class FeedbackDetector:
         if not in_window:
             verdict = ""
         elif t.feedback:
-            # sticky: keep reporting a line we already called feedback while it is there and not dying away
-            if not decaying and prominent and t.narrow_db >= 0.5 * cfg.narrow_db:
+            # sticky: keep reporting a line we already called feedback while it is still there at (or above) the
+            # level we reported it at — a notch that worked leaves either nothing or a quieter programme line that
+            # happened to share the band, and neither deserves a deeper cut; a ring that survives the notch keeps
+            # its level or climbs back, and one that re-grows from lower down is caught again as growth
+            if (not decaying and prominent and t.narrow_db >= 0.5 * cfg.narrow_db
+                    and lp >= t.emit_level_db - 3.0):
                 verdict = "sustained"
                 reasons = list(t.reasons[:1]) + ["sustained"]
+            elif kind and narrow and stationary and lp >= t.emit_level_db - 12.0:
+                verdict = "regrow"
+                reasons = ["regrow-after-cut", f"+{net:.0f}dB", f"{slope:.0f}dB/s"]
         else:
             # programme verdicts: set on evidence, cleared when the line has outlived that evidence (a ring seeded
             # by a speech partial keeps the partial's track; the partial's cohort and family die with the syllable)
