@@ -214,8 +214,8 @@ class DetectorConfig:
     sustain_drop_db: float = 3.0         # max fall below the window maximum (decaying notes / RTA release fail)
     sustain_min_level_db: float = -45.0  # SUSTAINED lane only: no onset, no growth => level is the last evidence
     clip_level_db: float = -6.0          # narrow line this close to full scale is cut whatever else is true
-    frozen_eps_db: float = 0.002         # a level repeating to within this over the sustain window is a held display
-                                         # value (peak-hold left on), not a measurement: never plateau evidence
+    frozen_eps_db: float = 0.002         # a level repeating to within this on most frames of the sustain window is a held
+                                         # display value (peak-hold left on), not a measurement: never plateau evidence
     ref_lo_band: int = 25                # spectrum reference = median(level[ref_lo_band .. ref_hi_band])
     ref_hi_band: int = 85
     probe_excess_db: float = 2.0         # ring-out probe: rise beyond the step that marks loop-gain dependence
@@ -777,7 +777,8 @@ class FeedbackDetector:
         strict = strict and not loud
         # sustained lane: the conditions must hold now; a strongly prominent line needs sustain_frames of track,
         # a moderate one (whose partials could be hiding under the floor) sustain_moderate_frames
-        frozen = len(c.recent) >= cfg.sustain_frames and max(c.recent) - min(c.recent) <= cfg.frozen_eps_db
+        live = sum(1 for a, b in zip(c.recent, c.recent[1:]) if abs(b - a) > cfg.frozen_eps_db)
+        frozen = len(c.recent) >= cfg.sustain_frames and live < len(c.recent) // 2
         c.frozen = frozen
         ok = (not c.step_onset and wander <= cfg.centroid_wander_bands and not frozen
               and len(c.recent) >= 2 and c.recent[-1] >= max(c.recent) - cfg.sustain_drop_db
