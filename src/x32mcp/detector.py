@@ -194,6 +194,7 @@ class DetectorConfig:
     parent_excess_high_db: float = 2.0   # b as H4/H5: at most this (no instrument's 4th/5th partial towers over its fundamental)
     family_veto_frac: float = 0.4        # family-positive fraction of the last family_window_frames => MUSICAL
     family_window_frames: int = 12       # (a note keeps its partials for life; a ring's coincidences come and go)
+    family_lifetime_frac: float = 0.5    # family/pair-positive fraction of the whole track that also vetoes the plateau lane
     centroid_wander_bands: float = 0.75  # max centroid range over the sustain window (melody/glide/vibrato move more)
     step_db: float = 9.0                 # single-frame cluster rise that is a programme onset, not a loop
     step_continue_frac: float = 0.3      # ... unless the next frame rises by this fraction of it again (fast ramp)
@@ -254,7 +255,7 @@ class DetectorConfig:
         need(0.0 < self.harmonic_tol_bands <= 1.5 and self.family_window_frames >= 3, "harmonic_tol/family_window out of range")
         need(0.0 < self.single_partial_tol_bands <= self.harmonic_tol_bands and self.single_partial_rel_db >= 0
              and 0.0 < self.single_partial_comove_db <= self.comove_db, "single_partial_* out of range")
-        need(0.0 <= self.family_veto_frac <= 1.0, "family_veto_frac must be in [0, 1]")
+        need(0.0 <= self.family_veto_frac <= 1.0 and 0.0 <= self.family_lifetime_frac <= 1.0, "family fractions must be in [0, 1]")
         need(self.step_db > 0 and 0.0 <= self.step_continue_frac < 1.0, "step_db/step_continue_frac out of range")
         need(self.history_frames >= 4, "history_frames must be >= 4")
         need(self.gap_frames >= 0 and self.step_release_db > 0, "gap_frames/step_release_db out of range")
@@ -773,12 +774,14 @@ class FeedbackDetector:
         loud = c.level_db >= cfg.clip_level_db
         wander = (max(c.centroids) - min(c.centroids)) if c.centroids else 0.0
         musical = strict = False
+        lifetime = c.family_frames / c.frames if c.frames else 0.0
         if c.frames >= 3 and c.strict_family_frac >= cfg.family_veto_frac:
             musical = strict = True
             reasons.append("family")
-        elif c.frames >= 3 and c.family_frac >= cfg.family_veto_frac:
-            musical = True
-            reasons.append("pair")
+        elif c.frames >= 3 and (c.family_frac >= cfg.family_veto_frac or lifetime >= cfg.family_lifetime_frac):
+            musical = True                   # a pair now, or a family for most of its life (partners come and go
+            reasons.append("pair")           # with the chords around a held note; a ring's coincidences are rarer)
+        fam_now = bool(c.family_hist and c.family_hist[-1] >= 2)
         if len(c.centroids) >= cfg.persistence_frames and wander > cfg.centroid_wander_bands:
             musical = strict = True
             reasons.append("wander")
@@ -811,9 +814,9 @@ class FeedbackDetector:
             if clip:
                 verdict = True
                 reasons.append("clip")
-            if growth and not strict:
-                verdict = True
-                reasons.append("growth")
+            if growth and not strict and not fam_now:
+                verdict = True               # (a family on this very frame defers the growth verdict by a frame:
+                reasons.append("growth")     # a swelling note's low partials surface after its high ones)
             if sustained and not c.musical:
                 verdict = True
                 reasons.append("sustained@arm" if c.at_arm else "sustained")
