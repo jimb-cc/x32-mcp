@@ -341,6 +341,7 @@ class _Peak:
     partners: int = 0     # count of ×2..×5 partners present as peaks
     partner_ks: tuple[int, ...] = ()
     family: bool = False
+    pending: bool = False # exactly one candidate partner whose relation cannot be judged yet (too young)
     track: Any = None     # the Candidate this peak was associated with (set by _associate)
 
 
@@ -383,6 +384,7 @@ class Candidate:
     misses: int = 0
     fam_frames: int = 0             # lifetime count of family frames
     fam_lineage: bool = False       # a family was seen for a solid stretch: remember (S5: note decays to a sine)
+    fam_pending: bool = False       # this frame: one possible partner too young to judge -> hold growth-based cuts
     last_family_frame: int = -10**9
     last_moving_frame: int = -10**9
     last_comove_frame: int = -10**9
@@ -595,6 +597,27 @@ class FeedbackDetector:
         return abs(a.born_frame - b.born_frame) <= 2 and a.onset != "at_arm" and b.onset != "at_arm"
 
     @staticmethod
+    def _cogrowing(a: "Candidate | None", b: "Candidate | None") -> bool:
+        """Two lines rising together with a CONSTANT level difference (one swelling source: pad, organ swell,
+        crescendo). Two rings that happen to sit at a ratio grow from the floor independently: their difference
+        changes by (R1 - R2) dB/s and they start at unrelated moments."""
+        if a is None or b is None or a is b:
+            return False
+        # only frames on which both lines stand clear of the bed (>= 8 dB): nearer the bed the cluster power is
+        # compressed and every rate looks alike
+        ta = {t: l for t, l, p in zip(a.ts_list[-10:], a.cpows[-10:], a.proms[-10:]) if p >= 8.0}
+        tb = {t: l for t, l, p in zip(b.ts_list[-10:], b.cpows[-10:], b.proms[-10:]) if p >= 8.0}
+        common = [t for t in b.ts_list[-10:] if t in ta and t in tb]
+        if len(common) < 5:
+            return False
+        xa = [ta[t] for t in common]
+        xb = [tb[t] for t in common]
+        if xa[-1] - xa[0] < 3.0 or xb[-1] - xb[0] < 3.0:
+            return False
+        diffs = [x - y for x, y in zip(xa, xb)]
+        return (max(diffs) - min(diffs)) <= 0.8
+
+    @staticmethod
     def _compatible(a: "Candidate | None", b: "Candidate | None") -> bool:
         """Could two peaks belong to ONE source? Partials of a note onset together (within the analyser rise time)
         and their envelopes co-move (swell, decay, vibrato through the skirts, tremolo); an unrelated line that
@@ -676,7 +699,7 @@ class FeedbackDetector:
         compat = self._compatible
         coborn = self._coborn
 
-        def near(target: float, min_level: float, me: _Peak, louder_ok: float | None) -> _Peak | None:
+        def near(target: float, min_level: float, me: _Peak, louder_ok: float | None) -> tuple[_Peak | None, float]:
             b0 = int(round(target))
             best = None
             bd = tol
@@ -688,13 +711,23 @@ class FeedbackDetector:
                         if dd <= bd and (compat(me.track, q.track)
                                          or (louder_ok is not None and q.level >= me.level + louder_ok)):
                             best, bd = q, dd
-            return best
+            return best, bd
+
+        def undetermined(a: "Candidate | None", b: "Candidate | None") -> bool:
+            # the partner is too young (or not even tracked yet) for the born-together / co-growing tests
+            if b is None:
+                return True
+            if a is None:
+                return False
+            return b.frames < 5 or a.frames < 5
 
         for pk in peaks:
             pk.family = False
+            pk.pending = False
             best_ks: tuple[int, ...] = ()
             for m in (1, 2, 3, 4, 5):
                 found: list[tuple[int, _Peak]] = []
+                found_d = 9.0
                 for k in range(1, 7):
                     if k == m:
                         continue
@@ -702,11 +735,12 @@ class FeedbackDetector:
                     if t < 0.5 or t > n - 1.5:
                         continue
                     if k > m:
-                        q = near(t, pk.level - cfg.partner_window_db, pk, None)
+                        q, dq = near(t, pk.level - cfg.partner_window_db, pk, None)
                     else:
-                        q = near(t, pk.level - cfg.sub_window_db, pk, None)
+                        q, dq = near(t, pk.level - cfg.sub_window_db, pk, None)
                     if q is not None:
                         found.append((k, q))
+                        found_d = dq
                 if m >= 4:
                     # "I am the 4th/5th harmonic": only of a fundamental that is really there and much louder
                     # (clip/drive harmonics, brass); otherwise chords explain too many positions by chance
@@ -716,10 +750,15 @@ class FeedbackDetector:
                     pk.family = True
                     best_ks = tuple(k for k, _ in found)
                     break
-                if len(found) == 1 and coborn(pk.track, found[0][1].track):
+                # a single partner is thin evidence: it must sit where an exact harmonic would (a true partial shares
+                # the candidate's sub-band offset, so the interpolation bias cancels for x2/x4) and share its history
+                if len(found) == 1 and found_d <= 0.2 and \
+                        (coborn(pk.track, found[0][1].track) or self._cogrowing(pk.track, found[0][1].track)):
                     pk.family = True
                     best_ks = (found[0][0],)
                     break
+                if len(found) == 1 and found_d <= 0.2 and m <= 3 and undetermined(pk.track, found[0][1].track):
+                    pk.pending = True
                 if m == 1:
                     best_ks = tuple(k for k, _ in found)
             pk.partner_ks = best_ks
@@ -791,6 +830,7 @@ class FeedbackDetector:
             c = pk.track
             if c is None:
                 continue
+            c.fam_pending = pk.pending and not pk.family
             c.fam.append(pk.family)
             if pk.family:
                 c.fam_frames += 1
@@ -1203,6 +1243,9 @@ class FeedbackDetector:
             or (n_inc >= 4 and still and rslope <= cfg.ramp_moderate_db_per_s and strict_linear
                 and c.prominence_db >= cfg.prominence_db + 2.0)              # or >= 200 ms of it at a rate no
         )                                                                    # note attack is that slow AND that even
+        if ramp_strong and c.onset == "adult" and rise < 10.0:
+            ramp_strong = False      # a line that arrived as a note must show a substantial climb (>= 10 dB) before
+                                     # growth counts: tremolo/chorus/swell on a held note make 4-8 dB pseudo-ramps
         # a fresh ramp re-qualifies a line whose earlier life looked like programme (chord tone's band taken
         # over by a ring; kick re-triggering the band of an LF loop): behaviour NOW wins over lineage,
         # except for a family visible NOW.
@@ -1298,7 +1341,7 @@ class FeedbackDetector:
                 tier = "A:clip"
             elif loud and c.frames >= K1 and not moving_recent and settled:
                 tier = "A:loud"
-            elif ramp_strong and self._stationary(c, span_k)[0] and not (c.fam and c.fam[-1]):
+            elif ramp_strong and self._stationary(c, span_k)[0] and not (c.fam and c.fam[-1]) and not c.fam_pending:
                 # stationary over the ramp itself; how the peak got here before the ramp (a neighbour's line the
                 # ring has since swallowed) is not held against it
                 tier = "A:ramp"
