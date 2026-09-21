@@ -957,6 +957,12 @@ class Desk:
             raise DeskError("GUARDED", self._guarded_msg(address, target), address=address)
         await self.ensure_pre_write_snapshot()
         await self._policy.acquire_write(panic=_PRIORITY_WRITE.get())
+        # panic() may have run while this write was parked in the two awaits above (the pre-write
+        # snapshot is a full desk dump; the limiter can sleep). An un-mute that was legal when the tool
+        # checked the latch must not land after the panic and re-open what it silenced.
+        if (not guarded and target is not None and target.key in self._panic_latched
+                and address.endswith("/mix/on") and raw not in (0, False, "OFF")):
+            self._check_panic_latch(target)  # confirmed (guarded) re-opens are the operator's decision and pass
         try:
             await self._conn.set(address, raw)
         except NotConnected as e:

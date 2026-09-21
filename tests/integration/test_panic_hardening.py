@@ -178,3 +178,20 @@ async def test_panic_reads_the_mutes_back_and_resends_a_lost_one(app, fakedesk, 
     # opt-out keeps the fire-and-forget contract
     q = await app.desk.panic(verify_s=0)
     assert q["delivered"] == "sent" and "confirmed" not in q
+
+
+async def test_unmute_in_flight_when_panic_fires_does_not_land_afterwards(app, fakedesk):
+    """unmute(bus.1) is parked inside the pre-write snapshot (a full dump) when panic() runs; it must
+    not complete afterwards and re-open bus 1."""
+    fakedesk.set_value("/bus/01/mix/on", False)
+    app.desk.invalidate()
+    assert app.policy.snapshot_before_write is True  # the first write of the session pays for the dump
+    task = asyncio.create_task(srv.unmute("bus.1"))
+    await asyncio.sleep(0.01)
+    assert not task.done()
+    res = await srv.panic()
+    assert res["ok"]
+    res2 = await task
+    await app.conn.get("/-stat/selidx")
+    assert res2["ok"] is False and res2["error"]["code"] == "PANIC_LATCHED", res2
+    assert fakedesk.get("/bus/01/mix/on") == 0

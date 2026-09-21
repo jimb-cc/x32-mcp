@@ -454,7 +454,6 @@ async def validate_ringout_eqs(desk: Desk, buses: Sequence[int | str | Target], 
                         if b_bands is not None and any(abs(a - b) > _FLAT_EPS for a, b in zip(bands, b_bands)):
                             reasons.append(f"dual {fx_type} in FX slot {slot} on {t.label}: sides A (L) and B (R) differ — "
                                            "even them up on the console first; CFS² writes both sides together")
-
                     if bands is None:
                         # The slot holds a GEQ but its 64 pars did not come back (lost reply / timeout). Arming on
                         # that would treat every band as flat: the first -3 dB "cut" over an operator's -15 dB is a
