@@ -351,3 +351,75 @@ def test_examiner_scenarios_ground_truth():
     for name in ("X1_organ_held_notes", "X4_sine_lead_portamento", "X5_808_bassline_40_60Hz", "X18_applause_crowd_30s",
                  "X20_mains_hum_and_hvac_whine", "X15_kick_bass_unison_55Hz"):
         assert ground_truth(name, 2)["events"] == [], name
+
+
+# -- kill check (K series) ------------------------------------------------------------------------------
+def test_limiter_held_howl_answers_a_cut_with_exactly_the_cut_depth_and_dies_only_when_out_cut():
+    """A plateaued howl with excess e >= cut depth c: the loop stays super-critical, the saturation point re-pins it,
+    the tap reads exactly -c dB and sits flat = what programme through the same EQ does. Only c > e collapses it."""
+    ring = FeedbackRing(freq_hz=2500.0, excess_db=4.0, tau_loop_s=0.010, t_on=0.2, start_db=-60.0, sat_db=-13.0,
+                        excite_from_programme=False, wander_db=0.0, excess_wander_db=0.0)
+    sc = Scene(6.0, sources=[PinkBed(level_1k_db=-75.0, tilt_db_per_oct=0.0)], rings=[ring], analyser=FLAT,
+               geq_schedule=[(2.0, 22, -3.0), (4.0, 22, -6.0)])     # GEQ band 22 = 2.5 kHz
+    r = Renderer(sc, 1)
+    fr = r.run()
+    tr = r.trace[0]
+    k = lambda t: int(round(t / FRAME_S))
+    assert fr[k(1.9)][1][70] == pytest.approx(-13.0, abs=0.5)                       # at the limiter
+    assert tr[k(3.9)].e_eff == pytest.approx(1.0, abs=0.05)                          # -3 on 4 dB: still regenerating
+    assert fr[k(3.9)][1][70] == pytest.approx(-16.0, abs=0.5)                       # ... exactly 3 dB lower at the tap
+    seg = [v[70] for _, v in fr[k(2.6):k(4.0)]]
+    assert max(seg) - min(seg) < 1.0                                                 # ... and dead flat
+    assert tr[k(5.9)].e_eff == pytest.approx(-2.0, abs=0.05)                         # -6: out-cut
+    assert tr[k(5.9)].level_db < tr[k(3.9)].level_db - 20.0                          # ... collapses
+
+
+def test_survived_verdict_flags_a_ring_that_outlives_its_cuts():
+    from rtasim.harness import Det, run_one
+    from x32mcp.detector import DetectorConfig
+
+    class Oracle:
+        """Test detector: emits on the K1 ring's band from its onset - once, or once per 1.1 s while the band is loud."""
+        def __init__(self, band_hz, *, one_shot: bool):
+            self.one_shot, self.last = one_shot, None
+
+        def feed(self, values, ts):
+            if ts < 3.0 or values[70] < -30.0 or (self.last is not None and (self.one_shot or ts - self.last < 1.1)):
+                return []
+            self.last = ts
+            return [Det(ts=ts, band=70, freq_hz=2500.0, confidence=1.0)]
+
+    cfg = DetectorConfig()
+    name = "K1_limiter_held_howl_e4_2k5"
+    one = run_one(lambda bh: Oracle(bh, one_shot=True), name, 1, closed_loop=True, notch_cfg=cfg)
+    assert one.tp == 1 and not one.fps and [g for _, _, g in one.cuts] == [-3.0]
+    assert one.survived == [0] and not one.passed                  # -3 on 4 dB of excess: still howling at the end
+    assert one.to_dict()["survived"] == [0]
+    many = run_one(lambda bh: Oracle(bh, one_shot=False), name, 1, closed_loop=True, notch_cfg=cfg)
+    assert [g for _, _, g in many.cuts][:2] == [-3.0, -6.0]
+    assert many.survived == [] and many.passed                    # deepened to -6: dead
+    assert run_one(lambda bh: Oracle(bh, one_shot=True), name, 1).survived == []   # open loop: nothing is cut
+    # a ring nobody acted on is a miss, not a survivor
+    null = run_one(lambda bh: type("Null", (), {"feed": lambda self, v, t: []})(), name, 1, closed_loop=True, notch_cfg=cfg)
+    assert len(null.misses) == 1 and null.survived == [] and not null.passed
+
+
+def test_kill_scenarios_are_survival_cases_by_construction():
+    """Every K scenario: one visible episode; a single -3 dB slider at the ring's nearest GEQ centre leaves the loop
+    super-critical; the depth the scenario names kills it (Q = the scene's geq_q)."""
+    from rtasim.harness import geq_band_for
+    need = {"K1_limiter_held_howl_e4_2k5": -6.0, "K2_limiter_held_howl_e7_1k25": -9.0,
+            "K3_established_limiter_plateau_e5_5k": -6.0, "K4_compressor_plateau_e6p5_quiet_2k5": -9.0,
+            "K5_channel_shove_into_limiter_e5p5_2k5": -6.0, "K6_limiter_held_howl_e3p5_midpoint_1k8": -6.0}
+    for name, depth in need.items():
+        sc = SCENARIOS[name]
+        assert sc.has_feedback and "kill" in sc.tags
+        gt = ground_truth(name, 1)
+        assert len(gt["events"]) == 1 and gt["events"][0]["visible"], (name, gt["events"])
+        scene = sc.build(1)
+        ring = scene.rings[0]
+        e = ring.excess_db + (scene.master.gain_db(scene.duration_s) * scene.loop_coupling if scene.master else 0.0)
+        centre = GEQ_BAND_HZ[geq_band_for(ring.freq_hz) - 1]
+        assert e + peaking_gain_db(ring.freq_hz, centre, -3.0, scene.geq_q) > 0.3, name     # survives one -3
+        assert e + peaking_gain_db(ring.freq_hz, centre, depth, scene.geq_q) < -0.3, name    # dies at the named depth
+        assert gt["events"][0]["t_onset"] == pytest.approx(0.0 if ring.established else 3.0, abs=0.1), name

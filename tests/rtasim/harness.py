@@ -27,6 +27,14 @@ Closed loop (``closed_loop=True``): each detection is passed to ``x32mcp.detecto
 (budget = cfg.notch_budget_default, −3 dB steps to −9) and the resulting GEQ gain is written into the live
 renderer (PRE insert: programme at that band drops by the bell, every ring's excess drops by the bell's gain
 at its frequency), so "ring emerges, gets cut, next ring appears" is scored end to end.
+
+SURVIVED (closed loop only): a ring that is still regenerating (e_eff > 0) at the last frame although the
+detector saw it (a TP/DUP/EARLY of its episode) or a cut landed within one GEQ band of it. The detector did
+its job and the notch policy did not finish it: a plateaued howl with excess >= the cut depth answers a cut
+with exactly the cut depth and sits flat (limiter/compressor/clip re-pins it), which is what programme
+through the same EQ does too, so a policy that stops on "dropped ~ bell, flat" leaves the room howling.
+A closed-loop run fails if any ring survived (``RunResult.survived``, table column ``surv``). Misses are
+not survivors (nothing was done about them); open loop never has survivors (nothing is cut).
 """
 
 from __future__ import annotations
@@ -90,6 +98,7 @@ class RunResult:
     cuts: list[tuple[float, int, float]]
     latency_budget_ms: float
     wall_s: float = 0.0
+    survived: list[int] = field(default_factory=list)   # closed loop: rings (indices) still regenerating at the end
 
     # derived -----------------------------------------------------------------------------------
     @property
@@ -151,7 +160,8 @@ class RunResult:
 
     @property
     def passed(self) -> bool:
-        return not self.fps and not self.misses and all(l <= self.latency_budget_ms for l in self.latencies_ms)
+        return (not self.fps and not self.misses and all(l <= self.latency_budget_ms for l in self.latencies_ms)
+                and not self.survived)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -162,6 +172,7 @@ class RunResult:
             "tail": len(self.tail), "harm": len(self.harm),
             "fp_geq_bands": self.fp_geq_bands, "latencies_ms": self.latencies_ms,
             "cuts": [{"ts": round(t, 3), "geq_band": b, "gain_db": g} for t, b, g in self.cuts],
+            "survived": list(self.survived),
             "passed": self.passed, "latency_budget_ms": self.latency_budget_ms, "wall_s": round(self.wall_s, 3),
         }
 
@@ -243,6 +254,24 @@ def _attribute(dets: list[Det], renderer: Renderer, episodes: list[Episode]) -> 
                 break
 
 
+def _survivors(rr: "RunResult", renderer: Renderer, geq_band_hz: Sequence[float]) -> list[int]:
+    """Rings still regenerating (e_eff > 0) at the last frame that were detected or cut: the notch policy
+    failed to kill them (see module docstring, SURVIVED). Never reports a ring nobody acted on (a miss)."""
+    seen = {rr.episodes[i].ring for i, e in enumerate(rr.episodes) if e.visible and rr.first_tp(i) is not None}
+    cut_bands = {b for _, b, _ in rr.cuts}
+    out: list[int] = []
+    for i, tr in renderer.trace.items():
+        if not tr:
+            continue
+        fr = tr[-1]
+        if not (fr.active and fr.e_eff > 0.0):
+            continue
+        gb = geq_band_for(fr.f_hz, geq_band_hz)
+        if i in seen or any(abs(b - gb) <= 1 for b in cut_bands):
+            out.append(i)
+    return out
+
+
 def run_one(detector_factory: Callable[[Sequence[float]], Any], scenario: Scenario | str, seed: int, *,
             closed_loop: bool = False, analyser_overrides: dict[str, Any] | None = None,
             notch_cfg: Any = None, geq_band_hz: Sequence[float] = GEQ_BAND_HZ,
@@ -293,7 +322,10 @@ def run_one(detector_factory: Callable[[Sequence[float]], Any], scenario: Scenar
                     pending.append((r.k + actuation_delay_frames, notch.band, notch.depth_db, ts))
         episodes = ring_episodes(r)
     _attribute(dets, r, episodes)
-    return RunResult(sc.name, seed, closed_loop, episodes, dets, cuts, sc.latency_budget_ms, time.perf_counter() - t0)
+    rr = RunResult(sc.name, seed, closed_loop, episodes, dets, cuts, sc.latency_budget_ms, time.perf_counter() - t0)
+    if closed_loop:
+        rr.survived = _survivors(rr, r, geq_band_hz)
+    return rr
 
 
 @dataclass
@@ -326,6 +358,7 @@ class Results:
                 "harm": sum(len(r.harm) for r in runs),
                 "dup": sum(1 for r in runs for d in r.detections if d.verdict == "DUP"),
                 "cuts": sum(len(r.cuts) for r in runs),
+                "survived": sum(len(r.survived) for r in runs),
                 "lat_min_ms": min(lats) if lats else None,
                 "lat_med_ms": median(lats) if lats else None,
                 "lat_max_ms": max(lats) if lats else None,
@@ -337,7 +370,7 @@ class Results:
 
     def table(self) -> str:
         rows = self.summary_rows()
-        hdr = (f"{'scenario':<38} {'ev':>3} {'TP':>3} {'miss':>4} {'FP':>4} {'erly':>4} {'tail':>4} {'harm':>4} {'cuts':>4} "
+        hdr = (f"{'scenario':<38} {'ev':>3} {'TP':>3} {'miss':>4} {'FP':>4} {'erly':>4} {'tail':>4} {'harm':>4} {'cuts':>4} {'surv':>4} "
                f"{'lat ms min/med/max':>19} {'bud':>4}  FP at GEQ bands (Hz)       verdict")
         lines = [hdr, "-" * len(hdr)]
         for r in rows:
@@ -346,15 +379,16 @@ class Results:
             if len(r["fp_geq_bands"]) > 7:
                 fpb += ",..."
             lines.append(f"{r['scenario']:<38} {r['events']:>3} {r['tp']:>3} {r['miss']:>4} {r['fp']:>4} {r['early']:>4} "
-                         f"{r['tail']:>4} {r['harm']:>4} {r['cuts']:>4} {lat:>19} {r['budget_ms']:>4.0f}  {fpb:<26} "
+                         f"{r['tail']:>4} {r['harm']:>4} {r['cuts']:>4} {r['survived']:>4} {lat:>19} {r['budget_ms']:>4.0f}  {fpb:<26} "
                          f"{r['verdict']} ({r['passed_seeds']}/{r['seeds']})")
         tot_fp = sum(r["fp"] for r in rows)
         tot_miss = sum(r["miss"] for r in rows)
         tot_ev = sum(r["events"] for r in rows)
         tot_tp = sum(r["tp"] for r in rows)
+        tot_surv = sum(r["survived"] for r in rows)
         npass = sum(1 for r in rows if r["verdict"] == "PASS")
         lines.append("-" * len(hdr))
-        lines.append(f"{len(rows)} scenarios, {npass} pass; events {tot_ev}, TP {tot_tp}, miss {tot_miss}, FP {tot_fp}; "
+        lines.append(f"{len(rows)} scenarios, {npass} pass; events {tot_ev}, TP {tot_tp}, miss {tot_miss}, FP {tot_fp}, survived {tot_surv}; "
                      f"wall {self.meta.get('wall_s', 0):.1f} s")
         return "\n".join(lines)
 
