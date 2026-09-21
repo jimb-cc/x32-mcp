@@ -202,7 +202,10 @@ Beyond the tiers, four mechanisms matter:
 - **Snapshot before the first write.** The first Tier-1 or Tier-2 write of a session automatically
   dumps the entire console to `snapshots/`. That is the undo button, and it costs 0.28 s.
 - **`panic()` is Tier 1 on purpose.** It mutes all 24 outputs and is exempt from the rate limiter
-  and from show mode. The one action that must never be blocked isn't.
+  and from show mode. The one action that must never be blocked isn't. It also stops everything
+  the server itself had in motion (fader ramps, a restore, a ring-out), latches the muted outputs
+  so nothing re-opens them until the operator confirms `clear_panic`, and re-sends the mutes on
+  reconnect if the desk was unreachable when it fired.
 - **Show mode.** For mid-set use: tightens relative moves to ±3 dB and refuses scene recalls and
   ring-outs outright, token or no token.
 
@@ -493,7 +496,8 @@ snapshot-before-first-write) · **T2** guarded (confirmation token, see the safe
 | `set_pan(target, pan)` | T1 | −100 (L) .. 0 .. +100 (R) |
 | `set_comp(target, on=, threshold_db=, ratio=, attack_ms=, release_ms=, knee=, makeup_db=, mix_pct=)` | T1 | Compressor; only the values given are written |
 | `set_gate(target, on=, threshold_db=, range_db=, attack_ms=, hold_ms=, release_ms=)` | T1 | Channel gate; only the values given are written |
-| `panic()` | T1 | **Emergency:** mute Main LR, Main M/C, all 16 buses and 6 matrices at once — no ramp, no confirmation, never blocked by show mode or the rate limiter |
+| `panic()` | T1 | **Emergency:** mute Main LR, Main M/C, all 16 buses and 6 matrices at once — no ramp, no confirmation, never blocked by show mode or the rate limiter; cancels the server's own ramps/restore/ring-out and latches the outputs |
+| `clear_panic(confirm_token=None)` | T2 | After a panic: release the latch so the outputs can be unmuted/restored again (unmutes nothing itself) |
 
 ### Phases 2–3 — Tier 2 (confirmation token)
 
@@ -620,8 +624,13 @@ the action *and* its normalised arguments — a token minted for scene 1 cannot 
 
 **Panic.** `panic()` writes 24 mutes (Main LR, Main M/C, bus 1–16, matrix 1–6) as
 fire-and-forget SETs with no ramps, no snapshot and the rate limiter bypassed — Tier 1, never
-blocked by show mode. While the connection is degraded it still fires the datagrams and reports
-`delivered: "unconfirmed"` rather than refusing. Unmute afterwards with `unmute` /
+blocked by show mode. Before the mutes leave it cancels every fader ramp the server was running,
+and a `restore_snapshot` or CFS² session in flight aborts rather than re-open or re-raise what the
+panic silenced (a panicked ring-out hands the bus master back no higher than it found it). While
+the connection is degraded it still fires the datagrams, reports `delivered: "unconfirmed"`, and
+sends them again the moment the desk answers. The muted outputs are **latched**: `unmute` and
+`restore_snapshot` refuse them (`PANIC_LATCHED`) until the operator confirms `clear_panic` — which
+unmutes nothing, it only lifts the latch — or re-opens a main through the confirmed
 `set_main_mute`. It is a backstop; the reflex at a gig is X32-Edit or the physical mute (see
 [`docs/GIG_CHECKLIST.md`](docs/GIG_CHECKLIST.md)).
 
