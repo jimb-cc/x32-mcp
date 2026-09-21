@@ -83,8 +83,8 @@ from .events import EventBus
 from .meters import METER_GROUPS, LiveMeters, RtaSourceError, average_frames, rta_band_hz, set_rta_source
 from .nodes import SnapshotError, SnapshotStore, describe_changes, diff_states
 from .patches import PatchError
-from .policy import SHOW_MODE_BLOCKED, PendingConfirmation, Policy, PolicyError
-from .scales import format_db
+from .policy import FADER_FLOOR_DB, SHOW_MODE_BLOCKED, PendingConfirmation, Policy, PolicyError
+from .scales import NEG_INF_DB, format_db
 from .targets import Target, TargetError
 from .webui import DashboardServer, WebUIError
 
@@ -122,7 +122,7 @@ The first write of a session automatically snapshots the whole desk (restore_sna
 Tier 2 (set_main_fader, set_main_mute, recall_scene, save_scene, restore_snapshot, set_channel_config, \
 apply_patch_plan with include_source, setup_ringout_eqs, ring_out, ring_out_system) uses a confirmation \
 dance: the first call returns requires_confirmation=true with an action_summary and a single-use \
-confirm_token (60 s). Show the action_summary to the user; only after they agree, call the SAME tool \
+confirm_token (valid for a few minutes, single use). Show the action_summary to the user; only after they agree, call the SAME tool \
 with the SAME arguments plus confirm_token. Never invent, reuse or pre-empt a token and never confirm \
 on the user's behalf.
 Every tool returns {ok, summary, ...}; a failure is {ok: false, error: {code, message}} - tools never \
@@ -1235,6 +1235,37 @@ async def _diff(desk: Desk, snap: Any, scope: str | None) -> list[Any]:
     return diff_states(snap.state, live, _app().descriptor, scope=scope)
 
 
+_HAZARD_PREFIXES = ("/main/", "/headamp/", "/config/routing", "/config/userrout", "/outputs/", "/dca/")
+
+
+def _is_hazardous_change(c: Any) -> bool:
+    """A change the operator must see before confirming a restore: output/main/DCA levels and mutes,
+    bus/matrix masters, head-amp gain/phantom, routing, inserts, sources, and any upward level move
+    larger than the relative-move limit."""
+    addr = str(getattr(c, "address", "") or "")
+    if addr.startswith(_HAZARD_PREFIXES) or "/insert/" in addr or addr.endswith("/config/source"):
+        return True
+    fam = addr.strip("/").split("/", 1)[0]
+    if fam in ("bus", "mtx") and ("/mix/fader" in addr or addr.endswith("/mix/on")):
+        return True
+    before, after = getattr(c, "before", None), getattr(c, "after", None)
+    if addr.endswith(("/fader", "/level")) and isinstance(before, (int, float)) and isinstance(after, (int, float)):
+        lo = FADER_FLOOR_DB
+        b = lo if before == NEG_INF_DB or before < lo else float(before)
+        e = lo if after == NEG_INF_DB or after < lo else float(after)
+        try:
+            return e - b > _app().policy.relative_max_db
+        except Exception:
+            return e - b > 6.0
+    return False
+
+
+def _split_hazardous_changes(changes: list[Any]) -> tuple[list[Any], list[Any]]:
+    hz = [c for c in changes if _is_hazardous_change(c)]
+    rest = [c for c in changes if not _is_hazardous_change(c)]
+    return hz, rest
+
+
 @server.tool()
 @_tool(timeout=DUMP_TIMEOUT_S)
 async def diff_snapshot(id: str = "latest", scope: str | None = None) -> dict[str, Any]:
@@ -1268,16 +1299,22 @@ async def restore_snapshot(id: str, scope: str | None = None, confirm_token: str
     a = _app()
     desk = _desk()
     snap = a.snapshots.load(str(id))
-    changes = await asyncio.wait_for(_diff(desk, snap, scope), timeout=DUMP_TIMEOUT_S)
+    # live → snapshot: the direction the restore will actually move things (the undo of the diff)
+    live = await asyncio.wait_for(desk.dump(sections=[scope] if scope else None), timeout=DUMP_TIMEOUT_S)
+    changes = diff_states(live, snap.state, a.descriptor, scope=scope)
     sections = len({c.section for c in changes})
-    preview = describe_changes(changes[:15]) + (f"\n… {len(changes) - 15} more" if len(changes) > 15 else "")
+    hazardous, rest = _split_hazardous_changes(changes)
+    shown = hazardous + rest[:max(0, 15 - len(hazardous))]
+    preview = describe_changes(shown) + (f"\n… {len(changes) - len(shown)} more (lower-risk) change(s)" if len(changes) > len(shown) else "")
     payload = {"id": snap.id, "scope": scope, "snapshot_sha256": _file_digest(snap.path)}
     summary = (
         f"Restore snapshot {snap.id}" + (f" ({snap.label})" if snap.label else "") + f" from {snap.created}"
         + (f", scope {scope}" if scope else " (whole desk)") + f": {len(changes)} setting(s) in {sections} section(s) would change"
+        + (f" — {len(hazardous)} of them on outputs, head amps, routing or inserts, listed first" if hazardous else "")
         + (":\n" + preview if changes else "")
     )
-    pending = _confirm("restore_snapshot", summary, payload, confirm_token, count=len(changes), sections=sections, preview=preview)
+    pending = _confirm("restore_snapshot", summary, payload, confirm_token, count=len(changes), sections=sections, preview=preview,
+                       hazardous=len(hazardous))
     if pending:
         return pending
     res = await asyncio.wait_for(desk.restore(snap, scope=scope), timeout=RESTORE_BASE_TIMEOUT_S + sections / RESTORE_SECTIONS_PER_S)

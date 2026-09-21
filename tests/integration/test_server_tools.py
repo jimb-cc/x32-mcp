@@ -798,3 +798,17 @@ async def test_tokens_bind_what_the_user_was_shown(app, fakedesk, tmp_path):
     assert "Ch 1" in pend["action_summary"] and "Ch 2" in pend["action_summary"]
     fset(app, fakedesk, "/ch/03/mix/01/level", -10.0)  # a third mic is opened onto the bus after the user said yes
     assert_err(await srv.ring_out(1, target_gain_db=-19.0, dwell_ms=10, confirm_token=tok), "BAD_TOKEN")
+
+
+async def test_restore_preview_lists_hazards_first_and_reads_in_the_restore_direction(app, fakedesk):
+    snap = await srv.snapshot_desk("safe")
+    assert snap["ok"]
+    for ch in range(1, 25):  # plenty of harmless changes that would fill a first-15 preview in sweep order
+        fset(app, fakedesk, f"/ch/{ch:02d}/config/name", f"n{ch}")
+    fset(app, fakedesk, "/main/st/mix/fader", -40.0)  # live is DOWN; the restore would bring it UP to 0 dB
+    pend = await srv.restore_snapshot(snap["id"])
+    assert_pending(pend)
+    assert pend["hazardous"] >= 1
+    first = pend["preview"].splitlines()[0]
+    assert "Main LR" in first and "−40.0 dB → 0.0 dB" in first, first  # listed first, and reads live → snapshot
+    assert "listed first" in pend["action_summary"]
