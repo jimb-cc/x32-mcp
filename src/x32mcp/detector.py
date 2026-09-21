@@ -781,7 +781,8 @@ class FeedbackDetector:
         elif c.frames >= 3 and (c.family_frac >= cfg.family_veto_frac or lifetime >= cfg.family_lifetime_frac):
             musical = True                   # a pair now, or a family for most of its life (partners come and go
             reasons.append("pair")           # with the chords around a held note; a ring's coincidences are rarer)
-        fam_now = bool(c.family_hist and c.family_hist[-1] >= 2)
+        # a family seen on ANY frame so far makes a young track wait until the window can judge it
+        fam_wait = any(f >= 2 for f in c.family_hist) and (c.family_hist[-1] >= 2 or c.frames < cfg.sustain_frames)
         if len(c.centroids) >= cfg.persistence_frames and wander > cfg.centroid_wander_bands:
             musical = strict = True
             reasons.append("wander")
@@ -814,9 +815,10 @@ class FeedbackDetector:
             if clip:
                 verdict = True
                 reasons.append("clip")
-            if growth and not strict and not fam_now:
-                verdict = True               # (a family on this very frame defers the growth verdict by a frame:
-                reasons.append("growth")     # a swelling note's low partials surface after its high ones)
+            if growth and not strict and not fam_wait:
+                verdict = True               # (a family on this frame, or on any frame of a track younger than
+                reasons.append("growth")     # sustain_frames, defers growth: a swelling note's low partials
+                                             # surface after its high ones; a voiced syllable glides into place)
             if sustained and not c.musical:
                 verdict = True
                 reasons.append("sustained@arm" if c.at_arm else "sustained")

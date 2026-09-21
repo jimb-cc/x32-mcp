@@ -823,7 +823,7 @@ detector:
   family_veto_frac: 0.4      # family-positive fraction of the last family_window_frames => musical
   family_window_frames: 12   # (a note keeps its partials for life; a ring's coincidences in dense music come and go)
   family_lifetime_frac: 0.5  # ... or of the track's whole life (also vetoes the plateau lane)
-  centroid_wander_bands: 0.75  # centroid range over the sustain window above this => melody/glide/vibrato
+  centroid_wander_bands: 0.5   # centroid range over the sustain window above this => melody/glide/vibrato
   # --- onset shape ---------------------------------------------------------------------------------
   # Programme arrives at full level within one analyser rise time (a step); a loop must grow through
   # every level at excess/loop-delay dB/s (1..500 dB/s, loop brief 1.3) - so there is NO upper slope bound
