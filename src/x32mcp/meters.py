@@ -77,6 +77,7 @@ __all__ = [
     "rta_band_hz",
     "rta_source_index",
     "rta_stat_expected",
+    "restore_rta_prefs",
     "set_rta_source",
     "target_for_rta_source",
 ]
@@ -858,6 +859,7 @@ class RtaSourceResult:
     decay_set_min: bool = False  # True when the RTA release ("decay") had to be shortened to its minimum
     peakhold_cleared: bool = False  # True when the RTA peak-hold had to be switched off
     prefs_before: dict[str, Any] | None = None  # raw pref values as found, for the report / a later restore
+    gain_set: bool = False  # True when the manual display gain had to be moved to rta.gain_db
 
 
 async def set_rta_source(
@@ -890,9 +892,6 @@ async def set_rta_source(
     opt_addr = rta.get("options_param", "/-prefs/rta/options")
     stat_addr = rta.get("stat_param", "/-stat/rtasource")
 
-    await conn.set(src_addr, idx)
-    await conn.set(pos_addr, 1 if post_eq else 0)
-
     async def _read(addr: str) -> Any:
         try:
             return await asyncio.wait_for(conn.get(addr), timeout=read_timeout_s)
@@ -901,6 +900,12 @@ async def set_rta_source(
         except Exception as e:
             log.warning("rta: reading %s failed: %s", addr, e)
             return None
+
+    # The RTA is the engineer's instrument before it is ours: remember where it pointed so the session can put it back.
+    src_before = await _read(src_addr)
+    pos_before = await _read(pos_addr)
+    await conn.set(src_addr, idx)
+    await conn.set(pos_addr, 1 if post_eq else 0)
 
     cleared = False
     opts = await _read(opt_addr)
@@ -947,11 +952,20 @@ async def set_rta_source(
         await conn.set(ph_addr, 0)
         peakhold_cleared = True
     # Manual display gain (0..60 dB in 6 dB steps) becomes active once auto-gain is off. Whether it offsets the
-    # /meters/15 values is UNCONFIRMED (meters.md §4.2), and every absolute threshold downstream floats on it, so
-    # it is read and reported with the session rather than silently changed.
-    gain = await _read(rta.get("gain_param", "/-prefs/rta/gain"))
-    prefs_before = {k: v for k, v in (("autogain", ag), ("det", det), ("decay", dec), ("peakhold", ph),
-                                      ("options", opts), ("gain", gain)) if v is not None}
+    # /meters/15 values is UNCONFIRMED (meters.md §4.2) but it is the same display-gain stage whose auto mode was
+    # PROVEN to reach the stream at M7, and every absolute level downstream (the clip flag apart) floats on it. So it
+    # is pinned to a declared value (rta.gain_db, default 0 dB) for the session and the value found is reported.
+    gain_addr = rta.get("gain_param", "/-prefs/rta/gain")
+    gain = await _read(gain_addr)  # raw (linf 0..1 over 0..60 dB)
+    gain_set = False
+    want_gain_db = float(rta.get("gain_db", 0.0))
+    hit = d.param_for_address(gain_addr)
+    want_gain_raw = hit[0].to_raw(want_gain_db) if hit is not None else want_gain_db / 60.0
+    if isinstance(gain, (int, float)) and not isinstance(gain, bool) and abs(float(gain) - float(want_gain_raw)) > 1e-4:
+        await conn.set(gain_addr, want_gain_raw)
+        gain_set = True
+    prefs_before = {k: v for k, v in (("source", src_before), ("pos", pos_before), ("autogain", ag), ("det", det),
+                                      ("decay", dec), ("peakhold", ph), ("options", opts), ("gain", gain)) if v is not None}
 
     expected = rta_stat_expected(idx, post_eq)
     actual: int | None = None
@@ -968,4 +982,38 @@ async def set_rta_source(
     else:
         log.info("rta source -> %s (%s=%d, %s)", target.label, src_addr, idx, "post-EQ" if post_eq else "pre-EQ")
     return RtaSourceResult(target, idx, post_eq, expected, actual, verified, cleared,
-                           autogain_cleared, detector_set_peak, decay_set_min, peakhold_cleared, prefs_before or None)
+                           autogain_cleared, detector_set_peak, decay_set_min, peakhold_cleared, prefs_before or None, gain_set)
+
+
+
+# prefs_before key -> descriptor rta key of the address it came from
+_RESTORABLE_PREFS = (("source", "source_param", "/-prefs/rta/source"), ("pos", "pos_param", "/-prefs/rta/pos"),
+                     ("autogain", "autogain_param", "/-prefs/rta/autogain"), ("det", "det_param", "/-prefs/rta/det"),
+                     ("decay", "decay_param", "/-prefs/rta/decay"), ("peakhold", "peakhold_param", "/-prefs/rta/peakhold"),
+                     ("gain", "gain_param", "/-prefs/rta/gain"))
+
+
+async def restore_rta_prefs(conn: Any, d: Descriptor, prefs_before: dict[str, Any] | None) -> dict[str, Any]:
+    """Put the console's RTA preferences back to what :func:`set_rta_source` found (source, PRE/POST,
+    auto-gain, detector, decay, peak-hold, manual gain). Solo Priority (options bit 5) is deliberately NOT
+    re-enabled: it is the setting that silently steals the analyser from a later session. Best effort: a
+    failed write is logged and reported, never raised. Returns ``{"restored": [...], "failed": [...]}``."""
+    out: dict[str, Any] = {"restored": [], "failed": []}
+    if not prefs_before:
+        return out
+    rta = d.rta
+    for key, param, default in _RESTORABLE_PREFS:
+        if key not in prefs_before:
+            continue
+        addr = rta.get(param, default)
+        try:
+            await conn.set(addr, prefs_before[key])
+            out["restored"].append(key)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            log.warning("rta: restoring %s=%r failed: %s", addr, prefs_before[key], e)
+            out["failed"].append(key)
+    if out["restored"]:
+        log.info("RTA preferences restored to their pre-session values (%s)", ", ".join(out["restored"]))
+    return out

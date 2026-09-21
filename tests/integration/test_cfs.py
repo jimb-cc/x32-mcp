@@ -696,3 +696,26 @@ async def test_candidate_gate_is_calibrated_to_the_room_noise_floor(cfs, descrip
         assert (await cfs._calibrate_floor(strict)).min_level_db == -20.0
     finally:
         await room.stop()
+
+
+async def test_session_restores_the_engineers_rta_prefs_when_it_ends(cfs, desk, conn, fakedesk):
+    """The RTA is the engineer's instrument: arming re-points it and forces its ballistics; finishing the
+    session puts source / decay / peak-hold / gain back (Solo Priority excepted)."""
+    fakedesk.set_value("/-prefs/rta/source", 3)      # engineer was looking at Ch 2
+    fakedesk.set_value("/-prefs/rta/peakhold", 2)
+    fakedesk.set_value("/-prefs/rta/gain", 24.0)
+    for ch in (1, 2):
+        fakedesk.set_value(f"/ch/{ch:02d}/mix/01/level", -20.0)
+    fakedesk.set_value("/bus/01/mix/fader", -20.0)
+    desk.invalidate()
+    await provision(desk, [1])
+    res = await cfs.feedback_watch(1)
+    assert res["rta"]["gain_set"] and res["rta"]["peakhold_cleared"]
+    assert float(fakedesk.get("/-prefs/rta/gain")) == 0.0 and int(fakedesk.get("/-prefs/rta/source")) != 3
+    rep = await cfs.stop()
+    await conn.get("/-stat/selidx")
+    assert int(fakedesk.get("/-prefs/rta/source")) == 3      # raw values back as found
+    assert int(fakedesk.get("/-prefs/rta/peakhold")) == 2
+    assert float(fakedesk.value("/-prefs/rta/gain")) == pytest.approx(24.0, abs=0.01)
+    last = cfs._last.report if cfs._last is not None else rep
+    assert set((last.get("rta_restored") or {}).get("restored", [])) >= {"source", "peakhold", "gain"}, last.get("rta_restored")
