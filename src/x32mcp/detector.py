@@ -370,7 +370,6 @@ class Candidate:
     fam_strong: list[bool] = field(default_factory=list) # >= family_partials partners, or somebody's H2/H3/H4
     grow_start: int = 0                # index into the lists where the current monotone ramp starts
     cen0: float | None = None          # centroid at birth (median of the first frames): where this line lives
-    _last_growth: tuple | None = None  # (frame, kind, net, slope, start) of the last frame a ramp qualified
     diag: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -641,6 +640,7 @@ class FeedbackDetector:
         partners: list[int] = []
         found: dict[int, int] = {}
         n_up = 0
+        ic = int(round(c))
         for kh, off in _HARM_OFFSETS:
             if c + off > n - 1.5:
                 break
@@ -659,9 +659,20 @@ class FeedbackDetector:
             n_up = 1 if 2 in found else 0
             partners = [found[2]] if 2 in found else []
         sub = False
+        lc = vals[ic] if 0 <= ic < n else -128.0
+
+        def fundamental_near(x: float) -> int | None:
+            """A would-be fundamental below the line: present as a peak AND not more than 10 dB quieter than the
+            line (bass 2f exceeds 1f by up to ~10 dB; no instrument's 3f/4f towers 15 dB over its fundamental —
+            a howl over an unrelated programme line does)."""
+            j = peak_near(x)
+            if j is None or lc > vals[j] + 10.0:
+                return None
+            return j
+
         # c = 2·f : f at c-10 with another partial of f (3f at c+5.85, 5f at c+13.22; 4f = 2c is ambiguous)
         if c - 10.0 >= 1.0:
-            jf = peak_near(c - 10.0)
+            jf = fundamental_near(c - 10.0)
             if jf is not None:
                 jo = peak_near(c + 5.85)
                 if jo is None:
@@ -671,7 +682,7 @@ class FeedbackDetector:
                     partners.extend([jf, jo])
         # c = 3·f : f at c-15.85 with 2f (c-5.85), 4f (c+4.15) or 5f (c+7.37)
         if not sub and c - 15.85 >= 1.0:
-            jf = peak_near(c - 15.85)
+            jf = fundamental_near(c - 15.85)
             if jf is not None:
                 jo = peak_near(c - 5.85)
                 if jo is None:
@@ -683,7 +694,7 @@ class FeedbackDetector:
                     partners.extend([jf, jo])
         # c = 4·f : f at c-20 with 2f (c-10) or 3f (c-4.15)
         if not sub and c - 20.0 >= 1.0:
-            jf = peak_near(c - 20.0)
+            jf = fundamental_near(c - 20.0)
             if jf is not None:
                 jo = peak_near(c - 10.0)
                 if jo is None:
@@ -1401,13 +1412,6 @@ class FeedbackDetector:
         kind, net, slope, gi0 = getattr(t, "_gk", None) or self._growth(t)
         if kind and self._n_growing >= 3:
             kind = ""            # synchronous growth elsewhere: common cause, not a loop
-        if kind:
-            t._last_growth = (k, kind, net, slope, gi0)
-        elif t._last_growth is not None and k - t._last_growth[0] <= 2 and lp >= max(lv[-4:-1]) - 1.0:
-            # the ramp has just topped out (limiter reached) — its evidence does not evaporate in one frame; this
-            # matters when the frame that qualified was vetoed by a passing coincidence at a partner position
-            _, kind, net, slope, gi0 = t._last_growth
-            gi0 = min(gi0, len(lv) - 2)
         t.slope_db_per_s = slope
         t.growth_score = min(1.0, net / cfg.growth_fast_total_db) if kind else 0.0
 

@@ -821,6 +821,69 @@ detector:
   decay_verify_s: 1.5
   decay_verify_frames: 2     # consecutive frames that must show the drop (one dip is RTA noise)
   frame_period_s: 0.05
+  # ---- predicate discriminator (2026-09-21; replaces the weighted sum — see detector.py docstring) -------------
+  # The keys above from prominence_db..override_persistence_frames still load; weights/confidence_threshold/growth_*/
+  # override_*/min_level_db are inert except confidence_threshold (the value an emitted detection reports at least).
+  # Every threshold below is a physical quantity; the comment says where it comes from.
+  mode: watch                # default operating point: 'watch' (human owns the gain) | 'ringout' (server steps it;
+                             # cfs passes the session mode and reports its own master steps to the detector)
+  track_prominence_db: 6     # a local maximum this far over the ±3 median is tracked (its history matters later)
+  grow_prominence_db: 10.5   # a line proven to be growing dB-linearly may be reported 1.5 dB before the 12 dB
+                             # display threshold (a ring beside programme partials reads a few dB low)
+  narrow_db: 8               # peak minus the shallower flank two bands out: a lone sinusoid leaks only through the
+                             # analyser skirts (>= 12 dB down at ±2 even for 2nd-order skirts); humps/wash have no dip
+  track_min_level_db: -100   # tracking floor; NO absolute candidate gate any more (it floated on one room's music
+                             # and on the unread /-prefs/rta/gain)
+  family_prominence_db: 6    # a partial is "present" when its band is itself a line this clear of its flanks
+  family_tol_bands: 0.5      # ... and its centroid sits within 60 cents of the exact k*f position (integer ratios
+                             # are exact; an unrelated line a band away is not a partial)
+  family_partials: 2         # >= 2 of 2f,3f,4f,5f present => a note (one coincidence ~20 %, two < 1 %); a line that is
+                             # itself somebody's 2f/3f/4f (fundamental + one more partial present) is also a note
+  family_veto_frac: 0.4      # fraction of the last 10 frames with a family that makes a steady line musical
+  family_ratio_tol_db: 3     # partials of one source keep their dB ratio while it swells; two rings do not
+  family_escape_level_db: -6 # within 6 dB of full scale a howl is clipping somewhere and grows odd partials: the
+                             # family test is void, level decides (loop brief §2.2)
+  centroid_tol_bands: 0.6    # centroid excursion still "stationary": a semitone is 0.83 band, vibrato ±50 c swings
+                             # an edge tone ±0.3..0.8 band; a ring's centroid noise is < 0.1 band
+  level_unsteady_db: 1.5     # sd of frame steps above which a plateau is not one (voice/whistle flutter 1-2 dB)
+  decay_tol_db: 2            # a line 2 dB under its 1 s maximum is decaying: struck/plucked notes, killed rings,
+                             # RTA release tails — never (re)emitted
+  analyser_settle_cycles: 3  # a rise must outlast 3/bandwidth of its own band before it is growth evidence: any
+                             # 1/10-octave filter needs ~1/(0.069 f) to settle (time-bandwidth bound), so an instant
+                             # bass onset IS a 0.4 s ramp at 40 Hz and 0.2 s at 80 Hz — the M7 false positives.
+                             # = 3 frames above 300 Hz, 6 @ 156 Hz, 12 @ 78 Hz, 23 @ 39 Hz.
+  growth_fast_step_db: 2     # ">= 3 of the last 5 frame steps at least this big, summing to growth_fast_total_db,
+  growth_fast_total_db: 12   #  none carrying > 55 %, top two <= 75 %": exponential growth resolved frame by frame
+                             #  (>= 40 dB/s); an instrument onset is one or two frames of rise however fast the ring
+  growth_slow_frames: 5      # least-squares ramp over >= max(5, settle) frames ...
+  growth_slow_min_db_per_s: 1.5   # ... of at least this slope (marginal loops: excess/tau down to ~1 dB/s) ...
+  growth_slow_total_db: 6    # ... climbing >= 6 dB net of the spectrum reference within 1 s (>> ±0.5 dB wander)
+  growth_slow_total_long_db: 4  # ... or >= 4 dB when the ramp has lasted >= 2 s (or starts at the server's own step)
+  growth_drop_tol_db: 3      # a fall this far below the ramp restarts it (a real decay; smaller dips are band noise)
+  growth_window_frames: 60   # longest ramp considered (3 s)
+  pop_step_frac: 0.55        # one frame step carrying more than this share of a rise, and holding = an onset
+  est_arm_frames: 3          # tracks born in the first 3 frames (or present in every stored frame) were there at arm
+  est_frames: 5              # frames of stationarity+steadiness before such a line is emitted (250 ms after arm)
+  est_min_level_db: -40      # a plateaued howl sits at a compressor/limiter/clip level (-30..0 dBFS at a bus tap with
+                             # sane gain structure, loop brief §1.4); a stationary line below this at arm is
+                             # hum/HVAC/room tone. ASSUMES /-prefs/rta/gain = 0 dB (force it at arm).
+  loud_level_db: -10         # a lone stationary steady narrow line within 10 dB of full scale (loop brief P8)
+  loud_frames: 3             # ... for 150 ms (no percussive transient is that narrow for that long)
+  clip_level_db: -0.5        # /meters/15 reads exactly 0.00 when the tap clipped
+  lf_edge_hz: 0              # hard floor (0 = none). Per session: 0.7 x the open mics' HPF when known (§3.4)
+  lf_strict_hz: 160          # below this only growth (over the long analyser-safe window) or the probe may emit —
+                             # never the established/loud rules: LF is where programme fundamentals live, and LF
+                             # loops (tau 15-30 ms) grow slowly enough to be watched
+  hf_edge_hz: 12500          # SM58-class mics die above 10 kHz; condensers ring to 12-13 kHz (loop brief §3.1)
+  ref_band_lo: 25            # spectrum reference for common-mode moves = median of bands 25..85 (110 Hz-7 kHz,
+  ref_band_hi: 85            #  where the analyser settles within a frame); a rise the reference shares is a fader
+  probe_settle_frames: 2     # ring_out active probe: frames skipped after a master step before the "after" window
+  probe_window_frames: 12    # frames compared each side of a step (medians)
+  probe_excess_db: 2         # (line change - spectrum change - step) >= 2 dB on two consecutive steps: loop-gain
+                             # dependent (a mode 4 dB under threshold answers +3 dB to +1 dB; programme +0..+1, §1.5)
+  probe_strong_db: 4         # ... or >= 4 dB on one step (mode within ~2 dB of threshold): cut it before it howls
+  probe_linear_db: 1.3       # <= 1.3 dB twice: stationary line / playback / driven room mode — never cut on est/loud
+  probe_min_history_frames: 6  # a line must predate the step by 300 ms to be compared across it
 
 ringout:
   step_db: 1.0
