@@ -188,6 +188,9 @@ class DetectorConfig:
     family_min_partials: int = 2         # of H2..H5 present on one frame => family-positive frame
     single_partial_rel_db: float = 10.0  # ... or ONE of H2/H3 this close to the candidate's own prominence
     single_partial_tol_bands: float = 0.35   # and this close to the exact harmonic position (organ 8'+4', flute: one strong exact partial)
+    single_partial_comove_db: float = 1.5    # and tracking the candidate this tightly (two independent rings an octave apart do not)
+    parent_excess_low_db: float = 8.0    # b as H2/H3 of a lower line may be at most this much LOUDER than that line (voice, HPF'd bass)
+    parent_excess_high_db: float = 2.0   # b as H4/H5: at most this (no instrument's 4th/5th partial towers over its fundamental)
     family_veto_frac: float = 0.4        # family-positive fraction of the last family_window_frames => MUSICAL
     family_window_frames: int = 12       # (a note keeps its partials for life; a ring's coincidences come and go)
     centroid_wander_bands: float = 0.75  # max centroid range over the sustain window (melody/glide/vibrato move more)
@@ -207,6 +210,8 @@ class DetectorConfig:
     growth_min_steps: int = 3            # intervals that must each carry >= growth_step_min_share of the rise
     growth_step_min_share: float = 0.1   # (a loop rises continuously; partial frames / neighbour arrivals are lone jumps)
     sustain_frames: int = 6              # SUSTAINED lane: frames of stable, non-decaying, family-free line (300 ms)
+    sustain_strong_prominence_db: float = 18.0   # below this the lane waits sustain_moderate_frames instead: at 12-18 dB the
+    sustain_moderate_frames: int = 12    # absence of a family proves little (partials may sit under the floor), so ask for time
     sustain_drop_db: float = 3.0         # max fall below the window maximum (decaying notes / RTA release fail)
     sustain_min_level_db: float = -45.0  # SUSTAINED lane only: no onset, no growth => level is the last evidence
     clip_level_db: float = -6.0          # narrow line this close to full scale is cut whatever else is true
@@ -245,7 +250,8 @@ class DetectorConfig:
         need(self.frame_period_s > 0, "frame_period_s must be > 0")
         need(self.family_min_partials >= 1, "family_min_partials must be >= 1")
         need(0.0 < self.harmonic_tol_bands <= 1.5 and self.family_window_frames >= 3, "harmonic_tol/family_window out of range")
-        need(0.0 < self.single_partial_tol_bands <= self.harmonic_tol_bands and self.single_partial_rel_db >= 0, "single_partial_* out of range")
+        need(0.0 < self.single_partial_tol_bands <= self.harmonic_tol_bands and self.single_partial_rel_db >= 0
+             and 0.0 < self.single_partial_comove_db <= self.comove_db, "single_partial_* out of range")
         need(0.0 <= self.family_veto_frac <= 1.0, "family_veto_frac must be in [0, 1]")
         need(self.step_db > 0 and 0.0 <= self.step_continue_frac < 1.0, "step_db/step_continue_frac out of range")
         need(self.history_frames >= 4, "history_frames must be >= 4")
@@ -257,6 +263,7 @@ class DetectorConfig:
         need(0.0 < self.growth_step_share <= 1.0 and 0.0 <= self.growth_late_share < 1.0, "growth share bounds out of range")
         need(self.growth_min_steps >= 1 and 0.0 <= self.growth_step_min_share < 1.0, "growth_min_steps/step_min_share out of range")
         need(self.sustain_frames >= self.persistence_frames, "sustain_frames must be >= persistence_frames")
+        need(self.sustain_moderate_frames >= self.sustain_frames, "sustain_moderate_frames must be >= sustain_frames")
         need(self.sustain_drop_db >= 0, "sustain_drop_db must be >= 0")
         need(0 <= self.ref_lo_band < self.ref_hi_band, "ref_lo_band/ref_hi_band out of order")
         need(self.probe_confirmations >= 1 and self.probe_window_s > 0, "probe settings out of range")
@@ -370,11 +377,13 @@ class Candidate:
     centroid: float = 0.0
     narrow_db: float = 0.0
     cluster_db: float = -128.0
+    cluster_prominence_db: float = 0.0
+    stable_frames: int = 0               # consecutive qualifying frames meeting the sustained-lane conditions
     refs: list[float] = field(default_factory=list)
     recent: list[float] = field(default_factory=list)      # last sustain_frames levels
     centroids: list[float] = field(default_factory=list)   # last sustain_frames centroids
     family_frames: int = 0
-    family_hist: list[bool] = field(default_factory=list)   # last family_window_frames verdicts
+    family_hist: list[int] = field(default_factory=list)    # last family_window_frames verdicts (0 none, 1 pair, 2 family)
     missed: int = 0                      # consecutive non-qualifying frames survived (<= gap_frames)
     step_onset: bool = False
     step_level: float = -128.0           # level right after the arrival that flagged step_onset
@@ -392,8 +401,13 @@ class Candidate:
 
     @property
     def family_frac(self) -> float:
-        """Family-positive fraction over the recent window (lifetime while the window is filling)."""
-        return sum(self.family_hist) / len(self.family_hist) if self.family_hist else 0.0
+        """Fraction of the recent window on which a pair or a family was present."""
+        return sum(1 for f in self.family_hist if f) / len(self.family_hist) if self.family_hist else 0.0
+
+    @property
+    def strict_family_frac(self) -> float:
+        """Fraction of the recent window on which a full family (not just a pair) was present."""
+        return sum(1 for f in self.family_hist if f >= 2) / len(self.family_hist) if self.family_hist else 0.0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -548,7 +562,7 @@ class FeedbackDetector:
         return median(vals[cfg.ref_lo_band:hi + 1])
 
     # -- harmonic family -----------------------------------------------------------------------
-    def _comoves(self, q: int, b: int, age: int) -> bool:
+    def _comoves(self, q: int, b: int, age: int, tol_db: float | None = None) -> bool:
         """True when band ``q``'s cluster level tracked band ``b``'s over the frames since the candidate at
         ``b`` was born (at most ``comove_frames``; with fewer than 3 frames there is nothing to compare and
         presence alone counts): partials of one note share one envelope; a programme line that merely sits
@@ -557,50 +571,60 @@ class FeedbackDetector:
         if k < 3:
             return True
         diffs = [fr[q] - fr[b] for fr in self._chist[-k:]]
-        return max(diffs) - min(diffs) <= self.cfg.comove_db
+        return max(diffs) - min(diffs) <= (self.cfg.comove_db if tol_db is None else tol_db)
 
     def _partial_at(self, pos: float, need: float, b: int, age: int, prom: Sequence[float],
-                    vals: Sequence[float], tol: float | None = None) -> bool:
+                    vals: Sequence[float], tol: float | None = None, comove_db: float | None = None,
+                    min_level: float = -1e9) -> bool:
         """Is there a line whose centroid sits within ``tol`` (default harmonic_tol_bands) of fractional band
-        ``pos``, that is a local maximum with prominence >= ``need`` and co-moves with band ``b``?"""
+        ``pos``, that is a local maximum with prominence >= ``need``, level >= ``min_level`` and co-moves with
+        band ``b`` (to within ``comove_db``, default cfg.comove_db)?"""
         n = len(vals)
         tol = self.cfg.harmonic_tol_bands if tol is None else tol
         lo, hi = int(math.floor(pos - 1.0)), int(math.ceil(pos + 1.0))
         for q in range(max(1, lo), min(n - 1, hi + 1)):
-            if prom[q] < need or vals[q] < vals[q - 1] or vals[q] < vals[q + 1]:
+            if prom[q] < need or vals[q] < min_level or vals[q] < vals[q - 1] or vals[q] < vals[q + 1]:
                 continue
             cq, _ = self._cluster(vals, q)
-            if abs(cq - pos) <= tol and self._comoves(q, b, age):
+            if abs(cq - pos) <= tol and self._comoves(q, b, age, comove_db):
                 return True
         return False
 
-    def _family(self, b: int, centroid: float, age: int, prom: Sequence[float], vals: Sequence[float]) -> bool:
+    def _family(self, b: int, centroid: float, age: int, prom: Sequence[float], vals: Sequence[float]) -> int:
         """Single-frame harmonic-family test for a peak at band ``b`` with fractional ``centroid``; ``age`` is
-        the number of frames the candidate has existed (co-movement is judged over those)."""
+        the number of frames the candidate has existed (co-movement is judged over those).
+
+        Returns 2 for a *family* (>= family_min_partials of H2..H5 present, or b is a partial of a lower line
+        that owns another partial), 1 for a *pair* (exactly one comparably strong, dead-on, tightly co-moving
+        H2/H3 above, or such a line exactly an octave below: organ 8'+4', octave doubling, low flute - a loop
+        never makes a subharmonic), 0 for none. A pair vetoes the plateau lane; only a family vetoes growth
+        (two coexisting rings a near-octave apart form a pair while they grow, loop brief 2.3)."""
         cfg = self.cfg
         floor = max(cfg.harmonic_presence_db, prom[b] - cfg.harmonic_rel_db)
         count = sum(1 for _, off in _HARMONIC_OFFSETS if self._partial_at(centroid + off, floor, b, age, prom, vals))
         if count >= cfg.family_min_partials:
-            return True
-        # one partial is enough when it is H2 or H3, comparably strong and dead on the harmonic position
-        strong = max(cfg.harmonic_presence_db, prom[b] - cfg.single_partial_rel_db)
-        for _, off in _HARMONIC_OFFSETS[:2]:
-            if self._partial_at(centroid + off, strong, b, age, prom, vals, tol=cfg.single_partial_tol_bands):
-                return True
-        # b sits exactly an octave above a comparably strong, co-moving line: it is that line's H2 (a loop
-        # never produces a subharmonic, loop brief 2.2; organ 8'+4' and octave-doubled parts look like this)
-        if centroid - 10.0 >= 1.0 and self._partial_at(centroid - 10.0, strong, b, age, prom, vals,
-                                                        tol=cfg.single_partial_tol_bands):
-            return True
-        # b is itself partial k of a lower line that owns at least one other partial j != k
+            return 2
+        # b is itself partial k of a lower line that owns at least one other partial j != k. The lower line
+        # must be plausibly a fundamental for b's level: no source's 4th/5th partial towers over its
+        # fundamental; H2/H3 may (open vowels, a bass whose H1 the PA's high-pass ate).
         weak = cfg.harmonic_presence_db
         for k, off in _HARMONIC_OFFSETS:
             f0 = centroid - off
-            if f0 < 1.0 or not self._partial_at(f0, weak, b, age, prom, vals):
+            floor_lv = vals[b] - (cfg.parent_excess_low_db if k <= 3 else cfg.parent_excess_high_db)
+            if f0 < 1.0 or not self._partial_at(f0, weak, b, age, prom, vals, min_level=floor_lv):
                 continue
             if any(j != k and self._partial_at(f0 + oj, weak, b, age, prom, vals) for j, oj in _HARMONIC_OFFSETS):
-                return True
-        return False
+                return 2
+        # pair: one partial is enough when it is H2 or H3, comparably strong and dead on the harmonic position
+        strong = max(cfg.harmonic_presence_db, prom[b] - cfg.single_partial_rel_db)
+        tight = dict(tol=cfg.single_partial_tol_bands, comove_db=cfg.single_partial_comove_db)
+        for _, off in _HARMONIC_OFFSETS[:2]:
+            if self._partial_at(centroid + off, strong, b, age, prom, vals, **tight):
+                return 1
+        # ... or a comparably strong, tightly co-moving line exactly an octave below (b is its H2)
+        if centroid - 10.0 >= 1.0 and self._partial_at(centroid - 10.0, strong, b, age, prom, vals, **tight):
+            return 1
+        return 0
 
     # -- onset shape (per band, independent of qualification) -----------------------------------
     def _is_step(self, w: Sequence[float]) -> bool:
@@ -668,12 +692,13 @@ class FeedbackDetector:
         c.prominence_db = prom[band]
         c.narrow_db = self.narrowness(vals, band)
         c.centroid, c.cluster_db = self._cluster(vals, band)
+        c.cluster_prominence_db = self.cluster_prominence(vals, band, c.cluster_db)
         c.freq_hz = self._freq_at(c.centroid)
         c.last_ts = ts
         fam = self._family(band, c.centroid, c.frames, prom, vals)
         if fam:
             c.family_frames += 1
-        c.family_hist.append(bool(fam))
+        c.family_hist.append(fam)
         if len(c.family_hist) > cfg.family_window_frames:
             del c.family_hist[0]
         self._push_level(c, c.level_db, ts, self.ref_db)
@@ -732,20 +757,26 @@ class FeedbackDetector:
         # musical
         loud = c.level_db >= cfg.clip_level_db
         wander = (max(c.centroids) - min(c.centroids)) if c.centroids else 0.0
-        musical = False
-        if c.frames >= 3 and c.family_frac >= cfg.family_veto_frac:
-            musical = True
+        musical = strict = False
+        if c.frames >= 3 and c.strict_family_frac >= cfg.family_veto_frac:
+            musical = strict = True
             reasons.append("family")
-        if len(c.centroids) >= cfg.persistence_frames and wander > cfg.centroid_wander_bands:
+        elif c.frames >= 3 and c.family_frac >= cfg.family_veto_frac:
             musical = True
+            reasons.append("pair")
+        if len(c.centroids) >= cfg.persistence_frames and wander > cfg.centroid_wander_bands:
+            musical = strict = True
             reasons.append("wander")
         c.musical = musical and not loud
-        # sustained lane
-        sustained = (len(c.recent) >= cfg.sustain_frames and not c.step_onset
-                     and wander <= cfg.centroid_wander_bands
-                     and c.recent[-1] >= max(c.recent) - cfg.sustain_drop_db
-                     and c.level_db >= cfg.sustain_min_level_db
-                     and c.narrow_db >= cfg.narrow_db)
+        strict = strict and not loud
+        # sustained lane: the conditions must hold now; a strongly prominent line needs sustain_frames of track,
+        # a moderate one (whose partials could be hiding under the floor) sustain_moderate_frames
+        ok = (not c.step_onset and wander <= cfg.centroid_wander_bands
+              and len(c.recent) >= 2 and c.recent[-1] >= max(c.recent) - cfg.sustain_drop_db
+              and c.level_db >= cfg.sustain_min_level_db and c.narrow_db >= cfg.narrow_db)
+        strong_line = max(c.prominence_db, c.cluster_prominence_db) >= cfg.sustain_strong_prominence_db
+        need_frames = cfg.sustain_frames if strong_line else cfg.sustain_moderate_frames
+        sustained = ok and c.frames >= need_frames and len(c.recent) >= cfg.sustain_frames
         c.sustained = sustained
         # probe (ring-out)
         if c.probe_base is not None and ts <= c.probe_until:
@@ -760,16 +791,15 @@ class FeedbackDetector:
             if clip:
                 verdict = True
                 reasons.append("clip")
-            if not c.musical:
-                if growth:
-                    verdict = True
-                    reasons.append("growth")
-                if sustained:
-                    verdict = True
-                    reasons.append("sustained@arm" if c.at_arm else ("sustained+regrown" if c.regrown else "sustained"))
-                if probe:
-                    verdict = True
-                    reasons.append("probe")
+            if growth and not strict:
+                verdict = True
+                reasons.append("growth")
+            if sustained and not c.musical:
+                verdict = True
+                reasons.append("sustained@arm" if c.at_arm else ("sustained+regrown" if c.regrown else "sustained"))
+            if probe and not strict:
+                verdict = True
+                reasons.append("probe")
         if c.step_onset:
             reasons.append("step")
         c.override = verdict and not growth

@@ -783,7 +783,7 @@ detector:
   # --- qualification (what is a candidate line at all) -----------------------------------------
   prominence_db: 12          # dB above the median of the +-neighbour_bins neighbours
   neighbour_bins: 3
-  narrow_db: 12              # AND dB above the 2nd loudest of the four +-2/+-3 bands: a line, not a hump (a lone
+  narrow_db: 10              # AND dB above the 2nd loudest of the four +-2/+-3 bands: a line, not a hump (a lone
                              # sinusoid clears >= 24 dB at +-2 on any plausible 1/10-oct skirt; formant
                              # humps, cymbal wash, PA response ripple are >= 3 bands wide and do not)
   # Absolute qualification gate. This used to be the only floor (-60, then -45 after M7) and applied to
@@ -813,9 +813,13 @@ detector:
   harmonic_presence_db: 6    # a partial is "present" as a local peak this prominent over its own +-3 median
   harmonic_rel_db: 18        # ... and within this of the candidate's prominence
   harmonic_tol_bands: 0.5    # ... and its centroid within this of k x the candidate's centroid (sub-band precision)
-  family_min_partials: 2     # of H2..H5 on one frame => family-positive frame (one coincidence is common)
+  family_min_partials: 2     # of H2..H5 on one frame => family-positive frame (one coincidence is common); or b is
+  parent_excess_low_db: 8    # partial k of a lower line owning another partial, b at most this much louder than
+  parent_excess_high_db: 2   # that line for k=2,3 (open vowels, HPF'd bass) / this for k=4,5 (no 4th/5th partial towers)
   single_partial_rel_db: 10  # ... or ONE of H2/H3 within this of the candidate's own prominence AND
-  single_partial_tol_bands: 0.35  # this close to the exact position (organ 8'+4', low flute: one strong exact partial)
+  single_partial_tol_bands: 0.35  # this close to the exact position (organ 8'+4', low flute: one strong exact partial) AND
+  single_partial_comove_db: 1.5   # tracking it this tightly (two independent rings an octave apart grow at their own rates);
+                             # the same rule downward: a strong line exactly an octave BELOW makes b its H2 (no subharmonics in a loop)
   family_veto_frac: 0.4      # family-positive fraction of the last family_window_frames => musical
   family_window_frames: 12   # (a note keeps its partials for life; a ring's coincidences in dense music come and go)
   centroid_wander_bands: 0.75  # centroid range over the sustain window above this => melody/glide/vibrato
@@ -846,6 +850,8 @@ detector:
   growth_ref_db_per_s: 20    # dashboard confidence scaling only
   # --- sustained lane (plateaued / slow rings; replaces the M7 25 dB override) ---------------------
   sustain_frames: 6          # 300 ms of: no step onset seen, centroid stable, not decaying, narrow, no family
+  sustain_strong_prominence_db: 18   # ... for a line at least this prominent; a 12-18 dB line (whose partials could be
+  sustain_moderate_frames: 12        # hiding under the floor, analyser brief 4.3) must hold for 600 ms instead
   sustain_drop_db: 3         # fall below the window max that disqualifies (struck/plucked notes, RTA release)
   # The ONE absolute level prior left, and only for this lane: with no onset and no growth observed,
   # level is the last passive evidence (a -50 dBFS whine present since before arm vs a -30 dBFS
