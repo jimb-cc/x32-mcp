@@ -1067,17 +1067,11 @@ async def panic() -> dict[str, Any]:
     stop / kill it / mute everything. Unmute afterwards with unmute / set_main_mute. Tier 1."""
     desk = _desk()
     res = await desk.panic()
-    delivered = res.get("delivered")
-    if delivered == "confirmed":
-        tail = f"; all {res.get('confirmed')} read back muted"
-    elif delivered == "partial":
-        tail = (f"; {res.get('confirmed')} read back muted, NOT CONFIRMED: {', '.join(res.get('unconfirmed') or [])}"
-                " — check them on X32-Edit or the front panel NOW")
-    elif delivered == "unconfirmed":
-        tail = "; the desk is degraded — verify on X32-Edit or the front panel"
-    else:
-        tail = ""
-    return _ok(f"PANIC: {res['count']} mutes sent in {res['elapsed_ms']} ms ({delivered}){tail}", **res)
+    return _ok(
+        f"PANIC: {res['count']} outputs muted in {res['elapsed_ms']} ms ({res['delivered']})"
+        + ("; the desk is degraded — verify on X32-Edit or the front panel" if res.get("delivered") == "unconfirmed" else ""),
+        **res,
+    )
 
 
 # -- tools: Tier 2 (confirmation dance) ----------------------------------------------------------------------

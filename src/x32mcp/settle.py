@@ -2,7 +2,7 @@
 
 The X32 has no write acknowledgement (transport.md §5.2), the writer never sees its own
 ``/xremote`` echo (§4.2), and real-hardware testing showed a read issued straight after a SET can
-return the *previous* value (HANDOVER §4b: ``insert/on``, channel names, ``/-stat/rtasource``).
+return the *previous* value (HANDOVER §4b: ``insert/on``; REVIEW_BRIEF §5: channel names).
 Whether the desk applies a SET before serving the next datagram is UNCONFIRMED, so the only
 proof that a write took effect is observing it. :func:`read_until` is that observation, bounded:
 it re-reads with a short growing delay until ``predicate`` holds or ``deadline_s`` passes, and

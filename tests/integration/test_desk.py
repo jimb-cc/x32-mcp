@@ -360,11 +360,8 @@ async def test_label_and_resolve(desk, conn, fakedesk):
 
 async def test_panic_mutes_24_outputs_fast(desk, conn, fakedesk, policy):
     res = await desk.panic()
-    assert res["count"] == 24 and res["elapsed_ms"] < 200  # elapsed_ms times the sends only
-    assert res["delivered"] == "confirmed" and res["confirmed"] == 24 and res["unconfirmed"] == [] and res["resent"] == []
-    assert res["verify"]["attempts"] == 1  # a synchronous desk costs exactly one read-back round
+    assert res["count"] == 24 and res["elapsed_ms"] < 200 and res["delivered"] == "sent"
     assert res["muted"][:2] == ["main.st", "main.m"] and "bus.16" in res["muted"] and "mtx.6" in res["muted"]
-    assert (await desk.panic(verify_s=0))["delivered"] == "sent"  # opt-out keeps the old contract
     await settle(conn)
     for key in res["muted"]:
         t = Target(*key.split(".")) if key.startswith("main") else Target(key.split(".")[0], int(key.split(".")[1]))
@@ -372,31 +369,6 @@ async def test_panic_mutes_24_outputs_fast(desk, conn, fakedesk, policy):
     assert fakedesk.get("/ch/01/mix/on") == 1  # inputs are left alone
     assert policy.snapshot_before_write is True  # no dump on the panic path
     assert res["failed"] == []
-
-
-async def test_panic_detects_and_resends_a_lost_mute(desk, conn, fakedesk):
-    """transport.md §5.2/§2: a SET has no ack and a datagram can be lost. Losing the first of the
-    24 mutes used to leave Main LR OPEN while the tool said "24 outputs muted". The read-back
-    finds it, re-sends it once and reports it."""
-    fakedesk.drop_inbound_next(1)  # the /main/st/mix/on datagram never arrives
-    res = await desk.panic()
-    assert res["count"] == 24 and res["resent"] == ["main.st"]
-    assert res["delivered"] == "confirmed" and res["confirmed"] == 24 and res["unconfirmed"] == []
-    assert res["verify"]["attempts"] >= 2 and res["verify"]["elapsed_ms"] < 1500
-    await settle(conn)
-    assert fakedesk.get("/main/st/mix/on") == 0
-
-
-async def test_panic_confirms_mutes_the_desk_applies_late_and_reports_the_rest(desk, conn, fakedesk):
-    fakedesk.set_apply_delay("/bus/", 200)  # applied after the first read-back
-    res = await desk.panic()
-    assert res["delivered"] == "confirmed" and res["resent"] == [] and res["verify"]["attempts"] >= 2
-    for i in range(1, 7):
-        fakedesk.set(f"/mtx/{i:02d}/mix/on", 1)  # the operator unmuted the matrices again
-    fakedesk.set_apply_delay("/mtx/", 60_000)  # never (within the panic's patience)
-    res = await desk.panic(verify_s=0.3)
-    assert res["delivered"] == "partial" and res["confirmed"] == 18
-    assert res["unconfirmed"] == [f"mtx.{i}" for i in range(1, 7)] and res["resent"] == res["unconfirmed"]
 
 
 async def test_panic_still_mutes_while_degraded(desk, conn, fakedesk):

@@ -91,8 +91,6 @@ log = logging.getLogger(__name__)
 
 ALL_FAMILIES: tuple[str, ...] = ("ch", "auxin", "fxrtn", "bus", "mtx", "main", "dca")
 _PANIC_FAMILIES: tuple[str, ...] = ("main", "bus", "mtx")  # fx_routing_scenes.md §11 option 1
-_PANIC_VERIFY_S = 0.6  # read the 24 mutes back until they show muted (after the sends, never before)
-_PANIC_REVERIFY_S = 0.3  # after re-sending the ones that did not
 _SCENE_VERIFY_S = 2.0
 _SCENE_POLL_S = 0.05
 _NAME_MAX = 12  # scales_params.md §4.1
@@ -1203,18 +1201,10 @@ class Desk:
             out["quote_replaced"] = True
         return out
 
-    async def panic(self, *, verify_s: float | None = None) -> dict[str, Any]:
+    async def panic(self) -> dict[str, Any]:
         """Mute Main LR, Main M/C, every bus and every matrix as fast as possible: fire-and-forget
         ``mix/on 0``, no ramps, no snapshot, rate limiter bypassed (Tier 1, never blocked).
-        Silences every POST-tapped output (fx_routing_scenes.md §11 option 1).
-
-        The sends always go out first. *Afterwards* (never before, never instead) the 24 mutes are
-        read back until they all show muted or ``verify_s`` (0.6 s) passes; any output still
-        reading unmuted is sent once more and re-checked briefly. A SET has no ack and a datagram
-        can be lost (transport.md §5.2, §2), so "sent" is not "muted": the result says
-        ``delivered`` = ``"confirmed"`` (all read back muted), ``"partial"`` (``unconfirmed`` lists
-        the rest), ``"sent"`` (``verify_s=0``) or ``"unconfirmed"`` (desk degraded, nothing can be
-        read). Verification never raises."""
+        Silences every POST-tapped output (fx_routing_scenes.md §11 option 1)."""
         t0 = time.perf_counter()
         targets = [t for fam in _PANIC_FAMILIES for t in self._d.strip_targets(fam)]
         await self._policy.acquire_write(panic=True)
@@ -1236,67 +1226,18 @@ class Desk:
                     last = e2 if isinstance(e2, Exception) else e
                     failed.append(t.key)
                     continue
-            self._invalidate_address(address, written=True)
+            self._invalidate_address(address)
             done.append(t.key)
         elapsed = (time.perf_counter() - t0) * 1000.0
         self.write_count += len(done)
         delivered = "unconfirmed" if unconfirmed else "sent"
-        out: dict[str, Any] = {"muted": done, "count": len(done), "failed": failed, "elapsed_ms": round(elapsed, 1), "delivered": delivered}
-        vs = _PANIC_VERIFY_S if verify_s is None else max(0.0, float(verify_s))
-        if done and not unconfirmed and vs > 0:
-            try:
-                out.update(await self._verify_panic([t for t in targets if t.key in done], vs))
-            except asyncio.CancelledError:
-                raise
-            except Exception as e:  # verification is advice; it must never cost the panic result
-                log.warning("panic verification failed: %s", e)
-                out["verify_error"] = str(e)
-        self._events.publish("desk.panic", elapsed_ms=round(elapsed, 1), count=len(done), failed=len(failed), delivered=out["delivered"],
-                             confirmed=out.get("confirmed"), unconfirmed=len(out.get("unconfirmed") or []))
-        log.warning("PANIC: %d outputs muted in %.1f ms (%s)%s%s", len(done), elapsed, out["delivered"],
-                    f", {len(out['unconfirmed'])} NOT CONFIRMED: {', '.join(out['unconfirmed'])}" if out.get("unconfirmed") else "",
+        self._events.publish("desk.panic", elapsed_ms=round(elapsed, 1), count=len(done), failed=len(failed), delivered=delivered)
+        log.warning("PANIC: %d outputs muted in %.1f ms%s%s", len(done), elapsed,
+                    " (desk degraded, unconfirmed)" if unconfirmed else "",
                     f", {len(failed)} NOT SENT: {', '.join(failed)}" if failed else "")
         if not done:
             raise DeskError("NOT_CONNECTED", f"panic could not reach the desk: {last}", muted=done, failed=failed)
-        return out
-
-    async def _verify_panic(self, targets: Sequence[Target], verify_s: float) -> dict[str, Any]:
-        """Read ``mix/on`` of ``targets`` back until all show muted (bounded); re-send the rest once."""
-        paths = {t.key: f"{t.osc_prefix}/mix" for t in targets}
-        t0 = time.perf_counter()
-
-        async def read() -> dict[str, Any]:
-            for p in paths.values():
-                self._drop(p)  # every attempt asks the desk, never our cache
-            secs = await self._read_sections(list(paths.values()), concurrency=24)
-            return {k: (secs.get(p) or {}).get("mix/on") for k, p in paths.items()}  # True = ON = unmuted; None = no answer
-
-        def all_muted(vals: dict[str, Any]) -> bool:
-            return all(v is False for v in vals.values())
-
-        settled = await read_until(read, all_muted, deadline_s=verify_s, first_delay_s=0.03, retry_on=(), what="panic mutes")
-        vals = settled.value or {}
-        pending = [k for k in paths if vals.get(k) is not False]
-        resent: list[str] = []
-        attempts = settled.attempts
-        if pending:
-            for t in targets:
-                if t.key in pending:
-                    try:
-                        await self._conn.send_raw(f"{t.osc_prefix}/mix/on", 0)  # emergency path: no limiter, like the first round
-                        resent.append(t.key)
-                    except (NotConnected, OSError) as e:
-                        log.debug("panic re-send %s failed: %s", t.key, e)
-            again = await read_until(read, all_muted, deadline_s=_PANIC_REVERIFY_S, first_delay_s=0.03, retry_on=(), what="panic mutes (re-sent)")
-            attempts += again.attempts
-            vals = again.value or vals
-            pending = [k for k in paths if vals.get(k) is not False]
-        confirmed = len(paths) - len(pending)
-        return {
-            "confirmed": confirmed, "unconfirmed": pending, "resent": resent,
-            "delivered": "confirmed" if not pending else "partial",
-            "verify": {"attempts": attempts, "elapsed_ms": round((time.perf_counter() - t0) * 1000.0, 1)},
-        }
+        return {"muted": done, "count": len(done), "failed": failed, "elapsed_ms": round(elapsed, 1), "delivered": delivered}
 
     # -- Tier 2 executors (the server does the confirmation dance) ---------------------------------------
 

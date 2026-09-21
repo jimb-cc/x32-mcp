@@ -926,8 +926,9 @@ async def set_rta_source(
         await conn.set(det_addr, 1)
         detector_set_peak = True
 
-    # The desk derives /-stat/rtasource from the prefs AFTER it answers (observed at M7), so the
-    # read-back is polled until it agrees or verify_deadline_s passes (settle.read_until): a
+    # Whether the desk has derived /-stat/rtasource from the prefs by the time it answers the next
+    # datagram is UNCONFIRMED (transport.md §5.4; inserts and names were seen to lag at M5/M7), so
+    # the read-back is polled until it agrees or verify_deadline_s passes (settle.read_until): a
     # timeout is "not verified" — logged and reported, never raised.
     expected = rta_stat_expected(idx, post_eq)
 
