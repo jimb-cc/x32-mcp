@@ -175,3 +175,37 @@ def test_notch_controller_two_phase_unit():
     assert p3.current_db == -4.0 and p3.new_db == -7.0                        # deepen from the DESK's value
     nc.observe(22, 0.0)                                                       # released on the desk
     assert 22 not in {x.band for x in nc.notches} and nc.gains[22] == 0.0
+
+
+async def test_session_aborts_when_the_desk_is_reconfigured_under_it(rig, fakedesk):
+    """The RTA source, the FX slot and the bus insert were validated once at arm and never again: a
+    solo/other client re-pointing the RTA, or reloading the slot, left CFS² notching bus 1's GEQ on
+    audio from somewhere else (or writing pars that no longer mean GEQ bands)."""
+    a, rta = rig
+    fw = await srv.feedback_watch(1, notch_budget=4)
+    assert fw["ok"] and fw["rta"]["verified"]
+    fakedesk.set_value("/-prefs/rta/source", 5)  # someone points the RTA at Ch 4 on the console
+    await wait_until(lambda: a.cfs.mode.value == "idle", timeout=3.0, what="watch aborted after the RTA source moved")
+    rep = (await srv.list_ringout_reports(1))["reports"][0]
+    assert rep["aborted"] is True
+    # a ring-out aborts (and backs off) when the slot is reloaded mid-run
+    fset(a, fakedesk, "/bus/01/mix/fader", -30.0)
+    fset(a, fakedesk, "/-prefs/rta/source", 50)
+    token = assert_pending(await srv.ring_out(1, target_gain_db=-5.0, dwell_ms=150))
+    run = asyncio.create_task(srv.ring_out(1, target_gain_db=-5.0, dwell_ms=150, confirm_token=token))
+    await wait_until(lambda: (fakedesk.value("/bus/01/mix/fader") or -90) >= -28.0, timeout=5.0, what="raises under way")
+    fakedesk.set_value("/fx/5/type", "LIM")  # the GEQ is replaced by a limiter
+    rep = await asyncio.wait_for(run, timeout=10.0)
+    assert rep["final_stage"] == "ABORT" and "FX slot 5" in rep["abort_reason"]
+
+
+async def test_show_mode_on_mid_ringout_aborts_it(rig, fakedesk):
+    a, rta = rig
+    fset(a, fakedesk, "/bus/01/mix/fader", -30.0)
+    token = assert_pending(await srv.ring_out(1, target_gain_db=-5.0, dwell_ms=150))
+    run = asyncio.create_task(srv.ring_out(1, target_gain_db=-5.0, dwell_ms=150, confirm_token=token))
+    await wait_until(lambda: (fakedesk.value("/bus/01/mix/fader") or -90) >= -28.0, timeout=5.0, what="raises under way")
+    assert (await srv.show_mode(True))["ok"]
+    rep = await asyncio.wait_for(run, timeout=10.0)
+    assert rep["final_stage"] == "ABORT" and "show mode" in rep["abort_reason"]
+    a.policy.show_mode = False

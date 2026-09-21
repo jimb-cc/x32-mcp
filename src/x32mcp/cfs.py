@@ -535,6 +535,7 @@ class CfsManager:
         self._bad_frame_logged = False
         self._notch_inflight: asyncio.Future | None = None  # set while a GEQ write is between propose and commit
         self._unsub_conn = events.subscribe(self._on_connection_event, types={"connection.state"})
+        self._unsub_policy = events.subscribe(self._on_policy_event, types={"policy.show_mode"})
 
     # -- status ------------------------------------------------------------------------------------
 
@@ -797,6 +798,7 @@ class CfsManager:
     async def close(self) -> None:
         """Abort whatever runs, stop the frames and unsubscribe (server shutdown)."""
         self._unsub_conn()
+        self._unsub_policy()
         self._stop_system("shutdown")
         ses = self._ses
         if ses is not None:
@@ -934,7 +936,7 @@ class CfsManager:
         self._bad_frame_logged = False
         # A GEQ band the engineer moves by hand during the session arrives as an /xremote push: adopt it,
         # so the next proposal deepens from the desk's value and never writes a hand-made cut shallower.
-        ses.unsub_geq = self._conn.on_update(lambda address, args, _s=ses: self._on_geq_push(_s, address, args))
+        ses.unsub_geq = self._conn.on_update(lambda address, args, _s=ses: self._on_desk_push(_s, address, args))
         self._unsub_frames = self._frames.subscribe(self._on_frame)
         self._consumer = asyncio.create_task(self._consume(ses), name=f"cfs-detector-{ses.session_id}")
         try:
@@ -1352,19 +1354,83 @@ class CfsManager:
             final_stage = "DONE"
         final = max(FADER_FLOOR_DB, ses.master_db - back)
         await self._stage(ses, "BACKOFF", to_db=_db1(final), backoff_db=back)
-        try:
-            written = await self._write_master(ses, final, force=True)  # lowering: never let a clamp refuse it
-            ses.master_db = written
-            ses.end_master_db = written
-        except (DeskError, PolicyError, X32ConnectionError) as e:
-            log.warning("back-off write failed (%s): %s", ses.session_id, e)
-            ses.abort_reason = ses.abort_reason or f"back-off failed: {e}"
+        # Lowering the master is the protective move; a transient refusal (the rate limiter drained by
+        # another client's burst, one lost datagram) must not leave the bus parked at its highest point.
+        last_err: Exception | None = None
+        for attempt in range(4):
+            try:
+                written = await self._write_master(ses, final, force=True)  # lowering: never let a clamp refuse it
+                ses.master_db = written
+                ses.end_master_db = written
+                last_err = None
+                break
+            except (DeskError, PolicyError, X32ConnectionError) as e:
+                last_err = e
+                transient = (isinstance(e, PolicyError) and e.code == "RATE_LIMITED") or (isinstance(e, DeskError) and e.code == "TIMEOUT")
+                log.warning("back-off write failed (%s), attempt %d: %s", ses.session_id, attempt + 1, e)
+                if not transient or attempt == 3:
+                    break
+                await asyncio.sleep(0.5 * (attempt + 1))
+        if last_err is not None:
+            ses.abort_reason = ses.abort_reason or f"back-off failed: {last_err}"
             final_stage = "ABORT"
             ses.end_master_db = ses.master_db
         ses.final_stage = final_stage
         await self._stage(ses, final_stage, reason=ses.abort_reason if final_stage == "ABORT" else reason)
 
     # -- connection loss ---------------------------------------------------------------------
+
+    def _on_desk_push(self, ses: _Session, address: str, args: Any) -> None:
+        """Something changed on the console while the session runs (an /xremote push). Three cases
+        matter: a GEQ band of our slot moved by hand (adopt it), the GEQ slot / the bus insert itself
+        was re-configured (our writes would now land somewhere else: abort), or the RTA was pointed at
+        another strip (the detector is now listening to the wrong audio: abort)."""
+        if self._ses is not ses or ses.abort_reason is not None:
+            return
+        why: str | None = None
+        if address == f"/fx/{ses.fx_slot}/type":
+            why = f"FX slot {ses.fx_slot} was reloaded on the desk during the session; its GEQ pars no longer mean what they did"
+        elif address.startswith(f"{ses.target.osc_prefix}/insert/"):
+            why = f"{ses.target.label}'s insert was changed on the desk during the session"
+        elif ses.rta is not None and address in (self._d.rta.get("source_param", "/-prefs/rta/source"),
+                                                 self._d.rta.get("stat_param", "/-stat/rtasource")):
+            expected = ses.rta.source_index if address.endswith("/source") else ses.rta.stat_expected
+            try:
+                got = int(args[0]) if args else None
+            except (TypeError, ValueError):
+                got = None
+            if got is not None and got != expected:
+                why = f"the RTA source was changed on the desk ({address} = {got}, this session needs {expected}); the detector no longer hears {ses.target.label}"
+        if why is not None:
+            log.warning("CFS² %s: %s — aborting", ses.session_id, why)
+            self._abort_from_callback(ses, why)
+            return
+        self._on_geq_push(ses, address, args)
+
+    def _abort_from_callback(self, ses: _Session, reason: str) -> None:
+        """Abort from a synchronous callback: reason set at once (the RAISE loop checks it before every
+        write), the rest (back-off / watch stop) scheduled."""
+        ses.abort_reason = ses.abort_reason or reason
+        ses.wake.set()
+        self._events.publish("cfs.abort", session_id=ses.session_id, bus=ses.bus, reason=ses.abort_reason)
+        if ses.mode is CfsMode.WATCH and self._ses is ses:
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                return
+            task = loop.create_task(self.stop(), name="cfs-abort-stop")
+            self._bg.add(task)
+            task.add_done_callback(self._bg.discard)
+
+    def _on_policy_event(self, ev: Event) -> None:
+        """Show mode switched ON mid-run: ring-outs are exactly what it forbids, so a running one stops
+        (a feedback watch is the show-time mode and carries on)."""
+        ses = self._ses
+        if not ev.data.get("on") or ses is None or ses.mode is not CfsMode.RINGOUT or ses.abort_reason is not None:
+            return
+        self._stop_system("show mode")
+        log.warning("CFS² %s: show mode switched on during the ring-out — aborting", ses.session_id)
+        self._abort_from_callback(ses, "show mode was switched on during the run")
 
     def _on_geq_push(self, ses: _Session, address: str, args: Any) -> None:
         """A pushed ``/fx/N/par/PP`` for this session's GEQ side: the engineer moved a band by hand."""
