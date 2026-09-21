@@ -189,6 +189,7 @@ class Policy:
         self.main_fader_max_db = float(p["main_fader_max_db"])
         self.send_max_db = float(p["send_max_db"])
         self.eq_gain_abs_max_db = abs(float(p["eq_gain_abs_max_db"]))
+        self.dyn_makeup_max_db = abs(float(p.get("dyn_makeup_max_db", 6.0)))
         self.relative_max_db = abs(float(p["relative_max_db"]))
         self.relative_max_db_show_mode = abs(float(p["relative_max_db_show_mode"]))
         self.ramp_default_ms = max(0, int(p["ramp_default_ms"]))
@@ -280,6 +281,17 @@ class Policy:
             return lim, Clamped(value=lim, requested=req, limit=lim, reason=f"CLAMPED_TO_LIMIT: EQ gain ceiling {lim:+.1f} dB")
         if req < -lim:
             return -lim, Clamped(value=-lim, requested=req, limit=-lim, reason=f"CLAMPED_TO_LIMIT: EQ gain floor {-lim:+.1f} dB")
+        return req, None
+
+    def clamp_makeup_gain(self, gain_db: float) -> tuple[float, Clamped | None]:
+        """Limit compressor make-up gain written through a Tier-1 tool to 0..``dyn_makeup_max_db``:
+        make-up is broadband gain downstream of threshold/ratio, i.e. a level move by another name."""
+        req = _num(gain_db, "makeup gain")
+        lim = self.dyn_makeup_max_db
+        if req > lim:
+            return lim, Clamped(value=lim, requested=req, limit=lim, reason=f"CLAMPED_TO_LIMIT: make-up gain ceiling {lim:+.1f} dB via this tool")
+        if req < 0:
+            return 0.0, Clamped(value=0.0, requested=req, limit=0.0, reason="CLAMPED_TO_LIMIT: make-up gain cannot be negative")
         return req, None
 
     @property

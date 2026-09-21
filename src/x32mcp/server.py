@@ -1036,7 +1036,9 @@ async def set_comp(
         knee=knee, makeup_db=makeup_db, mix_pct=mix_pct,
     )
     name = await _name(desk, t)
-    return _ok(f"{_who(t, name)} comp: {_applied_text(res['applied'])}", name=name, **res)
+    return _ok(f"{_who(t, name)} comp: {_applied_text(res['applied'])}"
+               + (f" (make-up gain clamped to {res['clamped'][0]['value']:+.1f} dB, {res['clamped'][0]['requested']:+.1f} requested)" if res.get("clamped") else ""),
+               name=name, **res)
 
 
 @server.tool()

@@ -510,3 +510,15 @@ def test_policy_error_shape():
     assert e.to_dict() == {"code": "RATE_LIMITED", "message": "slow down", "wait_s": 1.2}
     assert PolicyError("X", "y").to_dict() == {"code": "X", "message": "y"}
     assert isinstance(e, Exception)
+
+
+def test_makeup_gain_clamp(pol):
+    policy = pol
+    assert policy.dyn_makeup_max_db == 6.0
+    assert policy.clamp_makeup_gain(3.0) == (3.0, None)
+    v, cl = policy.clamp_makeup_gain(24.0)
+    assert v == 6.0 and cl is not None and cl.requested == 24.0 and cl.limit == 6.0 and "make-up" in cl.reason
+    v, cl = policy.clamp_makeup_gain(-2.0)
+    assert v == 0.0 and cl is not None
+    with pytest.raises(PolicyError):
+        policy.clamp_makeup_gain(float("nan"))

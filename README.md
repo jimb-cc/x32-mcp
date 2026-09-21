@@ -491,7 +491,7 @@ snapshot-before-first-write) · **T2** guarded (confirmation token, see the safe
 | `adjust_send(ch, bus, delta_db, ramp_ms=300, force=False)` | T1 | "More kick in Tony's ears" = `adjust_send("Kick", tonys_bus, +2)` |
 | `set_eq_band(target, band, freq_hz=, gain_db=, q=, type=, on=)` | T1 | One EQ band: 20..20 kHz, ±15 dB (clamped), Q 0.3..10, `LCut LShv PEQ VEQ HShv HCut`; `on` switches the whole EQ |
 | `set_pan(target, pan)` | T1 | −100 (L) .. 0 .. +100 (R) |
-| `set_comp(target, on=, threshold_db=, ratio=, attack_ms=, release_ms=, knee=, makeup_db=, mix_pct=)` | T1 | Compressor; only the values given are written |
+| `set_comp(target, on=, threshold_db=, ratio=, attack_ms=, release_ms=, knee=, makeup_db=, mix_pct=)` | T1 | Compressor; only the values given are written; make-up gain clamped to `policy.dyn_makeup_max_db` (6 dB). Main LR/M-C EQ and dynamics are guarded (refused here — change them on the console) |
 | `set_gate(target, on=, threshold_db=, range_db=, attack_ms=, hold_ms=, release_ms=)` | T1 | Channel gate; only the values given are written |
 | `panic()` | T1 | **Emergency:** mute Main LR, Main M/C, all 16 buses and 6 matrices at once — no ramp, no confirmation, never blocked by show mode or the rate limiter |
 

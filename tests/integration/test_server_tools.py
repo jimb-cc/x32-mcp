@@ -757,3 +757,18 @@ async def test_main_configures_stderr_so_unicode_log_records_survive(tmp_path):
     assert out.returncode == 0, out.stderr
     assert "Logging error" not in out.stderr, out.stderr
     assert "fader −6.0 dB → −4.0 dB CFS²" in out.stderr, out.stderr
+
+
+async def test_main_bus_processing_is_guarded_and_makeup_is_clamped(app, fakedesk):
+    """Red-team finding: +24 dB of compressor make-up (or +15 dB EQ) on Main LR through a Tier-1
+    tool was one unconfirmed call. The PA bus's processing is guarded; make-up elsewhere is clamped."""
+    assert_err(await srv.set_comp("main", makeup_db=24.0), "GUARDED")
+    assert_err(await srv.set_comp("main.m", on=False), "GUARDED")
+    assert_err(await srv.set_eq_band("main", 1, gain_db=15.0), "GUARDED")
+    assert_err(await srv.set_eq_band("main.st", 2, on=False), "GUARDED")
+    await settle(app)
+    assert fakedesk.value("/main/st/dyn/mgain") != 24.0 and float(fakedesk.value("/main/st/eq/1/g")) != 15.0
+    bus = await srv.set_comp("bus.1", makeup_db=24.0)
+    assert bus["ok"] and bus["applied"]["makeup_db"] == 6.0 and bus["clamped"][0]["requested"] == 24.0
+    ch = await srv.set_comp("ch.3", makeup_db=4.0)
+    assert ch["ok"] and ch["applied"]["makeup_db"] == 4.0 and "clamped" not in ch
