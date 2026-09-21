@@ -713,8 +713,10 @@ group 6 = all stage mics**. Disagreements are listed per channel.
 2. `ring_out(bus)` — Tier 2, one confirmation that includes the open-mic list. A state machine
    (`PREFLIGHT → SNAPSHOT → ARM → RAISE → HOLD → NOTCH → VERIFY → … → BACKOFF → DONE`) raises the
    bus master in 1 dB steps with a 1.5 s dwell towards the target (default and hard ceiling
-   0 dB). `step_db` must be between 0.1 dB (the fader report grid) and the 6 dB relative move
-   limit, and a target at or below the current master is refused rather than run. On a detection
+   0 dB). `step_db` must be between 0.1 dB (the fader report grid) and `ringout.max_step_db` (3 dB —
+   a bigger step walks past the point where a ring declares itself), `dwell_ms` below `ringout.min_dwell_ms`
+   (250 ms, the detector's persistence window) is raised to it with a warning, and a target at or below the
+   current master is refused rather than run. On a detection
    it holds, notches, then **verifies** that the band drops ≥ 6 dB for two consecutive RTA frames
    within 1.5 s (else deepens; if it cannot deepen the run aborts and backs off 6 dB). It stops at
    the target or when the budget is spent, backs off 3 dB from the highest level reached — never
