@@ -816,7 +816,7 @@ detector:
   family_min_partials: 2     # of H2..H5 on one frame => family-positive frame (one coincidence is common); or b is
   parent_excess_low_db: 8    # partial k of a lower line owning another partial, b at most this much louder than
   parent_excess_high_db: 2   # that line for k=2,3 (open vowels, HPF'd bass) / this for k=4,5 (no 4th/5th partial towers)
-  single_partial_rel_db: 10  # ... or ONE of H2/H3 within this of the candidate's own prominence AND
+  single_partial_rel_db: 15  # ... or ONE of H2/H3 whose level is within this of the candidate's (organ 8'+4' -4, flute -15) AND
   single_partial_tol_bands: 0.35  # this close to the exact position (organ 8'+4', low flute: one strong exact partial) AND
   single_partial_comove_db: 1.5   # tracking it this tightly (two independent rings an octave apart grow at their own rates);
                              # the same rule downward: a strong line exactly an octave BELOW makes b its H2 (no subharmonics in a loop)

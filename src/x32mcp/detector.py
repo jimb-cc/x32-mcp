@@ -187,7 +187,7 @@ class DetectorConfig:
     harmonic_rel_db: float = 18.0        # ... and within this of the candidate's own prominence
     harmonic_tol_bands: float = 0.5      # partial centroid must sit within this of k x the candidate's centroid
     family_min_partials: int = 2         # of H2..H5 present on one frame => family-positive frame
-    single_partial_rel_db: float = 10.0  # ... or ONE of H2/H3 this close to the candidate's own prominence
+    single_partial_rel_db: float = 15.0  # ... or ONE of H2/H3 whose LEVEL is within this of the candidate's
     single_partial_tol_bands: float = 0.35   # and this close to the exact harmonic position (organ 8'+4', flute: one strong exact partial)
     single_partial_comove_db: float = 1.5    # and tracking the candidate this tightly (two independent rings an octave apart do not)
     parent_excess_low_db: float = 8.0    # b as H2/H3 of a lower line may be at most this much LOUDER than that line (voice, HPF'd bass)
@@ -618,14 +618,15 @@ class FeedbackDetector:
                 continue
             if any(j != k and self._partial_at(f0 + oj, weak, b, age, prom, vals) for j, oj in _HARMONIC_OFFSETS):
                 return 2
-        # pair: one partial is enough when it is H2 or H3, comparably strong and dead on the harmonic position
-        strong = max(cfg.harmonic_presence_db, prom[b] - cfg.single_partial_rel_db)
-        tight = dict(tol=cfg.single_partial_tol_bands, comove_db=cfg.single_partial_comove_db)
+        # pair: one partial is enough when it is H2 or H3, comparably LOUD (level within single_partial_rel_db:
+        # organ 8'+4' -4 dB, flute H2 -15; a clipping howl's H2 <= -20) and dead on the harmonic position
+        tight = dict(tol=cfg.single_partial_tol_bands, comove_db=cfg.single_partial_comove_db,
+                     min_level=vals[b] - cfg.single_partial_rel_db)
         for _, off in _HARMONIC_OFFSETS[:2]:
-            if self._partial_at(centroid + off, strong, b, age, prom, vals, **tight):
+            if self._partial_at(centroid + off, weak, b, age, prom, vals, **tight):
                 return 1
-        # ... or a comparably strong, tightly co-moving line exactly an octave below (b is its H2)
-        if centroid - 10.0 >= 1.0 and self._partial_at(centroid - 10.0, strong, b, age, prom, vals, **tight):
+        # ... or a comparably loud, tightly co-moving line exactly an octave below (b is its H2)
+        if centroid - 10.0 >= 1.0 and self._partial_at(centroid - 10.0, weak, b, age, prom, vals, **tight):
             return 1
         return 0
 
@@ -797,8 +798,9 @@ class FeedbackDetector:
         c.sustained = sustained
         # probe (ring-out): an over-response of THIS line to the server's step; a line that arrived (stepped in)
         # after the step is a new note, not a response
-        if c.probe_base is not None and ts <= c.probe_until and not c.step_onset:
-            if (c.level_db - self.ref_db) - c.probe_base > c.probe_delta + cfg.probe_excess_db:
+        if c.probe_base is not None and ts <= c.probe_until and not c.step_onset and len(c.recent) >= 3:
+            held = min(c.recent[-3:]) - self.ref_db          # sustained over 3 frames, not a one-frame fluke
+            if held - c.probe_base > c.probe_delta + cfg.probe_excess_db:
                 c.probe_hits += 1
                 c.probe_base = None          # one hit per step
         probe = c.probe_hits >= cfg.probe_confirmations
@@ -815,7 +817,7 @@ class FeedbackDetector:
             if sustained and not c.musical:
                 verdict = True
                 reasons.append("sustained@arm" if c.at_arm else "sustained")
-            if probe and not strict:
+            if probe and not c.musical:
                 verdict = True
                 reasons.append("probe")
         if c.step_onset:
@@ -838,7 +840,7 @@ class FeedbackDetector:
         candidate records its reference-corrected level; one that then over-responds is regenerating."""
         cfg = self.cfg
         for c in self._cands:
-            c.probe_base = c.level_db - self.ref_db
+            c.probe_base = (median(c.recent) if c.recent else c.level_db) - self.ref_db
             c.probe_until = ts + cfg.probe_window_s
             c.probe_delta = float(delta_db)
         self._steps.append((ts, float(delta_db)))
