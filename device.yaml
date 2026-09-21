@@ -751,6 +751,7 @@ policy:
   bus_fader_max_db: 0        # bus masters (also the ring-out ceiling)
   main_fader_max_db: 0
   send_max_db: 0
+  dca_fader_max_db: 0        # a DCA raises every member strip at once: bus-like ceiling, not the channel +5
   eq_gain_abs_max_db: 15
   # Compressor make-up gain is plain broadband gain after the fader's neighbourhood: through a Tier-1
   # tool it is bounded like a relative move, not like the desk's 0..24 dB range.
@@ -860,6 +861,13 @@ detector:
 ringout:
   step_db: 1.0
   dwell_ms: 1500
+  # Bounds on what a caller may ask for. A ring needs the detector's persistence window (~5 frames,
+  # 250 ms) to declare itself; raising faster than that walks the master several dB past threshold
+  # before anything can be cut (on a wedge 1 dB of excess is already ~200 dB/s of growth). Humans ring
+  # out in 1-3 dB steps for the same reason. dwell below the floor is raised to it (and reported);
+  # a larger step is refused.
+  max_step_db: 3.0
+  min_dwell_ms: 250
   safety_margin_db: 3
   abort_backoff_db: 6
   master_ceiling_db: 0

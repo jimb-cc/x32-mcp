@@ -555,22 +555,44 @@ def _applied_text(applied: dict[str, Any]) -> str:
     return ", ".join(out)
 
 
+_PATCH_SUFFIXES = (".yaml", ".yml", ".csv")
+
+
+def _under(path: Path, root: Path) -> bool:
+    try:
+        path.resolve().relative_to(root.resolve())
+        return True
+    except (ValueError, OSError):
+        return False
+
+
 def _patch_path(file: str, *, must_exist: bool = True) -> Path:
-    """Resolve a patch file: as given, then under ``patch_dir`` and ``home``; suffix optional."""
+    """Resolve a patch file: as given, then under ``patch_dir`` and ``home``; suffix optional.
+    Only ``.yaml/.yml/.csv`` files are ever read, and a file to be WRITTEN (``must_exist=False``)
+    must live under the server's home — a tool argument is not a licence to write anywhere."""
     a = _app()
     raw = Path(str(file)).expanduser()
     bases = [raw] if raw.is_absolute() else [a.settings.patch_dir / raw, a.settings.home / raw, raw]
     tried: list[str] = []
     for base in bases:
-        cands = [base] if base.suffix else [base] + [base.with_suffix(s) for s in (".yaml", ".yml", ".csv")]
+        cands = [base] if base.suffix else [base] + [base.with_suffix(s) for s in _PATCH_SUFFIXES]
         for c in cands:
             tried.append(str(c))
             if c.is_file():
+                if c.suffix.lower() not in _PATCH_SUFFIXES:
+                    raise DeskError("BAD_ARGUMENT", f"patch files are .yaml/.yml/.csv, not {c.suffix or 'suffix-less'!r}", file=str(file))
+                if not must_exist and not (_under(c, a.settings.home) or _under(c, a.settings.patch_dir)):
+                    raise DeskError("BAD_ARGUMENT", f"{c} is outside {a.settings.home}; exports stay under the server's home / patches dir", file=str(file))
                 return c
     if must_exist:
         raise DeskError("NOT_FOUND", f"patch file {file!r} not found; looked at " + ", ".join(dict.fromkeys(tried)), file=str(file))
     p = bases[0]
-    return p if p.suffix else p.with_suffix(".yaml")
+    p = p if p.suffix else p.with_suffix(".yaml")
+    if p.suffix.lower() not in _PATCH_SUFFIXES:
+        raise DeskError("BAD_ARGUMENT", f"patch files are .yaml/.yml/.csv, not {p.suffix!r}", file=str(file))
+    if not (_under(p, a.settings.home) or _under(p, a.settings.patch_dir)):
+        raise DeskError("BAD_ARGUMENT", f"{p} is outside {a.settings.home}; exports stay under the server's home / patches dir (use a bare name)", file=str(file))
+    return p
 
 
 def _load_patch(file: str | None) -> Any:
@@ -665,14 +687,24 @@ async def discover_consoles(timeout_s: float = 2.0, port: int = 10023) -> dict[s
 
 @server.tool()
 @_tool(timeout=CONNECT_TIMEOUT_S + 10.0)
-async def connect(host: str, port: int = 10023) -> dict[str, Any]:
+async def connect(host: str, port: int = 10023, confirm_token: str | None = None) -> dict[str, Any]:
     """Connect to the desk at host:port (UDP, default 10023): /info round trip, then heartbeat.
-    Replaces any existing connection. Returns the connection status. Tier 0."""
+    Returns the connection status. Tier 0 when nothing is connected (or for the same desk again);
+    re-targeting an existing connection at a DIFFERENT host is a TIER 2 confirmation dance, because
+    every later write — panic() included — would land on another console."""
     a = _app()
     h = str(host).strip()
     if not h:
         raise DeskError("BAD_ARGUMENT", "host must be an IP address or hostname")
     p = _int_arg(port, "port", 1, 65535)
+    cur = a.conn.status
+    cur_host, cur_port = getattr(a.conn, "host", None), getattr(a.conn, "port", None)
+    if cur.state.value in ("connected", "degraded") and cur_host and (str(cur_host), int(cur_port or 0)) != (h, p):
+        name = cur.console.name if cur.console else str(cur_host)
+        pending = _confirm("connect", f"Switch the connection from {name} at {cur_host}:{cur_port} to {h}:{p}: every later tool call "
+                           "(panic included) will act on the other console", {"host": h, "port": p}, confirm_token)
+        if pending:
+            return pending
     try:
         info = await a.connect(h, p)
     except X32ConnectionError as e:
@@ -689,11 +721,17 @@ async def connect(host: str, port: int = 10023) -> dict[str, Any]:
 
 @server.tool()
 @_tool()
-async def disconnect() -> dict[str, Any]:
-    """Close the desk connection (stops any CFS2 session first). Tier 0."""
+async def disconnect(confirm_token: str | None = None) -> dict[str, Any]:
+    """Close the desk connection (stops any CFS2 session first). While a desk is connected this removes
+    all control including panic(), so it is a TIER 2 confirmation dance; with nothing connected it is free."""
     a = _app()
     console = a.conn.status.console
     was = a.conn.state.value
+    if was in ("connected", "degraded"):
+        pending = _confirm("disconnect", f"Disconnect from {console.name if console else 'the desk'} ({was}): no further control, "
+                           "and no panic(), until connect is called again", {"host": a.conn.status.to_dict().get("host")}, confirm_token)
+        if pending:
+            return pending
     stopped = None
     if a.cfs.active:
         stopped = await asyncio.wait_for(a.cfs.stop(), timeout=35.0)
@@ -902,9 +940,9 @@ async def dump_desk_state(sections: list[str] | None = None) -> dict[str, Any]:
 @server.tool()
 @_tool(timeout=None)
 async def set_fader(target: str, db: float, ramp_ms: int = 300, force: bool = False) -> dict[str, Any]:
-    """Move a fader to an absolute level in dB (channels/aux/fx-returns/DCAs clamp at +5 dB,
-    buses/matrices at 0 dB; -90 = -oo). Ramped over ramp_ms (0..60000). The size of the move is
-    NOT limited here — the destination is bounded by the ceiling above — so bringing a fader up
+    """Move a fader to an absolute level in dB (channels/aux/fx-returns clamp at +5 dB,
+    buses/matrices/DCAs at 0 dB; -90 = -oo). Ramped over ramp_ms (0..60000). Outside show mode the size of
+    the move is NOT limited here — the destination is bounded by the ceiling above — so bringing a fader up
     from silence works directly; force is accepted but not needed. Use adjust_fader for relative
     moves, where the ±6 dB guard applies. Tier 1; main LR/mono need set_main_fader."""
     desk = _desk()
@@ -1331,10 +1369,16 @@ async def restore_snapshot(id: str, scope: str | None = None, confirm_token: str
 
 @server.tool()
 @_tool()
-async def show_mode(on: bool) -> dict[str, Any]:
+async def show_mode(on: bool, confirm_token: str | None = None) -> dict[str, Any]:
     """Show mode on/off: when on, scene recall/save, setup_ringout_eqs and ring-outs are refused and
-    relative moves are limited to ±3 dB (accident protection during a performance). Tier 0."""
+    every fader/send move (absolute too) is limited to ±3 dB unless forced (accident protection during
+    a performance). Turning it ON is free; turning it OFF mid-show is a TIER 2 confirmation dance."""
     a = _app()
+    if not on and a.policy.show_mode:
+        pending = _confirm("show_mode_off", "Turn show mode OFF: scene recall/save and ring-outs become available again and "
+                           "the move limit returns to ±{:g} dB".format(a.policy.relative_max_db), {"on": False}, confirm_token)
+        if pending:
+            return pending
     a.policy.show_mode = bool(on)
     blocked = sorted(SHOW_MODE_BLOCKED) if a.policy.show_mode else []
     summary = (
@@ -1811,6 +1855,9 @@ async def ring_out(
     step = float(step_db)
     if not step > 0:
         raise DeskError("BAD_ARGUMENT", f"step_db must be > 0, got {step_db!r}")
+    max_step = min(float(a.descriptor.ringout.get("max_step_db", 3.0)), a.policy.relative_limit_db)
+    if step > max_step + 1e-9:  # refuse before minting a token: a 6 dB step walks straight past a ring
+        raise DeskError("BAD_ARGUMENT", f"step_db must be <= {max_step:g} dB (ringout.max_step_db), got {step_db!r}")
     dwell = _int_arg(dwell_ms, "dwell_ms", 0, 60_000)
     budget = _int_arg(notch_budget, "notch_budget", 1, 12)
     patch = _load_patch(patch_file)

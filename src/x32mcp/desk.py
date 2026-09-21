@@ -965,6 +965,13 @@ class Desk:
         # a start at exactly −∞, which was too narrow to help: a send resting at −84 dB is finite, so
         # "put kick in Tony's ears at −12 dB" was refused as a +72 dB jump. The guard stays on
         # adjust_level(), where a runaway or a typo is what it is actually defending against.
+        # ...except in show mode, which exists precisely to catch accidents mid-set: there an absolute move
+        # is held to the same (tighter) relative limit unless the caller passes force — "put kick in Tony's
+        # ears" is still one deliberate force=true away, a typo'd 0 dB on a live wedge is not.
+        if self._policy.show_mode and not force and before_db is not None:
+            a = FADER_FLOOR_DB if before_db == NEG_INF_DB or before_db <= FADER_FLOOR_DB else float(before_db)
+            b = FADER_FLOOR_DB if after == NEG_INF_DB else float(after)
+            self._policy.check_relative(b - a, force=False)
         ms = self._policy.ramp_default_ms if ramp_ms is None else _int(ramp_ms, "ramp_ms", 0, 60_000)
         await self.ensure_pre_write_snapshot()
         steps = self._policy.ramp_steps(before_db, after, ms)
@@ -1170,7 +1177,7 @@ class Desk:
         truncated = False
         requoted = False
         if name is not None:
-            text = str(name)
+            text = "".join(ch if ch.isprintable() else " " for ch in str(name))  # a newline in a name would split a '/' node line later
             if _NAME_BAD in text:
                 # transport.md §6.3: node text has no escape for a quote, and the desk's parser
                 # (XslashSetString, §6.6) reads to the closing '"' — a name carrying one truncates

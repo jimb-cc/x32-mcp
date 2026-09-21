@@ -77,6 +77,7 @@ import dataclasses
 import json
 import logging
 import math
+import re
 import time
 from dataclasses import dataclass, field
 from enum import Enum
@@ -105,6 +106,7 @@ _RESTORE_RETRY_S = 0.5
 _RESTORE_DEADLINE_S = 10.0
 _RESTORE_READ_TIMEOUT_S = 1.0
 _STOP_WAIT_S = 30.0
+_SESSION_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,80}$")
 _MAX_DETECTIONS_IN_REPORT = 200
 _FADER_GRID = 1.0 / 1023  # one fader step (scales_params.md §2.3)
 _REPORT_GRID_DB = 0.05  # half the 0.1 dB grid Desk reports levels on (desk.py ``_db1``)
@@ -304,6 +306,8 @@ class ReportStore:
     def load(self, session_id: str) -> dict[str, Any]:
         """A report by id (a unique prefix is accepted). Raises ``CfsError("NOT_FOUND")``."""
         sid = str(session_id).strip()
+        if not _SESSION_ID_RE.match(sid):  # an id, never a path: '../x' must not read files outside the report dir
+            raise CfsError("NOT_FOUND", f"no ring-out report {session_id!r} (not a report id)")
         path = self.dir / f"{sid}.json"
         if not path.exists():
             hits = [m for m in self.list() if str(m["session_id"]).startswith(sid)] if self.dir.is_dir() else []
@@ -659,12 +663,20 @@ class CfsManager:
             raise CfsError("BAD_ARGUMENT", f"step_db must be > 0, got {step_db!r}")
         if step < _MIN_STEP_DB:  # a finer step vanishes in the 0.1 dB read-back and reads as a clamp
             raise CfsError("BAD_ARGUMENT", f"step_db must be >= {_MIN_STEP_DB:g} dB (the fader report grid), got {step_db!r}")
-        if step > self._policy.relative_limit_db:  # else the first raise is refused by the relative clamp
-            raise CfsError("BAD_ARGUMENT", f"step_db {step:g} exceeds the {self._policy.relative_limit_db:g} dB "
-                                           "single-call relative move limit")
+        max_step = min(float(ro.get("max_step_db", 3.0)), self._policy.relative_limit_db)
+        if step > max_step + 1e-9:  # a bigger step walks past the point where a ring declares itself
+            raise CfsError("BAD_ARGUMENT", f"step_db {step:g} exceeds the {max_step:g} dB ring-out step limit "
+                                           "(ringout.max_step_db / the relative move limit)")
         dwell = int(ro.get("dwell_ms", 1500)) if dwell_ms is None else int(dwell_ms)
         if dwell < 0:
             raise CfsError("BAD_ARGUMENT", f"dwell_ms must be >= 0, got {dwell_ms!r}")
+        min_dwell = int(ro.get("min_dwell_ms", 0) or 0)
+        dwell_note: str | None = None
+        if dwell < min_dwell:
+            # Not refused (the intent is clear) but never honoured: the detector needs its persistence
+            # window at every level before the next dB goes in.
+            dwell_note = f"dwell_ms {dwell} raised to the {min_dwell} ms floor (ringout.min_dwell_ms): the detector needs that long per step"
+            dwell = min_dwell
         async with self._lock:
             self._require_idle(in_system=_system_id is not None)
             self._events.publish("cfs.stage", session_id=None, bus=bus_label(t), stage="PREFLIGHT", master_db=None)
@@ -687,6 +699,8 @@ class CfsManager:
             ses.system_id = _system_id
             ses.step_db, ses.dwell_ms = step, dwell
             ses.target_db = target
+            if dwell_note:
+                ses.warnings.append(dwell_note)
             if _expected_mics:
                 ses.expected_mics = [int(c) for c in _expected_mics]
                 missing = [c for c in ses.expected_mics if not any(m.ch == c and m.include for m in pf.mics)]

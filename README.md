@@ -466,8 +466,8 @@ snapshot-before-first-write) · **T2** guarded (confirmation token, see the safe
 | Tool | Tier | What it does |
 |---|---|---|
 | `discover_consoles(timeout_s=2.0, port=10023)` | T0 | Broadcast `/xinfo` on the LAN (and loopback) and list `[{host, port, name, model, firmware}]` |
-| `connect(host, port=10023)` | T0 | `/info` round trip, then heartbeat + watchdog; replaces any existing connection |
-| `disconnect()` | T0 | Close the connection (stops a CFS² session first) |
+| `connect(host, port=10023, confirm_token=None)` | T0 (T2 to switch to a different console while connected) | `/info` round trip, then heartbeat + watchdog; replaces any existing connection |
+| `disconnect(confirm_token=None)` | T2 while connected | Close the connection (stops a CFS² session first) |
 | `connection_status()` | T0 | State (disconnected/connecting/connected/degraded), console identity, RTT, show mode, CFS² mode, dashboard URL; `ok:false` with `NOT_CONNECTED`/`DEGRADED` |
 | `get_channel(ch)` | T0 | Everything about input channel 1..32: name, colour, source, fader, mute, pan, preamp, EQ, comp, gate, insert |
 | `get_bus(bus)` | T0 | Mix bus 1..16: name, fader, mute, 6-band EQ, comp, insert |
@@ -512,7 +512,7 @@ snapshot-before-first-write) · **T2** guarded (confirmation token, see the safe
 | `list_snapshots()` | T0 | Newest first `[{id, label, created, scene, size_kb, path}]` |
 | `diff_snapshot(id="latest", scope=None)` | T0 | Plain-English differences between a snapshot and the desk now (≤ 200 changes, `count`, `truncated`) |
 | `restore_snapshot(id, scope=None, confirm_token=None)` | T2 | Write a snapshot back (the undo); previews the changes on the first call; allowed in show mode |
-| `show_mode(on)` | T0 | On: scene recall/save, `setup_ringout_eqs` and ring-outs refused, relative moves limited to ±3 dB |
+| `show_mode(on, confirm_token=None)` | T0 / T2 to turn off | On: scene recall/save, `setup_ringout_eqs` and ring-outs refused, every fader/send move (absolute too) limited to ±3 dB unless forced; turning it off is confirmed |
 
 ### Phase 4 — labels, patch plans, routing
 

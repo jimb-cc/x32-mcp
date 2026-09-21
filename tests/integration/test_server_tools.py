@@ -111,7 +111,7 @@ async def test_connection_status_before_and_after_connect(fakedesk, tmp_path):
         assert "Connected to X32-FAKE" in st["summary"] and st["version"] == "0.1.0"
         again = await srv.connect(fakedesk.host, fakedesk.port)  # reconnect replaces the connection
         assert again["ok"]
-        d = await srv.disconnect()
+        d = await srv.disconnect(confirm_token=assert_pending(await srv.disconnect()))  # disconnecting a live desk is confirmed
         assert d["ok"] and d["state"] == "disconnected" and "Disconnected from X32-FAKE" in d["summary"]
         assert_err(await srv.connection_status(), "NOT_CONNECTED")
     finally:
@@ -367,7 +367,8 @@ async def test_show_mode_blocks_scenes_even_with_token_and_tightens_moves(app):
     assert_err(await srv.ring_out_system(), "SHOW_MODE_BLOCKS")
     assert_err(await srv.setup_ringout_eqs([1]), "SHOW_MODE_BLOCKS")
     # a token minted before show mode went on does not help
-    assert (await srv.show_mode(False))["show_mode"] is False
+    tok = assert_pending(await srv.show_mode(False))  # turning show mode OFF is confirmed
+    assert (await srv.show_mode(False, confirm_token=tok))["show_mode"] is False
     token = assert_pending(await srv.recall_scene(1))
     await srv.show_mode(True)
     assert_err(await srv.recall_scene(1, confirm_token=token), "SHOW_MODE_BLOCKS")
@@ -383,7 +384,7 @@ async def test_show_mode_blocks_scenes_even_with_token_and_tightens_moves(app):
     token = assert_pending(await srv.restore_snapshot("latest", scope="ch.1"))
     res = await srv.restore_snapshot("latest", scope="ch.1", confirm_token=token)
     assert res["ok"] and (await srv.get_channel(1))["fader_db"] == 0.0
-    off = await srv.show_mode(False)
+    off = await srv.show_mode(False, confirm_token=assert_pending(await srv.show_mode(False)))
     assert off["show_mode"] is False and off["relative_limit_db"] == 6.0
 
 
@@ -826,3 +827,52 @@ async def test_restore_preview_lists_hazards_first_and_reads_in_the_restore_dire
     first = pend["preview"].splitlines()[0]
     assert "Main LR" in first and "−40.0 dB → 0.0 dB" in first, first  # listed first, and reads live → snapshot
     assert "listed first" in pend["action_summary"]
+
+async def test_argument_hardening_paths_and_ringout_bounds(app, fakedesk, tmp_path):
+    """Report ids are ids, not paths; exports stay under the server's dirs; ring_out steps are bounded."""
+    outside = tmp_path.parent / "elsewhere.json"
+    outside.write_text('{"session_id": "x"}')
+    assert_err(await srv.get_ringout_report("../" + outside.stem), "NOT_FOUND")
+    assert_err(await srv.get_ringout_report(str(outside)), "NOT_FOUND")
+    assert_err(await srv.export_patch_plan(str(tmp_path.parent / "escape.yaml")), "BAD_ARGUMENT")
+    assert_err(await srv.export_patch_plan("/etc/passwd"), "BAD_ARGUMENT")
+    ok = await srv.export_patch_plan("inside")  # bare name -> patches/inside.yaml
+    assert ok["ok"] and ok["file"].endswith("inside.yaml")
+    for ch in (1, 2):
+        fset(app, fakedesk, f"/ch/{ch:02d}/mix/01/level", -20.0)
+    fset(app, fakedesk, "/bus/01/mix/fader", -20.0)
+    token = assert_pending(await srv.setup_ringout_eqs([1]))
+    assert (await srv.setup_ringout_eqs([1], confirm_token=token))["ok"]
+    assert_err(await srv.ring_out(1, step_db=5.0), "BAD_ARGUMENT")  # > ringout.max_step_db (3)
+
+
+async def test_show_mode_off_disconnect_and_retarget_are_confirmed(app, fakedesk):
+    """Red-team findings: show_mode(false) was self-service, disconnect()/connect(elsewhere) silently
+    removed or re-targeted all control (panic included), and show mode's ±3 dB only covered adjust_*."""
+    on = await srv.show_mode(True)
+    assert on["ok"] and on["show_mode"] is True  # turning it ON is free
+    # in show mode an absolute move is held to the relative limit too, unless forced
+    fset(app, fakedesk, "/ch/07/mix/fader", -40.0)
+    assert_err(await srv.set_fader("ch.7", 0.0, ramp_ms=0), "RELATIVE_TOO_LARGE")
+    small = await srv.set_fader("ch.7", -38.0, ramp_ms=0)
+    assert small["ok"]
+    forced = await srv.set_fader("ch.7", -20.0, ramp_ms=0, force=True)
+    assert forced["ok"]
+    pend = await srv.show_mode(False)
+    tok = assert_pending(pend)
+    assert "Turn show mode OFF" in pend["action_summary"]
+    assert app.policy.show_mode is True  # still on until confirmed
+    off = await srv.show_mode(False, confirm_token=tok)
+    assert off["ok"] and off["show_mode"] is False
+    big = await srv.set_fader("ch.7", 0.0, ramp_ms=0)  # out of show mode absolute moves are free again (Jim's M5 decision)
+    assert big["ok"]
+    # disconnect while connected needs a token; so does re-targeting to another host
+    pend = await srv.disconnect()
+    tok = assert_pending(pend)
+    assert "no panic()" in pend["action_summary"]
+    assert app.conn.connected
+    pend = await srv.connect("127.0.0.2", fakedesk.port)
+    assert_pending(pend)
+    assert "other console" in pend["action_summary"] and app.conn.connected
+    same = await srv.connect(fakedesk.host, fakedesk.port)  # same desk again: free
+    assert same["ok"]

@@ -339,7 +339,8 @@ async def test_ring_out_closed_loop(desk, conn, fakedesk, events, cfs, tmp_path)
     assert injected
     assert rep["final_stage"] == "DONE" and rep["aborted"] is False and rep["abort_reason"] is None and rep["mode"] == "ringout"
     assert rep["start_master_db"] == -20.0 and rep["max_master_db"] == -6.0 and rep["end_master_db"] == -9.0  # target - 3 dB margin
-    assert rep["target_db"] == -6.0 and rep["step_db"] == 1.0 and rep["dwell_ms"] == 60 and rep["snapshot"]
+    assert rep["target_db"] == -6.0 and rep["step_db"] == 1.0 and rep["snapshot"]
+    assert rep["dwell_ms"] == 250 and any("raised to the 250 ms floor" in w for w in rep["preflight"]["warnings"])  # 60 < ringout.min_dwell_ms
     assert -18.0 <= rep["gain_before_feedback_db"] <= -7.0 and rep["budget_left"] == 5
     assert len(rep["notches"]) == 1 and rep["notches"][0]["band"] == GEQ_BAND_2K5 and rep["notches"][0]["depth_db"] == -3.0
     assert notches[0]["band"] == GEQ_BAND_2K5 and rep["notches"][0]["confidence"] >= 0.7
