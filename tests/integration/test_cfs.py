@@ -132,10 +132,16 @@ async def test_plan_setup_allocates_slot_5_l_r(desk):
     assert len(plan.allocations) == 1 and plan.allocations[0].slot == 5 and plan.allocations[0].sides == {"A": 1, "B": 2}
     assert plan.allocations[0].load_type is True
     assert plan.to_dict()["allocations"][0]["fx_type"] == "GEQ2"
-    # three buses: a second slot for the odd one; 'main' is accepted as a bus spelling
+    # three strips: 'main' is accepted as a bus spelling, and being a STEREO strip it takes a whole slot with a
+    # stereo GEQ (L and R through one set of pars) instead of one side of a dual GEQ2 (which would EQ the left
+    # PA stack only and lend Main R's side to another bus - REVIEW_REPORT §2 C1)
     plan3 = await plan_setup(desk, [1, 2, "main"])
-    assert [tl["slot"] for tl in plan3.type_loads] == [5, 6]
+    assert [(tl["slot"], tl["fx_type"]) for tl in plan3.type_loads] == [(5, "GEQ2"), (6, "GEQ")]
     assert plan3.inserts[2] == {"target": "main.st", "bus": "main", "sel": "FX6L", "on": True, "pos": "PRE"}
+    assert plan3.allocations[1].sides == {"A": "main", "B": "main"}
+    # and a fourth bus cannot borrow 'the other side' of the mains' slot
+    plan4 = await plan_setup(desk, [1, 2, "main", 3])
+    assert not any(ins["target"] == "bus.3" and ins["sel"] in ("FX6R", "FX6L") for ins in plan4.inserts), plan4.inserts
 
 
 async def test_apply_setup_validates_and_is_idempotent(desk, conn, fakedesk, events):
@@ -696,3 +702,41 @@ async def test_candidate_gate_is_calibrated_to_the_room_noise_floor(cfs, descrip
         assert (await cfs._calibrate_floor(strict)).min_level_db == -20.0
     finally:
         await room.stop()
+
+
+async def test_main_lr_on_a_dual_geq2_is_notched_on_both_sides(cfs, desk, conn, fakedesk):
+    rta = fakedesk.rta
+    """Jim's desk today: GEQ2 in FX5 inserted on Main LR (HANDOVER §4a). L runs through side A, R through
+    side B (fx_routing_scenes.md §2.1/§3.4); the M7 datum '-15 dB PRE cut read -5.9/-6.0/-3.9 on the RTA' is
+    what a ONE-sided cut of a two-leg signal looks like. CFS² must write both sides, validation must not
+    hand side B to another bus, and the (now two-leg) fake must see the full cut."""
+    fakedesk.set_value("/fx/5/type", "GEQ2")
+    fakedesk.set_value("/main/st/insert/sel", "FX5L")
+    fakedesk.set_value("/main/st/insert/on", True)
+    fakedesk.set_value("/main/st/insert/pos", "PRE")
+    desk.invalidate()
+    # a bus asking for FX5R while the mains own slot 5 is refused by validation
+    fakedesk.set_value("/bus/03/insert/sel", "FX5R")
+    fakedesk.set_value("/bus/03/insert/on", True)
+    desk.invalidate()
+    v = await validate_ringout_eqs(desk, [3, "main"])
+    assert v[3].ok is False and any("BOTH sides" in r for r in v[3].reasons), v[3].reasons
+    fakedesk.set_value("/bus/03/insert/sel", "OFF")
+    desk.invalidate()
+    v = await validate_ringout_eqs(desk, ["main"])
+    assert v["main"].ok, v["main"].reasons
+    # arm a watch on the mains and inject a ring: the notch lands on side A AND side B, and the RTA sees ~3 dB, not ~1.4
+    for ch in (1, 2):
+        fakedesk.set_value(f"/ch/{ch:02d}/mix/fader", -10.0)
+    fakedesk.set_value("/main/st/mix/fader", -20.0)
+    desk.invalidate()
+    res = await cfs.feedback_watch("main", notch_budget=3)
+    assert res["geq"]["side"] == "A"
+    rta.inject_ring(2400.0, 20.0, start_db=-34.0)
+    await wait_until(lambda: len(cfs.state.notches) >= 1, timeout=4.0, what="a notch on the mains")
+    await conn.get("/-stat/selidx")  # settle
+    a = float(fakedesk.value("/fx/5/par/22"))
+    b = float(fakedesk.value(f"/fx/5/par/{22 + 32:02d}"))
+    assert a == pytest.approx(-3.0, abs=0.01) and b == pytest.approx(-3.0, abs=0.01), (a, b)
+    assert rta.cuts.get(rta.band_for_hz(2500.0), 0.0) == pytest.approx(3.0, abs=0.3)  # both legs cut -> full depth at the analyser
+    await cfs.stop()

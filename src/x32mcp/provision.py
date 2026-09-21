@@ -49,6 +49,7 @@ from .scales import format_db
 from .targets import Target, TargetError, parse_target
 
 __all__ = [
+    "geq_sides_for",
     "InsertInfo",
     "GeqStatus",
     "SlotAllocation",
@@ -325,6 +326,20 @@ class _FxCache:
         return fx
 
 
+def _is_stereo_strip(key: str) -> bool:
+    """Main LR is a stereo strip: on a dual GEQ2/TEQ2 its L runs through side A and its R through side B.
+    (Linked bus pairs are the same in principle; they are not modelled yet — see REVIEW_REPORT §2 C2.)"""
+    return key == "main.st"
+
+
+def geq_sides_for(key: str, fx_type: str | None, dual: set[str] | frozenset[str], side: str | None) -> tuple[str, ...]:
+    """The GEQ sides a session on strip ``key`` must write: both for a stereo strip on a dual type,
+    otherwise just its own."""
+    if _is_stereo_strip(key) and fx_type in dual:
+        return ("A", "B")
+    return ((side or "A"),)
+
+
 def _side_gains(fx: dict[str, Any], side: str | None) -> tuple[list[float] | None, float | None]:
     """(31 band gains dB, master dB) of ``side`` (``"A"``/``"B"``) of a decoded GEQ slot."""
     geq = fx.get("geq")
@@ -410,7 +425,18 @@ async def validate_ringout_eqs(desk: Desk, buses: Sequence[int | str | Target], 
                             reasons.append(f"stereo {fx_type} in FX slot {slot} is shared with {other_label}: a cut would hit both")
                         elif other.get("side") == side:
                             reasons.append(f"{ins.get('sel')} is also inserted on {other_label} (one insert point per strip, fx_routing_scenes.md §3.4)")
+                        elif _is_stereo_strip(t.key) or _is_stereo_strip(other_key):
+                            # a stereo strip on a dual GEQ runs L through side A and R through side B: the "other" side is
+                            # not free, it is that strip's right channel (fx_routing_scenes.md §2.1/§3.4)
+                            who = t.label if _is_stereo_strip(t.key) else other_label
+                            reasons.append(f"dual {fx_type} in FX slot {slot}: {who} uses BOTH sides (L=A, R=B), so it cannot be shared with "
+                                           f"{other_label if _is_stereo_strip(t.key) else t.label}")
                     bands, master = _side_gains(fx, side)
+                    if bands is not None and _is_stereo_strip(t.key) and fx_type in dual:
+                        b_bands, _bm = _side_gains(fx, "B")
+                        if b_bands is not None and any(abs(a - b) > _FLAT_EPS for a, b in zip(bands, b_bands)):
+                            reasons.append(f"dual {fx_type} in FX slot {slot} on {t.label}: sides A (L) and B (R) differ — "
+                                           "even them up on the console first; CFS² writes both sides together")
                     if bands is not None:
                         cuts = {i + 1: g for i, g in enumerate(bands) if g < -_FLAT_EPS}
                         notches = [{"band": b, "freq_hz": geq_hz[b - 1], "depth_db": g} for b, g in sorted(cuts.items())]
@@ -449,6 +475,8 @@ async def plan_setup(desk: Desk, buses: Sequence[int | str | Target]) -> SetupPl
     for key, ins in inserts.items():
         if ins.get("fx_slot") is not None and ins.get("side") is not None:
             used[(int(ins["fx_slot"]), str(ins["side"]))] = key
+            if _is_stereo_strip(key):  # L through side A, R through side B: the whole slot is spoken for
+                used.setdefault((int(ins["fx_slot"]), "B" if str(ins["side"]) == "A" else "A"), key)
     need: list[Target] = []
     for t in targets:
         ins = inserts.get(t.key)
@@ -465,6 +493,8 @@ async def plan_setup(desk: Desk, buses: Sequence[int | str | Target]) -> SetupPl
         need.append(t)
     # partial reuse: a dual slot one of OUR buses already sits on has its other side free
     for t in list(need):
+        if _is_stereo_strip(t.key):
+            continue  # a stereo strip cannot live on half a slot
         for info in plan.reuse.values():
             if info.fx_slot is None or info.fx_type not in dual:
                 continue
@@ -484,8 +514,22 @@ async def plan_setup(desk: Desk, buses: Sequence[int | str | Target]) -> SetupPl
         if (slot, "A") in used or (slot, "B") in used:
             continue  # inserted by some strip: not free (DESIGN §14)
         fx_type = (await fxs.get(slot)).get("type")
-        pair = need[:2]
-        del need[:2]
+        stereo_t = need[0] if _is_stereo_strip(need[0].key) else None
+        if stereo_t is not None:
+            # Main LR (a stereo strip) takes the whole slot: a stereo GEQ, one set of pars driving L and R.
+            need.remove(stereo_t)
+            st_type = str(d.geq.get("fx_types_stereo", ["GEQ"])[0])
+            load = fx_type != st_type
+            plan.allocations.append(SlotAllocation(slot, st_type if load else str(fx_type), fx_type, load,
+                                                   {"A": bus_label(stereo_t), "B": bus_label(stereo_t)}))
+            if load:
+                plan.type_loads.append({"slot": slot, "fx_type": st_type, "current_type": fx_type})
+            used[(slot, "A")] = used[(slot, "B")] = stereo_t.key
+            plan.inserts.append({"target": stereo_t.key, "bus": bus_label(stereo_t), "sel": _sel_token(slot, "A"), "on": True, "pos": _RINGOUT_INSERT_POS})
+            continue
+        pair = [t for t in need if not _is_stereo_strip(t.key)][:2]
+        for t in pair:
+            need.remove(t)
         sides: dict[str, int | str | None] = {"A": bus_label(pair[0]), "B": bus_label(pair[1]) if len(pair) > 1 else None}
         load = fx_type not in dual
         plan.allocations.append(SlotAllocation(slot, load_type if load else str(fx_type), fx_type, load, sides))
