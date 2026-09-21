@@ -85,7 +85,7 @@ from typing import Any, Callable, Sequence
 
 from .connection import ConnectionError as X32ConnectionError, ConnectionState, NotConnected
 from .desk import Desk, DeskError
-from .detector import Detection, DetectorConfig, FeedbackDetector, Notch, NotchController
+from .detector import Detection, DetectorConfig, FeedbackDetector, Notch, NotchController, NotchPlan
 from .events import Event, EventBus
 from .meters import FrameSource, LiveMeters, MeterFrame, RtaSourceError, RtaSourceResult, rta_band_hz, set_rta_source
 from .policy import FADER_FLOOR_DB, Policy, PolicyError
@@ -105,6 +105,10 @@ _RESTORE_RETRY_S = 0.5
 _RESTORE_DEADLINE_S = 10.0
 _RESTORE_READ_TIMEOUT_S = 1.0
 _STOP_WAIT_S = 30.0
+_NOTCH_INFLIGHT_WAIT_S = 3.0  # disarm lets a GEQ write already on its way finish (> connection timeout × retries)
+_INTERVENTION_DB = 0.5  # the master read back this far from where we put it = somebody else moved it
+_FRAME_STALL_S = 1.0    # no RTA frame for this long: do not raise (the detector is blind)
+_FRAME_STALL_ABORT_S = 3.0  # ... and after this long, abort and back off
 _MAX_DETECTIONS_IN_REPORT = 200
 _FADER_GRID = 1.0 / 1023  # one fader step (scales_params.md §2.3)
 _REPORT_GRID_DB = 0.05  # half the 0.1 dB grid Desk reports levels on (desk.py ``_db1``)
@@ -398,22 +402,28 @@ class _DeskGeqWriter:
     """:class:`~x32mcp.detector.GeqWriter` for one bus: ``(bus, band)`` → ``Desk.set_geq_band(slot,
     side, band, gain_db)`` after ``policy.validate_notch`` against the last gain it knows."""
 
-    def __init__(self, desk: Desk, policy: Policy, bus: int, fx_slot: int, side: str, existing: dict[int, float]) -> None:
+    def __init__(self, desk: Desk, policy: Policy, bus: int, fx_slot: int, side: str, existing: dict[int, float],
+                 fx_type: str | None = None) -> None:
         self._desk = desk
         self._policy = policy
         self.bus = bus
         self.fx_slot = fx_slot
         self.side = side
+        self.fx_type = fx_type  # validated by preflight; keeps the /fx/N type read off the detect→cut path
         self.gains: dict[int, float] = dict(existing)
         self.writes: list[tuple[int, int, float]] = []
 
     async def set_band_gain(self, bus: int, band: int, gain_db: float) -> None:
         if bus != self.bus:
             raise CfsError("BAD_ARGUMENT", f"notch for bus {bus} on a session for bus {self.bus}")
-        self._policy.validate_notch(self.gains.get(band, 0.0), gain_db)  # cuts only, ≤ notch_max_db
-        await self._desk.set_geq_band(self.fx_slot, self.side, band, gain_db)
-        self.gains[band] = float(gain_db)
+        self._policy.validate_notch(self.gains.get(band, 0.0), gain_db)  # cuts only, ≤ notch_max_db, never shallower
+        await self._desk.set_geq_band(self.fx_slot, self.side, band, gain_db, fx_type=self.fx_type)
+        self.gains[band] = float(gain_db)  # only once the datagram has left
         self.writes.append((bus, band, float(gain_db)))
+
+    def observe(self, band: int, gain_db: float) -> None:
+        """The desk pushed a new value for ``band`` (someone moved it by hand): it is the truth now."""
+        self.gains[int(band)] = float(gain_db)
 
 
 @dataclass
@@ -458,6 +468,10 @@ class _Session:
     pending: list[Detection] = field(default_factory=list)
     last_values: tuple[float, ...] | None = None
     last_ts: float | None = None
+    last_frame_mono: float | None = None  # loop time of the last consumed frame (liveness interlock)
+    last_raise_mono: float | None = None  # loop time of the last master raise
+    operator_override: bool = False       # the master was found somewhere we did not put it: hands off
+    unsub_geq: Callable[[], None] | None = None
     frames: int = 0
     ended: float | None = None
     system_id: str | None = None
@@ -519,6 +533,7 @@ class CfsManager:
         self._ids: set[str] = set()
         self._lock = asyncio.Lock()
         self._bad_frame_logged = False
+        self._notch_inflight: asyncio.Future | None = None  # set while a GEQ write is between propose and commit
         self._unsub_conn = events.subscribe(self._on_connection_event, types={"connection.state"})
 
     # -- status ------------------------------------------------------------------------------------
@@ -886,7 +901,7 @@ class CfsManager:
         existing = {i + 1: float(g) for i, g in enumerate(pf.geq.bands_db or []) if g is not None}
         bus_int = 0 if t.family == "main" else int(t.index)
         nc = NotchController(cfg, self._geq_hz, self._policy.validate_notch, budget=budget, existing=existing)
-        writer = _DeskGeqWriter(self._desk, self._policy, bus_int, ins.fx_slot, ins.side, existing)
+        writer = _DeskGeqWriter(self._desk, self._policy, bus_int, ins.fx_slot, ins.side, existing, fx_type=ins.fx_type)
         cfg = await self._calibrate_floor(cfg)
         det = FeedbackDetector(cfg, self._band_hz)
         start = float(pf.master_db)
@@ -917,6 +932,9 @@ class CfsManager:
         self._ses = ses
         self._queue = asyncio.Queue(maxsize=16)
         self._bad_frame_logged = False
+        # A GEQ band the engineer moves by hand during the session arrives as an /xremote push: adopt it,
+        # so the next proposal deepens from the desk's value and never writes a hand-made cut shallower.
+        ses.unsub_geq = self._conn.on_update(lambda address, args, _s=ses: self._on_geq_push(_s, address, args))
         self._unsub_frames = self._frames.subscribe(self._on_frame)
         self._consumer = asyncio.create_task(self._consume(ses), name=f"cfs-detector-{ses.session_id}")
         try:
@@ -932,12 +950,29 @@ class CfsManager:
         if self._unsub_frames is not None:
             self._unsub_frames()
             self._unsub_frames = None
+        ses = self._ses
+        if ses is not None and ses.unsub_geq is not None:
+            ses.unsub_geq()
+            ses.unsub_geq = None
         try:
             await self._frames.stop()
         except Exception:
             log.exception("frame source stop failed")
         task, self._consumer = self._consumer, None
         self._queue = None
+        inflight = self._notch_inflight
+        if inflight is not None and not inflight.done():
+            # A cut is between propose and commit: the ring was real, so let the write land (bounded by
+            # the connection's own timeout × retries) rather than cancel it half way. Either way the
+            # controller stays consistent, because _notch commits only after the write returned.
+            log.info("disarm: waiting for the in-flight notch write to finish")
+            try:
+                await asyncio.wait_for(asyncio.shield(inflight), timeout=_NOTCH_INFLIGHT_WAIT_S)
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                if (cur := asyncio.current_task()) is not None and cur.cancelling():
+                    raise
+            except Exception:
+                pass
         if task is not None and not task.done():
             task.cancel()
             try:
@@ -1030,6 +1065,7 @@ class CfsManager:
                 ses.frames += 1
                 ses.last_values = frame.values
                 ses.last_ts = frame.ts
+                ses.last_frame_mono = asyncio.get_running_loop().time()
                 ses.frame_event.set()
                 dets = ses.det.feed(frame.values, frame.ts)
                 self._publish_candidate(ses)
@@ -1068,22 +1104,48 @@ class CfsManager:
         return d
 
     async def _notch(self, ses: _Session, det: Detection) -> Notch | None:
-        """Plan and write the next cut for ``det``; None when nothing can be done."""
+        """Propose, WRITE, then commit the next cut for ``det``; None when nothing can be done.
+
+        Two-phase on purpose: nothing is recorded (gains, notch list, budget, report) until the datagram
+        has left. The write path can suspend — the ``/fx/N`` type lookup once the node cache expired, the
+        rate limiter, a first-write snapshot — and a stop(), a read timeout or RATE_LIMITED landing in that
+        window used to leave ``cfs_status``/the report showing a notch the GEQ never received and make the
+        next detection "deepen" a flat band straight to −6 dB. A failed or interrupted write is now simply
+        not committed; the detector re-emits the band after ``cooldown_s`` and the same first step is
+        proposed again."""
         try:
-            n = ses.nc.plan(det, ses.bus_int, ses.session_id)
+            plan = ses.nc.propose(det, ses.bus_int, ses.session_id)
         except PolicyError as e:
             log.error("notch plan refused by policy: %s", e)
             return None
-        if n is None:
+        if plan is None:
             log.info("no notch for %.0f Hz: budget spent or band at %+.0f dB", det.freq_hz, self._cfg.notch_max_db)
             return None
+        inflight = asyncio.get_running_loop().create_future()
+        self._notch_inflight = inflight
         try:
-            await ses.writer.set_band_gain(n.bus, n.band, n.depth_db)
+            await ses.writer.set_band_gain(plan.bus, plan.band, plan.new_db)
         except (DeskError, PolicyError, X32ConnectionError, CfsError) as e:
-            log.warning("notch write failed (%s): %s", ses.session_id, e)
+            self._desk.invalidate(f"/fx/{ses.fx_slot}")  # our copy of the slot is suspect; the desk's word next time
+            log.warning("notch write failed (%s): band %d %+.1f dB NOT applied and not recorded: %s",
+                        ses.session_id, plan.band, plan.new_db, e)
+            self._events.publish("cfs.notch_failed", session_id=ses.session_id, bus=ses.bus, band=plan.band,
+                                 depth_db=plan.new_db, error=str(e))
             if isinstance(e, DeskError) and e.code == "NOT_CONNECTED" or isinstance(e, NotConnected):
                 await self._lose_connection(ses, f"desk write failed: {e}")
             return None
+        except BaseException:
+            # Cancelled (stop/close/tool timeout) while the write path was suspended. Every await on that
+            # path sits before conn.set(), so the datagram did not leave: not committing is the truth.
+            log.warning("notch write interrupted (%s): band %d %+.1f dB not applied and not recorded",
+                        ses.session_id, plan.band, plan.new_db)
+            raise
+        finally:
+            if self._notch_inflight is inflight:
+                self._notch_inflight = None
+            if not inflight.done():
+                inflight.set_result(None)
+        n = ses.nc.commit(plan)
         ses.confidence[n.band] = max(ses.confidence.get(n.band, 0.0), det.confidence)
         item = self._notch_dict(ses, n)
         item.update(rta_band=det.band, rta_freq_hz=det.freq_hz, level_db=det.level_db, master_db=_db1(ses.master_db))
@@ -1171,6 +1233,10 @@ class CfsManager:
             if ses.nc.spent:
                 reason = "notch budget spent"
                 break
+            if not await self._frames_alive(ses):
+                break
+            if await self._operator_moved_master(ses):
+                break
             nxt = min(ses.master_db + ses.step_db, target)
             try:
                 after = await self._write_master(ses, nxt)
@@ -1193,6 +1259,7 @@ class CfsManager:
                 break
             ses.master_db = after
             ses.max_master_db = max(ses.max_master_db, after)
+            ses.last_raise_mono = asyncio.get_running_loop().time()
             await self._stage(ses, "RAISE")
             await self._dwell(ses, ses.dwell_ms / 1000.0)
         await self._finalize_levels(ses, reason)
@@ -1264,6 +1331,12 @@ class CfsManager:
             ses.final_stage = "ABORT"
             await self._stage(ses, "ABORT", reason=ses.abort_reason, restored=ses.restored)
             return
+        if ses.operator_override:
+            # Somebody is driving this fader by hand: do not write it again, not even to back off.
+            ses.end_master_db = ses.master_db
+            ses.final_stage = "ABORT"
+            await self._stage(ses, "ABORT", reason=ses.abort_reason, hands_off=True)
+            return
         if ses.abort_reason is None and ses.master_db <= ses.start_master_db + 1e-9:
             # the master was never raised (target already reached, zero budget): the safety margin is
             # measured from a level WE pushed up to — never cut a fader the operator set.
@@ -1292,6 +1365,102 @@ class CfsManager:
         await self._stage(ses, final_stage, reason=ses.abort_reason if final_stage == "ABORT" else reason)
 
     # -- connection loss ---------------------------------------------------------------------
+
+    def _on_geq_push(self, ses: _Session, address: str, args: Any) -> None:
+        """A pushed ``/fx/N/par/PP`` for this session's GEQ side: the engineer moved a band by hand."""
+        if self._ses is not ses or not address.startswith(f"/fx/{ses.fx_slot}/par/"):
+            return
+        try:
+            hit = self._desk.geq_par_from_push(address, args, ses.writer.fx_type)
+        except Exception:
+            log.debug("undecodable GEQ push %s %r", address, args, exc_info=True)
+            return
+        if hit is None:
+            return
+        slot, side, band, gain_db = hit
+        if side != ses.side or band > 31:
+            return
+        before = ses.writer.gains.get(band, 0.0)
+        ses.writer.observe(band, gain_db)
+        ses.nc.observe(band, gain_db)
+        if abs(gain_db - before) >= 0.25:
+            log.info("CFS² %s: GEQ band %d moved on the desk %+.1f -> %+.1f dB; adopting it", ses.session_id, band, before, gain_db)
+            self._events.publish("cfs.geq_external", session_id=ses.session_id, bus=ses.bus, band=band,
+                                 was_db=round(before, 2), now_db=round(gain_db, 2))
+
+    async def _read_master(self, ses: _Session) -> float | None:
+        """Fresh read of the bus master (dB, -inf for -oo); None when the desk does not answer."""
+        t = ses.target
+        spec = self._d.param(t.family, "mix/fader")
+        address = spec.address(t)
+        self._desk.invalidate(address)
+        try:
+            raw = await asyncio.wait_for(self._conn.get(address), timeout=_RESTORE_READ_TIMEOUT_S)
+        except Exception as e:
+            log.debug("master read-back failed: %s", e)
+            return None
+        try:
+            v = spec.to_value(raw)
+        except Exception:
+            return None
+        return NEG_INF_DB if v is None else float(v)
+
+    async def _operator_moved_master(self, ses: _Session) -> bool:
+        """True (and the session flagged hands-off) when the master reads back away from where this
+        session last put it: somebody is at the desk, and a ring-out never argues with a human. The
+        previous behaviour wrote belief + step as an absolute value, which turned an operator's
+        emergency pull-down into a jump straight back up (tens of dB in one datagram)."""
+        actual = await self._read_master(ses)
+        if actual is None:
+            return False
+        belief = ses.master_db
+        both_off = math.isinf(actual) and math.isinf(belief)
+        if both_off or (not math.isinf(actual) and not math.isinf(belief) and abs(actual - belief) <= _INTERVENTION_DB):
+            return False
+        ses.operator_override = True
+        ses.abort_reason = ses.abort_reason or (
+            f"{ses.target.label} master was moved on the desk to {format_db(actual)} dB during the run "
+            f"(the ring-out had it at {format_db(belief)} dB); stopped without touching it again")
+        ses.master_db = actual
+        log.warning("CFS² %s: %s", ses.session_id, ses.abort_reason)
+        self._events.publish("cfs.abort", session_id=ses.session_id, bus=ses.bus, reason=ses.abort_reason)
+        return True
+
+    async def _frames_alive(self, ses: _Session) -> bool:
+        """The detector only protects the room while frames arrive. Never raise again until it has seen
+        at least one fresh frame *since the previous raise* (otherwise the level already set has not
+        been observed at all); if frames have stopped (subscription lapsed, desk busy, Wi-Fi), hold, and
+        if they do not return within a few seconds, abort and back off."""
+        loop = asyncio.get_running_loop()
+
+        def seen_since_raise() -> bool:
+            lf = ses.last_frame_mono
+            if lf is None or loop.time() - lf > _FRAME_STALL_S:
+                return False
+            return ses.last_raise_mono is None or lf > ses.last_raise_mono
+
+        if seen_since_raise():
+            return True
+        now = loop.time()
+        deadline = now + _FRAME_STALL_ABORT_S
+        warned = False
+        while loop.time() < deadline and ses.abort_reason is None:
+            if not warned and (ses.last_frame_mono is None or loop.time() - ses.last_frame_mono > _FRAME_STALL_S):
+                log.warning("CFS² %s: no RTA frames for %.1f s; holding the raise", ses.session_id,
+                            loop.time() - (ses.last_frame_mono if ses.last_frame_mono is not None else now))
+                warned = True
+            ses.frame_event.clear()
+            try:
+                await asyncio.wait_for(ses.frame_event.wait(), timeout=min(0.25, max(0.0, deadline - loop.time())))
+            except asyncio.TimeoutError:
+                continue
+            if seen_since_raise():
+                return True
+        if ses.abort_reason is None:
+            ses.abort_reason = "RTA frames stopped arriving; the detector cannot see, so the master is not raised further"
+            log.warning("CFS² %s: %s", ses.session_id, ses.abort_reason)
+            self._events.publish("cfs.abort", session_id=ses.session_id, bus=ses.bus, reason=ses.abort_reason)
+        return False
 
     def _on_connection_event(self, ev: Event) -> None:
         if ev.data.get("state") != ConnectionState.DEGRADED.value:

@@ -71,6 +71,7 @@ __all__ = [
     "Candidate",
     "FeedbackDetector",
     "Notch",
+    "NotchPlan",
     "GeqWriter",
     "RecordingGeqWriter",
     "NotchController",
@@ -497,6 +498,27 @@ class RecordingGeqWriter:
         self.gains[(bus, band)] = gain_db
 
 
+@dataclass(frozen=True)
+class NotchPlan:
+    """A cut that has been decided but not yet written (:meth:`NotchController.propose`). The caller
+    writes ``new_db`` to the desk and only then calls :meth:`NotchController.commit`; a write that fails
+    or is cancelled is simply never committed, so the controller can never run ahead of the GEQ.
+    ``opens`` is True when the band is a new budget line."""
+
+    bus: int
+    band: int
+    freq_hz: float
+    current_db: float
+    new_db: float
+    session_id: str
+    ts: float
+    opens: bool
+
+    @property
+    def depth_db(self) -> float:
+        return self.new_db
+
+
 class NotchController:
     """Plans GEQ cuts for detections on one bus.
 
@@ -548,26 +570,69 @@ class NotchController:
     def _affordable(self, band: int) -> bool:
         return band in self._touched or self.budget_left > 0
 
-    def plan(self, det: Detection, bus: int, session_id: str) -> Notch | None:
-        """Decide the cut for ``det``: deepen the nearest notch within ``merge_adjacent_bands`` (exact band
-        first), else open a new notch at the detection's band. Returns the updated :class:`Notch` or None
-        when nothing can be done (budget spent, or the band is already at ``notch_max_db``)."""
+    def propose(self, det: Detection, bus: int, session_id: str) -> NotchPlan | None:
+        """Decide the cut for ``det`` **without touching any state**: deepen the nearest notch within
+        ``merge_adjacent_bands`` (exact band first), else open a new notch at the detection's band.
+        Returns the :class:`NotchPlan` to write, or None when nothing can be done (budget spent, or the
+        band is already at ``notch_max_db``). ``policy_validate`` runs here and its refusal propagates.
+
+        The live path is two-phase — propose, write, :meth:`commit` — so that a GEQ write that raises
+        (read timeout, RATE_LIMITED, NOT_A_GEQ) or is cancelled (a stop while the write is in flight)
+        leaves gains, notches and budget exactly at what the desk holds. Committing before the write
+        made the controller believe in cuts the console never received, charged the budget for them,
+        and turned the next detection's "deepen" into a 6 dB first step on the desk."""
         cfg = self.cfg
         target = self.band_for_freq(det.freq_hz)
         order = sorted(self._notches, key=lambda b: (abs(b - target), b))
-        for band in order:
-            if abs(band - target) > cfg.merge_adjacent_bands:
+        band: int | None = None
+        for b in order:
+            if abs(b - target) > cfg.merge_adjacent_bands:
                 break
-            if self._can_deepen(band) and self._affordable(band):
-                return self._apply(band, bus, session_id, det.ts)
-        if not self._can_deepen(target) or not self._affordable(target):
-            return None
-        return self._apply(target, bus, session_id, det.ts)
-
-    def _apply(self, band: int, bus: int, session_id: str, ts: float) -> Notch:
+            if self._can_deepen(b) and self._affordable(b):
+                band = b
+                break
+        if band is None:
+            if not self._can_deepen(target) or not self._affordable(target):
+                return None
+            band = target
         current = self._gains.get(band, 0.0)
-        new = max(self.cfg.notch_max_db, current + self.cfg.notch_step_db)
+        new = max(cfg.notch_max_db, current + cfg.notch_step_db)
         self._validate(current, new)  # may raise (BOOST_FORBIDDEN / NOT_ALLOWED) — state untouched
+        return NotchPlan(bus=int(bus), band=band, freq_hz=self.geq_band_hz[band - 1], current_db=current, new_db=new,
+                         session_id=str(session_id), ts=float(det.ts), opens=band not in self._touched)
+
+    def commit(self, plan: NotchPlan) -> Notch:
+        """Record a :class:`NotchPlan` whose write has reached the desk (gains, notch list, budget)."""
+        return self._apply(plan.band, plan.bus, plan.session_id, plan.ts, plan.new_db)
+
+    def plan(self, det: Detection, bus: int, session_id: str) -> Notch | None:
+        """:meth:`propose` + :meth:`commit` in one call — offline planning and tests only; anything that
+        writes to a desk must use the two-phase form."""
+        p = self.propose(det, bus, session_id)
+        return None if p is None else self.commit(p)
+
+    def observe(self, band: int, gain_db: float) -> None:
+        """The desk reports ``band`` at ``gain_db`` (a pushed change made on the console or by another
+        client). Adopt it as the truth the next proposal starts from: a band the engineer cut deeper by
+        hand must never be written back shallower, and a band they released is no longer our notch.
+        Budget accounting is untouched (what this session wrote, it wrote)."""
+        band = int(band)
+        if not 1 <= band <= len(self.geq_band_hz):
+            return
+        g = float(gain_db)
+        self._gains[band] = g
+        n = self._notches.get(band)
+        if g < 0:
+            if n is None:
+                self._notches[band] = Notch(bus=0, band=band, freq_hz=self.geq_band_hz[band - 1], depth_db=g,
+                                            session_id="", ts=0.0, detections=0)
+            else:
+                n.depth_db = g
+        elif n is not None:
+            del self._notches[band]
+
+    def _apply(self, band: int, bus: int, session_id: str, ts: float, new: float) -> Notch:
+        current = self._gains.get(band, 0.0)
         self._gains[band] = new
         self._touched.add(band)
         n = self._notches.get(band)
