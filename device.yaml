@@ -821,6 +821,53 @@ detector:
   decay_verify_s: 1.5
   decay_verify_frames: 2     # consecutive frames that must show the drop (one dip is RTA noise)
   frame_period_s: 0.05
+  # ---- sequential-evidence discriminator (detector.py rewrite, 2026-09-21). Every key below is optional: an older
+  # device.yaml loads with these defaults. The legacy keys above (persistence/growth_*/weights/confidence_threshold/
+  # override_*/min_level_db) are still parsed but no longer decide anything; min_level_db in particular is NOT applied
+  # (an absolute gate floats on /-prefs/rta/gain and a room-fitted value blinds split lines - the frequency prior and
+  # the per-line evidence replace it).
+  track_prominence_db: 6     # start tracking a line (accumulating evidence) at this prominence; EMIT still needs prominence_db
+  emit_min_level_db: -100    # absolute RTA level floor for a cut (keep very low; see above)
+  coast_frames: 3            # frames a tracked line survives without a qualifying peak (threshold flicker)
+  # Feedback window = a PRIOR, not a gate (loop brief §3.4): lines below f_low lose lf_penalty_per_third_oct nats per
+  # 1/3 octave. watch: 160 Hz (HPF'd vocal mics into tops: an SM58/Alto rig cannot ring at 40/80 Hz - M7); ring-out:
+  # 100 Hz (no programme by contract, probe available); lf_feedback_possible (kick/tom/acoustic-pickup near subs or
+  # wedges): 40 Hz, with a residual lf_strict_penalty below 100 Hz. cfs should pass mode + the LF opt-in per session.
+  f_low_watch_hz: 160
+  f_low_ringout_hz: 100
+  f_low_lf_optin_hz: 40
+  f_high_hz: 12500           # condenser headsets/lavs ring to 12 kHz; an SM58 dies above ~10 kHz
+  lf_penalty_per_third_oct: 1.2
+  lf_strict_penalty: 1.0
+  # Prior log-odds feedback:programme for a qualifying in-window line, and the EMIT / DISMISS thresholds in nats
+  # (REVIEW_BRIEF Q4). watch: a wrong -3 dB cut on programme is audible for the rest of the show and costs 1 of 6
+  # budget lines while a human on the fader catches a howl within 1-3 s -> emit at posterior odds ~20:1 (ln 20 = 3.0).
+  # ring-out: nobody is on the fader, programme is absent by contract and a wrong cut costs a report line -> ~4:1.
+  prior_llr_watch: -1.0
+  prior_llr_ringout: 0.0
+  emit_llr_watch: 3.0
+  emit_llr_ringout: 1.4
+  dismiss_llr_watch: -2.5
+  dismiss_llr_ringout: -3.5
+  # Analyser rise time tau_a = analyser_attack_k / (0.0693 f), clamped 5..600 ms (analyser brief §1; UNCERTAIN - measure
+  # with the console oscillator). Growth evidence below ~150 Hz is discounted and needs runs longer than 3 tau_a.
+  analyser_attack_k: 0.5
+  # Ring-out active probe (loop brief §1.5): cfs calls FeedbackDetector.note_gain_step(step_db, ts) at every master
+  # step; probe_settle_frames after the step the line's median over probe_window_frames is compared with its pre-step
+  # median: >= probe_over_db above the programme's own response = regenerating loop; ~1 dB per dB = spill / driven
+  # resonance / hum; 0 dB = electrical programme or a limited howl.
+  probe_settle_frames: 3
+  probe_window_frames: 8
+  probe_over_db: 2.0
+  # Per-frame growth evidence (nats) for a validated linear-in-dB rise, and isolation evidence per dB of prominence
+  # beyond 24 dB (the M7 "60 dB-prominent line" case is reached on evidence, not on a magic override).
+  ev_growth_multi: 1.2
+  ev_growth_fast: 1.1
+  ev_growth_medium: 0.8
+  ev_growth_slow: 0.35
+  iso_nats_per_db: 0.08
+  iso_nats_max: 2.4
+  harmonics_void_level_db: -16   # a line this loud that rose in >= 2 frames may carry amp/driver distortion partials
 
 ringout:
   step_db: 1.0

@@ -1,0 +1,65 @@
+{
+ "C0_silent_room": {
+  "frames": 200,
+  "mean_us": 160.3,
+  "p50_us": 160.4,
+  "p95_us": 237.2,
+  "max_us": 274.1,
+  "mean_candidates": 8.0,
+  "max_candidates": 14
+ },
+ "S1_bass_under_quiet_music": {
+  "frames": 320,
+  "mean_us": 236.0,
+  "p50_us": 238.6,
+  "p95_us": 333.0,
+  "max_us": 379.8,
+  "mean_candidates": 9.0,
+  "max_candidates": 14
+ },
+ "X7_plateaued_ring_under_music_from_t0": {
+  "frames": 240,
+  "mean_us": 532.6,
+  "p50_us": 535.0,
+  "p95_us": 720.8,
+  "max_us": 799.8,
+  "mean_candidates": 15.7,
+  "max_candidates": 21
+ },
+ "M1_loud_band_wedge_ring": {
+  "frames": 240,
+  "mean_us": 226.6,
+  "p50_us": 223.5,
+  "p95_us": 341.9,
+  "max_us": 389.8,
+  "mean_candidates": 9.4,
+  "max_candidates": 16
+ },
+ "X18_applause_crowd_30s": {
+  "frames": 600,
+  "mean_us": 197.0,
+  "p50_us": 174.7,
+  "p95_us": 370.2,
+  "max_us": 483.5,
+  "mean_candidates": 9.5,
+  "max_candidates": 24
+ },
+ "X20_mains_hum_and_hvac_whine": {
+  "frames": 240,
+  "mean_us": 269.4,
+  "p50_us": 251.8,
+  "p95_us": 413.2,
+  "max_us": 528.6,
+  "mean_candidates": 10.0,
+  "max_candidates": 18
+ },
+ "S6b_ringout_steps_latent_loop": {
+  "frames": 320,
+  "mean_us": 543.4,
+  "p50_us": 545.4,
+  "p95_us": 631.9,
+  "max_us": 674.8,
+  "mean_candidates": 12.5,
+  "max_candidates": 17
+ }
+}

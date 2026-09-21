@@ -50,7 +50,9 @@ Features (each a bounded term of ``Candidate.terms``; thresholds in :class:`Dete
               and above ``f_high`` 12.5 kHz; loop brief §3.4). A prior, not a gate.
 ``narrow``    single-line test: peak − max(level at ±2 bands) and cluster prominence (power sum of ±1 over
               the median of ±2..±4). Separates lines from humps (formants, cymbal wash, body resonance);
-              cannot separate a partial from a ring (analyser brief §3, §0.5) so it is worth little.
+              cannot separate a partial from a ring (analyser brief §3, §0.5) so it is worth little — except
+              isolation beyond anything programme produces: +``iso_nats_per_db`` per dB of cluster prominence
+              above 24 dB (capped), which is what carries the M7 "60 dB-prominent plateaued line" case.
 ``family``    harmonic family presence-as-peak at +10, +15.85, +20, +23.2 bands (±0.75, using the sub-band
               centroid) and "am I somebody's H2/H3" (a comparable peak at −10/−15.85 that owns another
               partial). ≥2 partials or being-a-harmonic ⇒ strong H_P evidence, latched once confirmed
@@ -75,13 +77,24 @@ Features (each a bounded term of ``Candidate.terms``; thresholds in :class:`Dete
               flat at a moderate level ⇒ note onset ⇒ H_P (strongly in ring-out where excess ≤ 1 dB makes
               that trajectory nearly impossible); falling ≥2 dB below its own maximum while the reference
               is flat ⇒ plucked/struck/released ⇒ H_P (a loop does not decay while intact).
-``level``     RTA clip flag (≥ −1 dBFS) or a narrow line within 10 dB of full scale ⇒ H_F (loop brief P8).
+``level``     RTA clip flag (≥ −1 dBFS) or a narrow line within 10 dB of full scale ⇒ H_F (loop brief P8),
+              discounted in a mix that runs that hot unless it is THE loudest line; being persistently the
+              loudest established line in a busy spectrum adds a little (a limited howl sits there).
 ``persist``   survival: ln 1/S(k) for programme lines that already passed the other tests (saturating), plus
               survival of programme boundaries (other lines starting/ending while this one holds ±1 dB).
 ``probe``     ring-out active probe (:meth:`FeedbackDetector.note_gain_step`): after a known +Δ master step a
               line that over-responds (Δband − Δ ≥ 2 dB, 8-frame medians) is loop-gain dependent ⇒ strong
               H_F; a line that moves ≤ +1 dB/dB is programme / hum / a driven room resonance ⇒ H_P (loop
               brief §1.5, P7); a line born inside the dwell after a step and rising ⇒ H_F.
+
+Tracking mechanics that matter physically: the cluster (±1, anchored on the previous sub-band position so an
+edge tone's pair does not flap); *intrusion* (a programme partial landing in ±1 while the peak stays on its own
+trajectory is not FM of this line); *masking* (while a broadband transient buries the line the frame is skipped,
+not scored, and the track is kept alive); *re-arm* (a ≥ 8 dB newcomer on top of a weaker line, or a line that
+decayed ≥ 12 dB and rises again, is a new event tested afresh — lineage belongs to the previous occupant);
+*synchrony* (≥ 3 lines rising together, other than after a common-mode step, is a programme event: no growth
+evidence for anyone meanwhile); *harmonic of a loud line* (a non-growing line at +10/+15.85/+20/… bands above a
+line within ~15 dB of full scale is its distortion product: cut the fundamental, not it).
 
 Graceful degradation: a feature that cannot be measured (edge bands without ±2/±4 neighbours, partial
 positions beyond band 99, fewer frames than a window needs, analyser frozen) contributes 0 — neither
@@ -442,7 +455,8 @@ class Candidate:
     frozen: bool = False                                   # display looks frozen (peak-hold): exact-zero steps dominate
     dominant_frames: int = 0                               # consecutive frames as the loudest established line by >= 2 dB
     birth_jump_db: float = 0.0
-    nf_hist: list[float] = field(default_factory=list)     # neighbourhood floor history (median of ±2..±4)
+    nf_hist: list[float] = field(default_factory=list)     # neighbourhood floor history (median of ±2..±4), every frame
+    nfs: list[float] = field(default_factory=list)         # the same, aligned with levels (observed frames only)
     masked: int = 0                                        # consecutive frames masked by a local broadband transient
     floor_bonus: float = 0.0                               # one-off: the line emerged from the floor and kept rising (loop brief P9)
     sync_frames: int = 0
@@ -450,6 +464,7 @@ class Candidate:
     sync_base_parts: tuple = (0.0, 0.0, 0.0)
     growing_now: bool = False
     rising_now: bool = False
+    lin_run: int = 0                                       # consecutive frames a linear-growth test passed (LF weight recovers with it)
     trough_db: float = 200.0                               # lowest cluster level since the line last fell >= 8 dB under its maximum
     fell: bool = False
     rearmed: int = 0
@@ -501,16 +516,6 @@ def _ls_fit(ts: Sequence[float], vs: Sequence[float]) -> tuple[float, float, flo
     slope = sum((t - tm) * (v - vm) for t, v in zip(ts, vs)) / sxx
     res = [v - (vm + slope * (t - tm)) for t, v in zip(ts, vs)]
     return slope, max(abs(r) for r in res), math.sqrt(sum(r * r for r in res) / n)
-
-
-def _sigma_iid(vs: Sequence[float]) -> float:
-    """White-noise level estimate of a series from its first differences (sd(diff)/sqrt 2): a trend or a slow wobble
-    contributes little to it, frame-to-frame measurement jitter contributes fully."""
-    if len(vs) < 4:
-        return 0.0
-    d = [vs[i + 1] - vs[i] for i in range(len(vs) - 1)]
-    m = sum(d) / len(d)
-    return math.sqrt(sum((x - m) ** 2 for x in d) / len(d)) / math.sqrt(2.0)
 
 
 def _pow(db: float) -> float:
@@ -800,7 +805,7 @@ class FeedbackDetector:
         c.trough_db = 200.0
         c.rearmed += 1
         del c.levels[:-1], c.peak_levels[:-1], c.ts_list[:-1], c.refs[:-1], c.corr[:-1], c.cents[:-1]
-        c.levels.clear(); c.peak_levels.clear(); c.ts_list.clear(); c.refs.clear(); c.corr.clear(); c.cents.clear()
+        c.levels.clear(); c.peak_levels.clear(); c.ts_list.clear(); c.refs.clear(); c.corr.clear(); c.cents.clear(); c.nfs.clear()
         c.skirts.clear()
         c.centroid = keep_pos
         c.terms = {k: 0.0 for k in _TERMS}
@@ -823,6 +828,7 @@ class FeedbackDetector:
         c.refs.append(self._ref_hist[-1] if self._ref_hist else 0.0)
         c.corr.append(cl_db - (self._ref_hist[-1] if self._ref_hist else 0.0))
         c.cents.append(obs["pos"])
+        c.nfs.append(c.nf_hist[-1] if c.nf_hist else -128.0)
         if max(c.prominence_db, c.cl_prom_db) >= self.cfg.prominence_db:
             c.est_frames = 1
 
@@ -843,7 +849,9 @@ class FeedbackDetector:
         if len(c.nf_hist) >= 4:
             base_nf = median(c.nf_hist[-8:])
             own_rise = (vals[b] - c.peak_levels[-1]) if c.peak_levels else 0.0
-            if (nf - base_nf) - max(0.0, ref - ref_prev) >= 4.0 and (nf - base_nf) >= 4.0 and own_rise < (nf - base_nf):
+            cp_now = self._cluster_prom(vals, b, cl_db)
+            buried = cp_now is None or cp_now < cfg.prominence_db + 3.0    # only while the wash actually reaches the line
+            if (nf - base_nf) - max(0.0, ref - ref_prev) >= 4.0 and (nf - base_nf) >= 4.0 and own_rise < (nf - base_nf) and buried:
                 masked = True                  # (not when the line itself out-climbs the neighbourhood: that is its own event)
         c.nf_hist.append(nf)
         if len(c.nf_hist) > 12:
@@ -897,6 +905,8 @@ class FeedbackDetector:
         # a new, much louder event landing on top of an established weaker line (a loop taking off in a band that held a
         # programme partial; a note struck where a tail was): >= 8 dB up within <= 2 frames while the old occupant was not
         # itself rising. What was measured so far describes the old occupant — test the newcomer afresh.
+        # (vibrato cannot fake this: FM moves energy between the pair of bands but the ±1 power sum varies <= 0.3 dB,
+        # analyser brief §4.4)
         if c.seen >= 4 and c.grow_run <= 1 and c.fast_rise <= 1 and c.grow_acc <= 0.0 and len(c.levels) >= 2 and not c.fell:
             l1, l2 = c.levels[-1], c.levels[-2]
             if cl_db >= min(l1, l2) + 8.0:
@@ -905,11 +915,11 @@ class FeedbackDetector:
                 if prior_rise and (cl_db - l1) >= 2.5:
                     c.fast_rise = c.fast_peak = 1              # that first climbing frame counts toward the multi-frame fast rise
         # renewed onset at the same frequency: the previous event decayed >= 8 dB and the line is climbing again
-        if c.run_max_db > -199.0 and cl_db <= c.run_max_db - 8.0:
+        if c.run_max_db > -199.0 and cl_db <= c.run_max_db - 12.0:
             c.fell = True
         if c.fell:
             c.trough_db = min(c.trough_db, cl_db)
-            if cl_db >= c.trough_db + 4.0 and len(c.levels) >= 2 and c.levels[-1] > c.levels[-2] and cl_db > c.levels[-1]:
+            if cl_db >= c.trough_db + 6.0 and len(c.levels) >= 2 and c.levels[-1] > c.levels[-2] and cl_db > c.levels[-1]:
                 self._rearm(c, ts, c.trough_db)
         if c.first_level_db <= -199.0:
             c.first_level_db = cl_db
@@ -921,7 +931,8 @@ class FeedbackDetector:
         c.refs.append(ref)
         c.corr.append(cl_db - ref)
         c.cents.append(pos)
-        for lst in (c.levels, c.peak_levels, c.ts_list, c.refs, c.corr, c.cents):
+        c.nfs.append(nf)
+        for lst in (c.levels, c.peak_levels, c.ts_list, c.refs, c.corr, c.cents, c.nfs):
             if len(lst) > _HIST:
                 del lst[0]
         fam_n, fam_avail, sub, flags = self._family(vals, prom, pos, vals[b])
@@ -1030,11 +1041,14 @@ class FeedbackDetector:
         if clip or distortion:
             t["family"] = 0.0                  # a clipping / limiting howl carries harmonics: the test is void there (loop brief §2.2)
         elif c.family_latched:
-            t["family"] = -3.0
+            t["family"] = -1.5 if (cfg.lf_feedback_possible and self.band_hz[b] < 160.0) else -3.0
         elif c.fam_obs == 0:
             t["family"] = 0.0                  # partial positions off the analyser: unavailable
         else:
             neg = -3.0 * fam_frac - 2.0 * _clamp((sub_frac - 0.3) / 0.7, 0.0, 1.0) - 0.6 * fam1_frac
+            if cfg.lf_feedback_possible and self.band_hz[b] < 160.0:
+                neg *= 0.5                     # under a rhythm section every LF line coincides with SOME bass/kick partial grid:
+                                               # presence is far less specific there (the operator has declared an LF-capable loop)
             informative = _clamp((c.prominence_db - 14.0) / 10.0, 0.0, 1.0)
             clean = max(0.0, 1.0 - 2.5 * fam_frac - 1.5 * sub_frac - 1.0 * fam1_frac)
             settle = _clamp(c.fam_obs / 4.0, 0.25, 1.0)
@@ -1133,12 +1147,17 @@ class FeedbackDetector:
 
         # ---- shape: growth (fast / medium / slow), onset step, decay — all against the spectrum reference ----
         corr = c.corr
-        gw = self._grow_weight[b]
         minrun = self._grow_min_run[b]
+        # LF analyser smear: a step input produces at most ~3·τ_a of concave rise (analyser brief §1), so growth evidence is
+        # discounted there — but a rise that has stayed linear for much longer than that is real, and the weight recovers
+        gw0 = self._grow_weight[b]
+        gw = gw0 + (1.0 - gw0) * _clamp((c.lin_run - minrun) / max(1.0, 2.0 * minrun), 0.0, 1.0)
         n_h = len(corr)
+        nfs = c.nfs
         credit = 0.0                           # this frame's growth evidence: the strongest of the paths, not their sum
         # fast path: consecutive per-frame increments >= 1.2 dB of similar size (>= 24 dB/s; loop brief §1.3)
-        if n_h >= 2:
+        hopped = len(c.cents) >= 2 and abs(c.cents[-1] - c.cents[-2]) >= 0.45   # energy moving between bands is not growth
+        if n_h >= 2 and not hopped:
             gap = max(1.0, round((tsl[-1] - tsl[-2]) / T))
             g = (corr[-1] - corr[-2]) / gap
             graw = (lv[-1] - lv[-2]) / gap
@@ -1187,7 +1206,7 @@ class FeedbackDetector:
             k0 = max(0, n_h - 8)
             raw_s, res_max, res_sd = _ls_fit(tsl[k0:], lv[k0:])
             ref_s = _ls_slope(tsl[k0:], refs[k0:])
-            s = raw_s - max(0.0, ref_s)
+            s = raw_s - max(0.0, ref_s)        # a common-mode rise cancels; a falling reference never manufactures growth
             slope8 = s
             span = tsl[-1] - tsl[k0]
             rise = s * span
@@ -1236,8 +1255,11 @@ class FeedbackDetector:
                 c.decay_acc = max(0.0, c.decay_acc - 0.1)      # recovered (a stalled loop regrew)
         c.slope_db_per_s = slope8 if n_h < 8 else slope12
         c.growing_now = credit > 0.0               # passed a growth test this frame (used for synchrony)
+        c.lin_run = c.lin_run + 1 if credit > 0.0 else 0
         c.rising_now = n_h >= 4 and c.seen >= 4 and (corr[-1] - corr[-2]) >= 0.5 and (corr[-1] - corr[-4]) >= 2.0 \
             and (lv[-1] - lv[-4]) >= 2.0
+        if credit > 0.0 and c.modulated_latched:
+            credit *= 0.3                      # a frequency-modulated line that also swells is a performer, not a loop
         if credit > 0.0:
             if (n_growing_other >= 2 and (ts - self._ref_jump_ts) > 0.5) or (ts - self._sync_ts) <= 0.6:
                 # three or more lines rising together (now or within the last 0.6 s) is a programme event — pad swell, song
@@ -1282,12 +1304,13 @@ class FeedbackDetector:
             t["level"] = 0.0
         if lvl < cfg.clip_level_db and n_other >= 1 and cl_db < loudest_other + 3.0:
             t["level"] *= 0.25                 # in a mix running this hot, "near full scale" says little unless it is THE loudest line
-        if n_other >= 2 and cl_db >= loudest_other + 2.0:
-            c.dominant_frames += 1
-        else:
-            c.dominant_frames = 0
+        if n_other >= 1 and cl_db >= loudest_other + 2.0:
+            c.dominant_frames = min(c.dominant_frames + 1, 24)
+        elif n_other >= 1:
+            c.dominant_frames = max(c.dominant_frames - 2, 0)
+        # (with nothing else established the count holds: a lone line is neither dominant nor dominated)
         if c.dominant_frames >= 8:
-            t["level"] += 0.9                  # the loudest line in a busy spectrum, family-less or not, is where a limited howl sits (loop brief §1.4, §2.2)
+            t["level"] += 0.9                  # persistently the loudest line in a busy spectrum is where a limited howl sits (loop brief §1.4, §2.2)
 
         # ---- persist: survival (saturating) + programme-boundary survival --------------------------------------
         dur = 0.0 if c.frozen else 0.5 * math.log1p(c.frames / 10.0)
@@ -1455,10 +1478,16 @@ class FeedbackDetector:
                         continue      # a much louder line a band away is a NEW line, not a hop of this one (a hop keeps its level)
                 best, bestd = p, d
             if best is None:
-                c.coast += 1
                 c.frames += 1
+                bb = min(n - 1, max(0, int(round(c.centroid))))
+                far = [vals[j] for d in (2, 3, 4) for j in (bb - d, bb + d) if 0 <= j < n]
+                nf_now = median(far) if far else -128.0
+                if c.nf_hist and nf_now - median(c.nf_hist[-8:]) >= 4.0 and c.masked < 12:
+                    c.masked += 1                         # buried under a broadband transient (cymbal, chord onset): not gone
+                    survivors.append(c)
+                    continue
+                c.coast += 1
                 if c.coast > cfg.coast_frames:
-                    bb = min(n - 1, max(0, int(round(c.centroid))))
                     now, _ = self._cluster(vals, bb)
                     if c.est_frames >= 8 and now <= c.run_max_db - 6.0:
                         deaths += 1                       # an established line really went away (not a threshold flicker)
