@@ -42,7 +42,7 @@ from __future__ import annotations
 import logging
 import math
 from dataclasses import dataclass, field
-from typing import Any, Sequence
+from typing import Any, Mapping, Sequence
 
 from .desk import Desk, DeskError
 from .scales import format_db
@@ -237,14 +237,20 @@ class MicCandidate:
     owner: str | None
     include: bool
     notes: list[str] = field(default_factory=list)
+    input_db: float | None = None      # live input meter (dBFS) when it was sampled; None = not sampled
+    signal: bool | None = None         # input_db above mics.signal_floor_db; None = unknown
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        d = {
             "ch": self.ch, "target": f"ch.{self.ch}", "name": self.name, "muted": self.muted,
             "send_db": self.send_db, "send": "-oo" if self.send_db is None else format_db(self.send_db),
             "source": self.source, "physical_input": self.physical_input, "in_mute_group": self.in_mute_group,
             "patch_mic": self.patch_mic, "owner": self.owner, "include": self.include, "notes": list(self.notes),
         }
+        if self.input_db is not None:
+            d["input_db"] = round(self.input_db, 1)
+            d["signal"] = self.signal
+        return d
 
 
 @dataclass
@@ -548,11 +554,20 @@ def _patch_rows(patch: Any) -> dict[int, Any]:
     return rows
 
 
-async def discover_mics(desk: Desk, bus: int | str | Target, *, patch: Any = None, floor_db: float | None = None) -> list[MicCandidate]:
+async def discover_mics(
+    desk: Desk, bus: int | str | Target, *, patch: Any = None, floor_db: float | None = None,
+    input_levels: Mapping[int, float] | None = None,
+) -> list[MicCandidate]:
     """Which channels look like stage mics feeding ``bus`` (rules in the module doc). ``patch``
     is duck-typed: anything with ``rows`` whose items have ``channel``/``mic``/``owner``/
-    ``monitor_bus``. ``floor_db`` overrides ``mics.send_floor_db`` (−40 dB)."""
+    ``monitor_bus``. ``floor_db`` overrides ``mics.send_floor_db`` (−40 dB). ``input_levels``
+    ({channel: dBFS}, e.g. an average of ``/meters/1``) lets discovery say what routing cannot: an
+    unmuted, routed channel with a physical preamp looks the same whether or not anything is plugged
+    into it (HANDOVER §4b: seven "candidates", one microphone). A candidate whose input reads below
+    ``mics.signal_floor_db`` gets a note and ``signal=False``; it is *not* excluded — a mic in a dead
+    quiet room at low gain can read that low too — but the operator is told."""
     d = _descriptor(desk)
+    sig_floor = float(d.mics.get("signal_floor_db", -80.0))
     t = bus_target(bus)
     key = bus_label(t)
     floor = float(d.mics.get("send_floor_db", -40.0)) if floor_db is None else float(floor_db)
@@ -610,9 +625,16 @@ async def discover_mics(desk: Desk, bus: int | str | Target, *, patch: Any = Non
             notes.append("routed and unmuted, but the patch says it is not a mic")
         if include and row is not None and patch_bus is not None and patch_bus != key:
             notes.append(f"patch assigns it to bus {patch_bus}, not {t.label}")
+        input_db: float | None = None
+        signal: bool | None = None
+        if input_levels is not None and n in input_levels:
+            input_db = float(input_levels[n])
+            signal = input_db >= sig_floor
+            if include and not signal:
+                notes.append(f"no input signal ({format_db(input_db)} dBFS): nothing plugged in, a closed gate, or a dead-quiet source")
         out.append(MicCandidate(ch=n, name=str(strip.get("name") or ""), muted=muted, send_db=_db_out(send_db), source=source,
                                 physical_input=physical, in_mute_group=in_group, patch_mic=patch_mic, owner=owner,
-                                include=include, notes=notes))
+                                include=include, notes=notes, input_db=input_db, signal=signal))
     if any_in_group:  # the group convention is in use: an included mic outside it is worth a note
         for m in out:
             if m.include and m.in_mute_group is False:
@@ -624,9 +646,10 @@ async def discover_mics(desk: Desk, bus: int | str | Target, *, patch: Any = Non
 # -- preflight ------------------------------------------------------------------------------------
 
 
-async def preflight(desk: Desk, bus: int | str | Target, *, patch: Any = None, reports: Any = None) -> Preflight:
+async def preflight(desk: Desk, bus: int | str | Target, *, patch: Any = None, reports: Any = None,
+                    input_levels: Mapping[int, float] | None = None) -> Preflight:
     """Step zero of ``feedback_watch``/``ring_out``: GEQ validation, mic discovery and the bus
-    master, folded into blockers/warnings (module doc)."""
+    master, folded into blockers/warnings (module doc). ``input_levels`` as for :func:`discover_mics`."""
     d = _descriptor(desk)
     t = bus_target(bus)
     key = bus_label(t)
@@ -635,7 +658,7 @@ async def preflight(desk: Desk, bus: int | str | Target, *, patch: Any = None, r
     master = float("-inf") if fader is None else float(fader)
     muted = bool(strip.get("muted"))
     geq = (await validate_ringout_eqs(desk, [t], reports))[key]
-    mics = await discover_mics(desk, t, patch=patch)
+    mics = await discover_mics(desk, t, patch=patch, input_levels=input_levels)
     blockers: list[str] = []
     warnings: list[str] = []
     if not geq.ok:
@@ -650,6 +673,12 @@ async def preflight(desk: Desk, bus: int | str | Target, *, patch: Any = None, r
     warn_db = float(d.ringout.get("start_warn_db", -10.0))
     if not math.isinf(master) and master > warn_db:
         warnings.append(f"{t.label} master starts at {format_db(master)} dB, above the {warn_db:g} dB warning level")
+    silent = [m for m in included if m.signal is False]
+    if included and silent and len(silent) == len(included):
+        warnings.append(f"none of the {len(included)} open mic(s) shows any input signal — is anything plugged in? "
+                        "A ring-out with no live microphone measures nothing")
+    elif silent:
+        warnings.append(f"{len(silent)} of {len(included)} open mic(s) show no input signal (ch " + ", ".join(str(m.ch) for m in silent) + ")")
     for m in mics:
         for note in m.notes:
             warnings.append(f"ch.{m.ch} '{m.name}': {note}")

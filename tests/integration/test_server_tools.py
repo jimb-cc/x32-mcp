@@ -876,3 +876,26 @@ async def test_show_mode_off_disconnect_and_retarget_are_confirmed(app, fakedesk
     assert "other console" in pend["action_summary"] and app.conn.connected
     same = await srv.connect(fakedesk.host, fakedesk.port)  # same desk again: free
     assert same["ok"]
+
+async def test_discover_mics_flags_open_channels_with_no_input_signal(app, fakedesk):
+    """HANDOVER §4b: discover_mics reported 7 candidates with one microphone plugged in — an unmuted,
+    routed channel with a preamp looks identical either way. The input meters do not."""
+    for ch in (1, 2):
+        fset(app, fakedesk, f"/ch/{ch:02d}/mix/01/level", -20.0)
+    fset(app, fakedesk, "/bus/01/mix/fader", -20.0)
+    fakedesk.unplugged.add(2)  # channel 2: routed, unmuted, physical preamp — and nothing in the XLR
+    res = await srv.discover_mics(1)
+    assert res["ok"] and res["included"] == [1, 2] and res["silent"] == [2] and res["input_levels_sampled"] is True
+    by_ch = {m["ch"]: m for m in res["mics"]}
+    assert by_ch[1]["signal"] is True and by_ch[1]["input_db"] > -80
+    assert by_ch[2]["signal"] is False and any("no input signal" in n for n in by_ch[2]["notes"])
+    assert "NO INPUT SIGNAL" in res["summary"] and "probably nothing plugged in" in res["summary"]
+    # the ring_out confirmation the user reads carries the same warning
+    token = assert_pending(await srv.setup_ringout_eqs([1]))
+    assert (await srv.setup_ringout_eqs([1], confirm_token=token))["ok"]
+    pend = await srv.ring_out(1, target_gain_db=-19.0, dwell_ms=10)
+    assert_pending(pend)
+    assert "no input signal (ch 2)" in pend["action_summary"]
+    fakedesk.unplugged.update({1})
+    pend = await srv.ring_out(1, target_gain_db=-19.0, dwell_ms=10)
+    assert "is anything plugged in?" in pend["action_summary"]

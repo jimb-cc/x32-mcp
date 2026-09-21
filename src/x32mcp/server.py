@@ -1731,15 +1731,48 @@ async def discover_mics(bus: int | str, patch_file: str | None = None) -> dict[s
     desk = _desk()
     t = _bus_target(bus)
     patch = _load_patch(patch_file)
-    mics = await _prov.discover_mics(desk, t, patch=patch)
+    levels = await _input_levels(a)
+    mics = await _prov.discover_mics(desk, t, patch=patch, input_levels=levels)
     inc = [m for m in mics if m.include]
     exc = [m for m in mics if not m.include]
     summary = f"{t.label}: {len(mics)} candidate(s), {len(inc)} included: " + ", ".join(
-        f"Ch {m.ch} '{m.name}'" + (f" ({m.owner})" if m.owner else "") + f" {_db_from_float(m.send_db)}" for m in inc
+        f"Ch {m.ch} '{m.name}'" + (f" ({m.owner})" if m.owner else "") + f" {_db_from_float(m.send_db)}"
+        + (" [NO INPUT SIGNAL]" if m.signal is False else "") for m in inc
     )
     if exc:
         summary += "; excluded: " + ", ".join(f"Ch {m.ch} '{m.name}' ({'; '.join(m.notes) or 'no indicator'})" for m in exc)
-    return _ok(summary, bus=_prov.bus_label(t), target=t.key, patch_file=patch_file, mics=[m.to_dict() for m in mics], included=[m.ch for m in inc])
+    silent = [m.ch for m in inc if m.signal is False]
+    if silent:
+        summary += (f". Ch {', '.join(map(str, silent))} {'is' if len(silent) == 1 else 'are'} routed and unmuted but the input meter shows nothing"
+                    " — probably nothing plugged in; ask the user")
+    if levels is None:
+        summary += ". (Input meters could not be sampled.)"
+    return _ok(summary, bus=_prov.bus_label(t), target=t.key, patch_file=patch_file, mics=[m.to_dict() for m in mics], included=[m.ch for m in inc],
+               silent=silent, input_levels_sampled=levels is not None)
+
+
+async def _input_levels(a: "App", duration_ms: int = 400) -> dict[int, float] | None:
+    """Average input-channel meters (``/meters/1`` words 0..31, dBFS) over ``duration_ms``; None when the
+    desk sends no frames in time. Advisory only: it tells an open channel with a microphone on it from one
+    with nothing plugged in, which routing alone cannot."""
+    mtype, first, count = METER_GROUPS["channels"]
+    n = max(1, round(duration_ms / (FRAME_PERIOD_S * 1000)))
+    src = LiveMeters(a.conn, mtype)
+    try:
+        await src.start()
+        frame = await average_frames(src, n, timeout_s=duration_ms / 1000.0 + 1.5)
+    except Exception as e:
+        log.info("input meters not sampled: %s", e)
+        return None
+    finally:
+        try:
+            await src.stop()
+        except Exception:
+            pass
+    if frame is None:
+        return None
+    dbs = frame.db()[first:first + count]
+    return {i + 1: float(v) for i, v in enumerate(dbs)}
 
 
 def _watch_summary(res: dict[str, Any], verb: str) -> str:
@@ -1861,7 +1894,8 @@ async def ring_out(
     dwell = _int_arg(dwell_ms, "dwell_ms", 0, 60_000)
     budget = _int_arg(notch_budget, "notch_budget", 1, 12)
     patch = _load_patch(patch_file)
-    pf = await asyncio.wait_for(_prov.preflight(desk, t, patch=patch, reports=a.reports), timeout=PREFLIGHT_TIMEOUT_S)
+    levels = await _input_levels(a) if confirm_token in (None, "") else None  # only the call the user sees pays the 400 ms
+    pf = await asyncio.wait_for(_prov.preflight(desk, t, patch=patch, reports=a.reports, input_levels=levels), timeout=PREFLIGHT_TIMEOUT_S)
     if not pf.ok:
         raise CfsError("PREFLIGHT_FAILED", f"cannot ring out {t.label}: " + "; ".join(pf.blockers), preflight=pf.to_dict())
     ceiling = min(a.policy.level_ceiling_db(t), float(a.descriptor.ringout.get("master_ceiling_db", 0.0)))

@@ -560,6 +560,9 @@ def test_policy_detector_ringout_mics_values(dev):
     assert dev["ringout"] == {"step_db": 1.0, "dwell_ms": 1500, "max_step_db": 3.0, "min_dwell_ms": 250, "safety_margin_db": 3, "abort_backoff_db": 6, "master_ceiling_db": 0, "start_warn_db": -10}
     assert dev["mics"] == {"send_floor_db": -40, "mute_group_convention": 6}
 
+    assert dev["ringout"] == {"step_db": 1.0, "dwell_ms": 1500, "safety_margin_db": 3, "abort_backoff_db": 6, "master_ceiling_db": 0, "start_warn_db": -10}
+    assert dev["mics"] == {"send_floor_db": -40, "signal_floor_db": -80, "mute_group_convention": 6}
+
 
 def test_guarded_globs(dev):
     for g in ["/main/st/mix/*", "/main/m/mix/*", "/headamp/*/phantom", "/config/routing/*", "/config/mute/*", "/*/insert/*",
