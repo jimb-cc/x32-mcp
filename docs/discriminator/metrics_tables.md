@@ -1,6 +1,6 @@
 # disc-sequential-evidence — corpus metrics
 
-generated 2026-09-21 13:52:49; seeds [1, 2, 3]; config from device.yaml + defaults (emit 3.0/1.4 nats watch/ring-out, dismiss -2.5/-3.5, window 160.0/100.0/40.0–12500.0 Hz, track ≥6.0 dB, emit ≥12.0 dB, min_level -45.0)
+generated 2026-09-21 13:59:42; seeds [1, 2, 3]; config from device.yaml + defaults (emit 3.0/1.4 nats watch/ring-out, dismiss -2.5/-3.5, window 160.0/100.0/40.0–12500.0 Hz, track ≥6.0 dB, emit ≥12.0 dB, min_level -45.0)
 
 ### scenario's own mode (watch / ring-out as cfs would arm it; probe + note_cut in ring-out), open loop
 
@@ -67,7 +67,7 @@ generated 2026-09-21 13:52:49; seeds [1, 2, 3]; config from device.yaml + defaul
 | X21_reverberant_area_mic_slow_ring | 3 | 2 | 1 | 0 | 0 | 0 | 0 | 11 | 0 | 298/398/498 | 600 |  | FAIL 2/3 |
 | X22_kick_mic_sub_ring_65Hz | 3 | 3 | 0 | 0 | 0 | 0 | 0 | 18 | 0 | 998/1148/1149 | 1000 |  | FAIL 1/3 |
 | X23_ringout_quiet_room_two_modes | 6 | 6 | 0 | 0 | 4 | 0 | 0 | 32 | 0 | -1298/-401/150 | 300 |  | PASS 3/3 |
-| **61 scenarios, 48 pass** | 117 | 116 | 1 | 0 | 6 | 8 | 0 | 617 | | -1298/148/6452 | | | wall 33.6 s |
+| **61 scenarios, 48 pass** | 117 | 116 | 1 | 0 | 6 | 8 | 0 | 617 | | -1298/148/6452 | | | wall 33.5 s |
 
 ### scenario's own mode (watch / ring-out as cfs would arm it; probe + note_cut in ring-out), CLOSED loop (NotchController −3 dB steps, 1-frame actuation)
 
@@ -105,7 +105,7 @@ generated 2026-09-21 13:52:49; seeds [1, 2, 3]; config from device.yaml + defaul
 | X21_reverberant_area_mic_slow_ring | 3 | 2 | 1 | 0 | 0 | 0 | 0 | 0 | 2 | 298/398/498 | 600 |  | FAIL 2/3 |
 | X22_kick_mic_sub_ring_65Hz | 3 | 3 | 0 | 0 | 0 | 0 | 0 | 0 | 3 | 998/1148/1149 | 1000 |  | FAIL 1/3 |
 | X23_ringout_quiet_room_two_modes | 6 | 6 | 0 | 0 | 3 | 0 | 0 | 0 | 9 | -1/75/102 | 300 |  | PASS 3/3 |
-| **32 scenarios, 18 pass** | 116 | 115 | 1 | 0 | 4 | 0 | 0 | 3 | | -2/103/6452 | | | wall 21.3 s |
+| **32 scenarios, 18 pass** | 116 | 115 | 1 | 0 | 4 | 0 | 0 | 3 | | -2/103/6452 | | | wall 21.4 s |
 
 <details><summary>cuts per run</summary>
 
@@ -273,7 +273,7 @@ generated 2026-09-21 13:52:49; seeds [1, 2, 3]; config from device.yaml + defaul
 | X21_reverberant_area_mic_slow_ring | 3 | 2 | 1 | 0 | 0 | 0 | 0 | 11 | 0 | 298/398/498 | 600 |  | FAIL 2/3 |
 | X22_kick_mic_sub_ring_65Hz | 3 | 3 | 0 | 0 | 0 | 0 | 0 | 18 | 0 | 998/1148/1149 | 1000 |  | FAIL 1/3 |
 | X23_ringout_quiet_room_two_modes | 6 | 6 | 0 | 0 | 0 | 0 | 0 | 32 | 0 | 150/248/350 | 300 |  | FAIL 1/3 |
-| **61 scenarios, 47 pass** | 117 | 116 | 1 | 0 | 1 | 8 | 0 | 616 | | -2/150/6452 | | | wall 12.9 s |
+| **61 scenarios, 47 pass** | 117 | 116 | 1 | 0 | 1 | 8 | 0 | 616 | | -2/150/6452 | | | wall 12.7 s |
 
 ### EVERY scenario forced to watch mode (no probe), CLOSED loop (NotchController −3 dB steps, 1-frame actuation)
 
@@ -311,7 +311,7 @@ generated 2026-09-21 13:52:49; seeds [1, 2, 3]; config from device.yaml + defaul
 | X21_reverberant_area_mic_slow_ring | 3 | 2 | 1 | 0 | 0 | 0 | 0 | 0 | 2 | 298/398/498 | 600 |  | FAIL 2/3 |
 | X22_kick_mic_sub_ring_65Hz | 3 | 3 | 0 | 0 | 0 | 0 | 0 | 0 | 3 | 998/1148/1149 | 1000 |  | FAIL 1/3 |
 | X23_ringout_quiet_room_two_modes | 9 | 9 | 0 | 0 | 0 | 0 | 0 | 0 | 9 | 148/203/350 | 300 |  | FAIL 1/3 |
-| **32 scenarios, 17 pass** | 119 | 118 | 1 | 0 | 1 | 0 | 0 | 3 | | -2/150/6452 | | | wall 21.7 s |
+| **32 scenarios, 17 pass** | 119 | 118 | 1 | 0 | 1 | 0 | 0 | 3 | | -2/150/6452 | | | wall 21.1 s |
 
 <details><summary>cuts per run</summary>
 
@@ -479,7 +479,7 @@ generated 2026-09-21 13:52:49; seeds [1, 2, 3]; config from device.yaml + defaul
 | X21_reverberant_area_mic_slow_ring | 3 | 3 | 0 | 0 | 0 | 0 | 0 | 27 | 0 | 298/452/501 | 600 |  | PASS 3/3 |
 | X22_kick_mic_sub_ring_65Hz | 3 | 3 | 0 | 0 | 0 | 0 | 0 | 18 | 0 | 801/901/901 | 1000 |  | PASS 3/3 |
 | X23_ringout_quiet_room_two_modes | 6 | 6 | 0 | 0 | 4 | 0 | 0 | 32 | 0 | -1298/-401/150 | 300 |  | PASS 3/3 |
-| **61 scenarios, 38 pass** | 117 | 117 | 0 | 119 | 10 | 18 | 3 | 680 | | -1298/52/1748 | | | wall 13.1 s |
+| **61 scenarios, 38 pass** | 117 | 117 | 0 | 119 | 10 | 18 | 3 | 680 | | -1298/52/1748 | | | wall 12.9 s |
 
 ### EVERY scenario forced to ring-out mode (probe where the scene has server steps), CLOSED loop (NotchController −3 dB steps, 1-frame actuation)
 
@@ -517,7 +517,7 @@ generated 2026-09-21 13:52:49; seeds [1, 2, 3]; config from device.yaml + defaul
 | X21_reverberant_area_mic_slow_ring | 3 | 3 | 0 | 1 | 0 | 0 | 0 | 0 | 4 | 298/452/501 | 600 | 400 | FAIL 2/3 |
 | X22_kick_mic_sub_ring_65Hz | 3 | 3 | 0 | 1 | 0 | 0 | 0 | 0 | 4 | 801/901/901 | 1000 | 125 | FAIL 2/3 |
 | X23_ringout_quiet_room_two_modes | 6 | 6 | 0 | 0 | 3 | 0 | 0 | 0 | 9 | -1/75/102 | 300 |  | PASS 3/3 |
-| **32 scenarios, 22 pass** | 116 | 116 | 0 | 11 | 8 | 2 | 3 | 6 | | -2/51/1748 | | | wall 21.8 s |
+| **32 scenarios, 22 pass** | 116 | 116 | 0 | 11 | 8 | 2 | 3 | 6 | | -2/51/1748 | | | wall 21.5 s |
 
 <details><summary>cuts per run</summary>
 
