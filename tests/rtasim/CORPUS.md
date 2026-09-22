@@ -47,7 +47,9 @@ in [t_onset, t_end+1 s]; latency = ts − t_prom, may be slightly negative when 
 band with an emerging ring), DUP, EARLY (same loop ringing sub-threshold before onset; satisfies the event if ≤ 2 s early),
 TAIL (after the episode: stale display), HARM (±1 band of a harmonic of a howl that is producing harmonics — desk clip or
 acoustic clip), FP (everything else; reported with the 1/3-oct GEQ band it would have cut). A run passes iff FP = 0, miss = 0 and
-every latency ≤ the scenario budget. Closed loop: each detection → `x32mcp.detector.NotchController.plan` (device.yaml: −3 dB
+every latency ≤ the scenario budget — and, in closed loop, no ring **survived**: still regenerating (e_eff > 0) at the last
+frame although the detector saw it or a cut landed within one GEQ band of it (`RunResult.survived`, table column `surv`;
+misses are not survivors, open loop has none). Closed loop: each detection → `x32mcp.detector.NotchController.plan` (device.yaml: −3 dB
 steps to −9, budget 6) → RBJ bell (Q 3) written into the live renderer **one frame later** (OSC write lands during the next
 frame); programme, beds and the ring's excess all see the PRE-insert cut.
 
@@ -110,7 +112,7 @@ Things that made the detector's life unrealistically **easy** (E) or **hard**/ha
 
 ---
 
-## 3. Scenario table (61 scenarios; ground truth from the rendered trace, seeds 1–3; "0 ev" = nothing may be detected)
+## 3. Scenario table (67 scenarios; ground truth from the rendered trace, seeds 1–3; "0 ev" = nothing may be detected)
 
 Columns: name | dur s | content | ground truth (on = t_onset, vis = t_prom range over seeds, pk = peak prominence) | budget ms |
 physical predicates stressed (P-numbers = loop brief §5: P1 no family, P2 not itself a harmonic, P3 stationarity, P4 vibrato,
@@ -189,6 +191,17 @@ LF growth [A §0.1]).
 Ground truth for all seeds: `reports/corpus-critic/ground_truth_all_seeds.json`.
 
 ---
+
+**K — kill check (closed loop: the ring must be DEAD by the end; every ring above has e ≤ 2 dB and dies to one −3):**
+
+| scenario | s | content | ground truth | bud | stresses |
+|---|---|---|---|---|---|
+| K1_limiter_held_howl_e4_2k5 | 14 | 2.5 kHz on GEQ 22, e 4, τ 40 ms → 100 dB/s to limiter −13; vocal + band | on 3.0; −3 → tap −16 flat (e_eff +1); needs −6 | 300 | P13 (drop ≈ bell ≠ programme), deepening |
+| K2_limiter_held_howl_e7_1k25 | 14 | 1.25 kHz on GEQ 19, e 7, τ 70 ms → limiter −10 | on 3.0; −3/−6 both leave it flat; needs −9 | 300 | P13, full-depth deepening |
+| K3_established_limiter_plateau_e5_5k | 14 | S2a datum with e 5: 5 kHz on GEQ 25 at −8 from frame 0, quiet music | from t=0; −3 → −11 flat; needs −6 | 300 | P13 on an at-arm line, AT-ARM re-emission |
+| K4_compressor_plateau_e6p5_quiet_2k5 | 14 | 2.5 kHz, e 6.5, τ 60 ms → compressor plateau −22 (~30 dB prominent), quiet music | on 3.0; needs −9; never loud/clipped | 300 | P13 below the loud lane, P8 |
+| K5_channel_shove_into_limiter_e5p5_2k5 | 14 | loop at −0.5 dB; +6 dB channel/DCA shove at t=3 moves programme, loop and plateau (M7) | on 3.0; 0 FP on the step; needs −6 | 300 | P7 common mode, P13 |
+| K6_limiter_held_howl_e3p5_midpoint_1k8 | 14 | 1789 Hz = GEQ 1.6 k/2 k midpoint, e 3.5, limiter −12 | on 3.0; one slider −3 gives ~−2.2 → survives; −6 or both neighbours −3 kills | 300 | interpolated f / flanking pair under survival pressure |
 
 ## 4. Simulator parameters, defaults, citations (`tests/rtasim/physics.py`, `analyser.py`, `sources.py`, `render.py`)
 
@@ -347,7 +360,8 @@ alternation on split lines (S10, X9, X23).
    and re-run with `EARLY_CREDIT_S = 0` before claiming watch-mode latencies. HARM/TAIL/DUP cuts cost nothing but budget.
 8. **Closed loop is idealised**: RBJ bells of guessed Q on a PRE insert, one-frame actuation, no bus dynamics, VERIFY/deepen/release
    logic of cfs.py not exercised, scenarios end at their duration (the next mode after a cut appears only in M2/X23), no operator
-   fighting the system. A notch policy cannot be validated here, only a detector.
+   fighting the system. A notch policy cannot be validated here, only a detector — except for the one policy property
+   the K series checks: whether the loop is actually dead when the scenario ends (`survived`, §1).
 9. **Three seeds, C-major random walks, hand-placed ring offsets.** 61 × 3 realisations are few enough to over-fit; hold-out seeds
    (4–9) and a sweep of ring offsets across the 120-cent cell (only S10/X9 sit at the midpoint, at 2.6 k/525 Hz) are mandatory before
    any pass claim. Scenario noise seeds are salted by name: renaming changes the realisation.
@@ -361,3 +375,11 @@ alternation on split lines (S10, X9, X23).
     un-tagged LF rings before trusting any frequency prior.
 12. **No scenario has two open mics with different τ, an operator riding a fader continuously through a ring, autogain ON during a
     ring, RTA source switched mid-session, or frame bursts/duplicates** — all seen or plausible on the real desk.
+13. **A plateaued howl answers a cut with exactly the cut depth whenever its excess ≥ the depth** (K series). Limiter, amp/desk
+    clip and compressor plateaux are described by `sat_db` as a hard `min()`, and the tap sits after the PRE-insert GEQ, so a −3 on
+    a ring with e ≥ 3 reads −3 dB and flat at the tap while the room is unchanged at the limiter ceiling — indistinguishable by
+    level from programme through the EQ (loop brief §1.4 says the plateau is the normal steady state; §4.1's "dropped ≈
+    attenuation and flat ⇒ programme" holds only for e < attenuation). Until K existed every ring here had e ≤ 2 dB and died to
+    one −3, so no closed-loop number said anything about deepening. What the corpus still cannot show: the *transient* a real
+    limiter adds (undershoot on the loop's decay rate, recovery on the limiter's release) — the one level-domain signature that
+    could separate the two cases, and a desk measurement, not a simulator constant.

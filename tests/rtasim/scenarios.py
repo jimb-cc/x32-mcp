@@ -844,6 +844,90 @@ def _x23(seed, st):
 
 
 # ==================================================================================================
+# K - kill check: does the notch POLICY finish a howl that a single -3 dB cannot?  (review/kill-check)
+# ==================================================================================================
+# A howl held at a plateau by a nonlinearity (speaker limiter / amp clip / channel compressor / desk clip)
+# with excess loop gain e >= the cut depth c answers the cut with EXACTLY -c dB at the pre-fader tap and then
+# sits flat: the loop is still super-critical, the saturation point simply re-pins it c dB lower. That is
+# observationally identical to programme through the same EQ, so "dropped ~ the bell and flat => it was
+# programme (false cut)" is unsound whenever e >= c, and a policy that stops deepening on that evidence leaves
+# the room howling at full limiter level while believing it has finished (loop brief 1.4 vs 4.1; the M7 5 kHz
+# howl needed -3/-6/-9). Every other ring in this corpus has e <= 2.0 dB, i.e. dies to a single -3 dB, so
+# nothing above could show it. Ground truth in CLOSED loop: the ring must be DEAD (e_eff <= 0) by the end of
+# the scenario (harness ``survived``). Rings sit ON GEQ centres (2.5 k = GEQ 22, 1.25 k = 19, 5 k = 25) so the
+# depth needed is exact; K6 sits at the 1.6 k / 2 k midpoint where one band gives ~-2.2 per -3 dB slider.
+@scenario("K1_limiter_held_howl_e4_2k5", "howl into a downstream speaker limiter with 4 dB excess: 2.5 kHz (on GEQ 22), tau 40 ms -> "
+          "100 dB/s from -60 at t=3 to the limiter plateau -13 dBFS, vocal + moderate band underneath. After a -3 dB cut the loop "
+          "still has +1 dB: the tap reads -16 and sits flat; -6 kills it",
+          "FEEDBACK onset 3.0; detect <= 300 ms; closed loop: ring DEAD by the end (needs -6); 'dropped 3 dB and flat' after the "
+          "first cut is NOT a false cut", 14.0, tags=("feedback", "kill", "limiter", "music", "mixture"))
+def _k1(seed, st):
+    ring = FeedbackRing(freq_hz=2500.0, excess_db=4.0, tau_loop_s=0.040, t_on=3.0, start_db=-60.0, sat_db=-13.0, wander_db=0.4,
+                        label="howl_2k5_limiter_e4")
+    return Scene(14.0, sources=[room_noise()] + loud_band(seed, bed_db=-40.0, drums_db=-30.0, bass_db=-34.0, gtr_db=-36.0,
+                                                          vox_db=-28.0, t1=13.7), rings=[ring])
+
+
+@scenario("K2_limiter_held_howl_e7_1k25", "as K1 with 7 dB excess at 1.25 kHz (on GEQ 19), tau 70 ms -> 100 dB/s from -60 at t=3 to "
+          "limiter -10: -3 leaves +4, -6 leaves +1 (still flat at the tap, 6 dB down), only -9 kills it",
+          "FEEDBACK onset 3.0; detect <= 300 ms; closed loop: ring DEAD by the end (needs the full -9)", 14.0,
+          tags=("feedback", "kill", "limiter", "music", "mixture"))
+def _k2(seed, st):
+    ring = FeedbackRing(freq_hz=1250.0, excess_db=7.0, tau_loop_s=0.070, t_on=3.0, start_db=-60.0, sat_db=-10.0, wander_db=0.4,
+                        label="howl_1k25_limiter_e7")
+    return Scene(14.0, sources=[room_noise()] + loud_band(seed, bed_db=-40.0, drums_db=-30.0, bass_db=-34.0, gtr_db=-36.0,
+                                                          vox_db=-28.0, t1=13.7), rings=[ring])
+
+
+@scenario("K3_established_limiter_plateau_e5_5k", "the S2a datum with excess: 5 kHz (on GEQ 25) ALREADY at its -8 dBFS limiter plateau "
+          "when the detector arms, 5 dB of excess behind it, quiet music underneath (bed -50, organ/piano/bass). -3 re-pins it at "
+          "-11, flat; -6 kills it", "FEEDBACK from t=0; detect <= 300 ms; closed loop: ring DEAD by the end (needs -6)", 14.0,
+          tags=("feedback", "kill", "limiter", "established", "music", "mixture"))
+def _k3(seed, st):
+    ring = FeedbackRing(freq_hz=5000.0, excess_db=5.0, tau_loop_s=0.010, sat_db=-8.0, established=True, wander_db=0.3,
+                        label="howl_5k_plateau_e5")
+    return Scene(14.0, sources=[room_noise(), music_bed(-50.0, seed=seed)] + _quiet_combo(seed, 13.8), rings=[ring])
+
+
+@scenario("K4_compressor_plateau_e6p5_quiet_2k5", "howl settling on a channel compressor at a MODERATE level: 2.5 kHz (on GEQ 22), "
+          "6.5 dB excess, tau 60 ms -> ~110 dB/s from -60 at t=3 to a -22 dBFS plateau (~30 dB prominent) under quiet music "
+          "(bed -55, organ -40, piano -38, bass -46): never loud, never clipped. -3 leaves +3.5, -6 leaves +0.5, -9 kills it",
+          "FEEDBACK onset 3.0; detect <= 300 ms; closed loop: ring DEAD by the end (needs the full -9); the -25 dBFS flat line "
+          "after the first cut is still the howl", 14.0, tags=("feedback", "kill", "compressor", "music", "mixture"))
+def _k4(seed, st):
+    ring = FeedbackRing(freq_hz=2500.0, excess_db=6.5, tau_loop_s=0.060, t_on=3.0, start_db=-60.0, sat_db=-22.0, wander_db=0.4,
+                        label="howl_2k5_comp_e6p5")
+    return Scene(14.0, sources=[room_noise(), music_bed(-55.0, seed=seed)]
+                 + _quiet_combo(seed, 13.8, organ_db=-40.0, mel_db=-38.0, bass_db=-46.0), rings=[ring])
+
+
+@scenario("K5_channel_shove_into_limiter_e5p5_2k5", "the M7 story: moderate band + vocal, a 2.5 kHz loop (on GEQ 22) sitting 0.5 dB "
+          "UNDER threshold; at t=3 the operator shoves the channel/DCA +6 dB (programme, loop AND the SPL-set plateau all move: "
+          "common mode) -> 5.5 dB excess, tau 60 ms -> ~90 dB/s to the limiter (-10 -> -4 at the tap). -3 leaves +2.5; -6 kills it",
+          "FEEDBACK onset 3.0; detect <= 300 ms; 0 detections on the +6 dB programme step; closed loop: ring DEAD by the end "
+          "(needs -6)", 14.0, tags=("feedback", "kill", "limiter", "common_mode", "music", "mixture"))
+def _k5(seed, st):
+    master = CommonModeGain(points=((0.0, 0.0), (3.0, 0.0), (3.0, 6.0), (14.0, 6.0)), label="channel_shove_plus6")
+    ring = FeedbackRing(freq_hz=2500.0, excess_db=-0.5, tau_loop_s=0.060, t_on=0.0, start_db=-70.0, sat_db=-10.0, wander_db=0.4,
+                        label="howl_2k5_after_shove")
+    return Scene(14.0, sources=[room_noise()] + loud_band(seed, bed_db=-46.0, drums_db=-36.0, bass_db=-40.0, gtr_db=-42.0,
+                                                          vox_db=-34.0, t1=13.7),
+                 rings=[ring], master=master, prog_coupling=1.0, loop_coupling=1.0, sat_coupling=1.0)
+
+
+@scenario("K6_limiter_held_howl_e3p5_midpoint_1k8", "as K1 with 3.5 dB excess at 1789 Hz, the exact midpoint between GEQ 1.6 k and "
+          "2 k (Q 3: one slider gives ~-2.2 dB per -3 at the ring): -3 on either neighbour leaves +1.3; -6 on one, or -3 on both "
+          "flanking bands, kills it. Tests interpolated-frequency / flanking-pair cutting under survival pressure",
+          "FEEDBACK onset 3.0; detect <= 300 ms; closed loop: ring DEAD by the end (one band -6, or both neighbours -3)", 14.0,
+          tags=("feedback", "kill", "limiter", "midpoint", "music", "mixture"))
+def _k6(seed, st):
+    ring = FeedbackRing(freq_hz=1788.9, excess_db=3.5, tau_loop_s=0.035, t_on=3.0, start_db=-60.0, sat_db=-12.0, wander_db=0.4,
+                        label="howl_1k79_midpoint_e3p5")
+    return Scene(14.0, sources=[room_noise()] + loud_band(seed, bed_db=-40.0, drums_db=-30.0, bass_db=-34.0, gtr_db=-36.0,
+                                                          vox_db=-28.0, t1=13.7), rings=[ring])
+
+
+# ==================================================================================================
 # rendering + cache
 # ==================================================================================================
 _CACHE: dict[tuple, tuple[list[tuple[float, list[float]]], list[Episode], Renderer]] = {}
