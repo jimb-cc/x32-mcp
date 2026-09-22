@@ -257,3 +257,30 @@ Only `d.policy.get("read_cache_ttl_s")` is used from the descriptor, so tests ca
   limited broadcast `255.255.255.255`; FW 4.x node column widths). These only matter at M5.
 - Whether FX slots 1–4 may ever be used for ring-out GEQs (default: only 5–8).
 - Public vs private repo (currently private).
+
+## 4c. Offline review, 2026-09-21 (response to REVIEW_BRIEF.md)
+
+A full review against `a408a2a` is in [`docs/REVIEW_REPORT.md`](REVIEW_REPORT.md) with appendices in `docs/review/`. Read its
+§0 first. The short version for whoever picks this up:
+
+- **Why the detector failed at M7 is understood** (REVIEW_REPORT §1.2): the growth feature is manufactured by the 1/10-octave
+  analyser at LF and defeated by real loop growth rates at HF; the RTA `decay`/`peakhold` prefs were never set; the score's
+  sustained-ring region is unreachable. A physics-based offline corpus (`tests/rtasim/`, 61 scenarios) now exists and the
+  shipped detector scores 12/61 with 948 false positives on it. The redesigned discriminator (`review/detector`, design in
+  docs/DETECTOR.md) scores 0 false positives on the corpus, hold-out seeds and every analyser variant, catches 115/117 rings with the
+  LF window declared, and takes 179 rather than 500-950 hits on 68 scenarios written to defeat it; `review/detector-cfs` wires its
+  hooks (tier-B one-shot, alerts on the scribble strip, LF edge from the channel HPFs) into cfs.py. An independent kill check
+  (limiter/compressor-held howls) passes 6/6 after one fix; the pre-registered acceptance gate rejects old and new alike, the new
+  one on latency only with 0 false positives — REVIEW_REPORT §1.6 explains why that is the physical floor for a passive detector.
+- **The "calibration broke existing_cuts" bug** (§4) was `_notch()` committing before the GEQ write plus the test's own stop
+  cancelling the write inside a `/fx/N` cache-miss round trip — deterministic on this Windows box. Fixed on
+  `review/cfs-write-safety` (two-phase notch). The commit message of 56c34a7 about `_open_session` running on the pending
+  `ring_out` call is wrong; the pending call never reaches cfs.
+- **Safety** (§3): main-bus compressor make-up/EQ were Tier 1; panic() was undone by our own ramps/restore/ring-out; the
+  ring-out fought an operator's pull-down. All fixed on review branches with tests. `clear_panic` is a new Tier-2 tool.
+- **Main LR is a stereo strip**: a GEQ2 on FXnL processes L on side A and R on side B. CFS² now writes both sides for the
+  mains and never lends the other side to a bus (`review/main-lr-stereo-geq`). Your FX5 GEQ2 on Main LR is exactly this case.
+- **Next session at the desk**: REVIEW_REPORT §8 is a ten-item checklist (RTA prefs → stream, analyser response via the console
+  oscillator, GEQ bell, `scripts/measure_settle.py`, the Main LR GEQ2 experiment, panic under load, the M7 re-test).
+- The review branches are local (`git branch --list 'review/*'`); §0.3 has the push commands. `review/all-integrated` merges
+  them all.
