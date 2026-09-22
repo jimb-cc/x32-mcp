@@ -17,12 +17,12 @@ Each of the brief's five workstreams was run as an independent investigation, fa
 different starting hypotheses or attack angles, and **no finding entered this report without two independent skeptical
 verifications** (one reproducing it in code against the repository, one arguing from the source and `docs/research/`). Design
 questions (the discriminator, read-after-write) went to several designers with different mandates and were judged comparatively,
-with the judges re-running every prototype's tests themselves. In total ~380 agent runs; the record is in the appendices.
+with the judges re-running every prototype's tests themselves. In total ~400 agent runs; the record is in the appendices.
 
 The review sandbox has no IP networking, so the FakeDesk integration suites could not bind their loopback socket. A test-only
 in-memory UDP shim was written (Appendix C; not in any PR) so that 912 of the 934 tests run here — the other 22 are the TCP
 dashboard's. Every review branch was validated against that baseline plus its own new tests; the integration branch that merges
-all of them runs **955+ tests green**.
+all of them runs **1034 tests green** (the original 912 plus ~120 new regression, predicate and corpus tests).
 
 ### 0.2 Headline findings
 
@@ -33,7 +33,7 @@ all of them runs **955+ tests green**.
    shipped code: a steady tone through a 1/Δf band model is reported as feedback 10/10 times for every band from 45 to 315 Hz.
    That, plus the never-set RTA `decay`/`peakhold` prefs and a score whose sustained-ring region is unreachable by construction,
    is the whole M7 story (§1.2). On the new 61-scenario physics corpus the shipped detector passes 12 scenarios with **948 false
-   positives**; the redesigned discriminator (§1.5) [RESULTS]. 
+   positives**; the redesigned discriminator (§1.5) passes with **0 false positives** on the corpus, on hold-out seeds and on every analyser variant, catches 115 of 117 rings with the LF window declared (median 200 ms), leaves no detected ring alive after its cuts, and takes 179 rather than 500–950 wrong detections on 68 scenarios written specifically to defeat it — every one in a class documented as physically irreducible on this analyser, handled by policy (publish, one bounded cut, verify) rather than by threshold (§1.6). 
 2. **The calibration bug was a cancellation, not a stale read** (§4). `_notch()` commits the cut to the controller *before* the
    GEQ write; `set_geq_band` first reads `/fx/N`'s type through a 2 s cache; the 2 s calibration aged that entry past its TTL, so
    the write path suspended between commit and datagram, and the test's own `feedback_watch_stop` cancelled it there —
@@ -69,7 +69,7 @@ commit message written as the PR description (`gh pr create --fill` works), and 
 
 ```bash
 cd /Users/jimb/code/x32-mcp
-for b in rtasim-corpus detector rta-ballistics guard-main-processing panic-hardening cfs-write-safety token-binding \
+for b in rtasim-corpus detector detector-cfs rta-ballistics guard-main-processing panic-hardening cfs-write-safety token-binding \
          argument-hardening read-after-write discover-mics-signal main-lr-stereo-geq; do
   git push -u origin review/$b && gh pr create --head review/$b --fill
 done
@@ -79,7 +79,8 @@ git push -u origin review/all-integrated   # optional: everything, pre-merged
 | Branch | What | § | Tests added |
 |---|---|---|---|
 | `review/rtasim-corpus` | `tests/rtasim/`: physics-based RTA/loop simulator, 61-scenario corpus, detector harness, baseline driver, `CORPUS.md` | 1.4 | 24 |
-| `review/detector` | The redesigned discriminator (builds on `rtasim-corpus`) [PENDING] | 1.5 | |
+| `review/detector` | The redesigned discriminator (stacked on `rtasim-corpus`): predicates + evidence lanes + probe + `note_cut` verdicts, the 68-scenario adversarial corpus, `docs/DETECTOR.md`, the project `/verify` recipe | 1.5–1.6 | ~70 |
+| `review/detector-cfs` | The CFS policy that consumes the detector's hooks (stacked on `all-integrated`): LF edge from the mics' HPFs, ring-out contract check, tier-B one-shot with held-deepen, scribble-strip candidate alerts, at-arm gating in watch, flag handling | 1.5, 1.7 | (see branch) |
 | `review/rta-ballistics` | `set_rta_source` forces `decay`→min, `peakhold`→OFF, records `gain` and the prefs it found | 1.2c, 2 A3 | 1 |
 | `review/guard-main-processing` | `/main/*/dyn/*`, `/main/*/eq/*` guarded; Tier-1 compressor make-up clamped to 6 dB | 3 S1 | 3 |
 | `review/panic-hardening` | panic cancels ramps, aborts restore/CFS, latches outputs (`clear_panic`, T2), re-asserts on reconnect, reads back and re-sends; honest docs on what it cannot silence | 3 S2/S14/S23 | 6 |
@@ -89,7 +90,7 @@ git push -u origin review/all-integrated   # optional: everything, pre-merged
 | `review/read-after-write` | `settle.read_until`, `conn.sync()`, cache E0/E1 fixes, FakeDesk apply-delay + inbound loss, setup/RTA-source verified-or-not-yet, `scripts/measure_settle.py` | 5 | 15 |
 | `review/discover-mics-signal` | candidates annotated with live input level; "no input signal" warnings; FakeDesk `unplugged` | 2 C6, 6 | 1 |
 | `review/main-lr-stereo-geq` | stereo strip takes a whole slot / both GEQ2 sides written / never lent; two-leg main in the fake | 2 C1 | 1 (+1 changed) |
-| `review/all-integrated` | all of the above merged | | 955 pass |
+| `review/all-integrated` | all of the above merged, conflicts resolved | | 1034+ pass |
 
 What is deliberately *not* in a branch (recommendations with designs and test recipes in the sections): the head-amp `/-ha`
 read (§2 C5), linked bus pairs (C2), insert eviction/flatness/PRE fix-ups in `plan_setup` (C4), `/outputs` taps (B4/S23),
@@ -346,7 +347,78 @@ any veto; use the simulator's own analyser constant.
 
 ### 1.6 Offline results
 
-*(pending phase B)*
+All numbers below were measured by the implementer, reproduced exactly by two independent verifiers on their own worktrees, and
+re-measured a third time after the fix round (Appendix I); `docs/DETECTOR.md` §6 has every per-scenario row. "watch"/"ringout" =
+the detector as `cfs.py` constructs it with no LF declaration; "_tag" = with the LF window the CFS layer derives from the channel
+HPFs (`review/detector-cfs`). Seeds 1–3 unless stated; latency is measured from the frame a ring becomes 12 dB visible.
+
+**Main corpus (61 scenarios).**
+
+| run | scenarios pass | rings | caught | missed | **false positives** | harmonic cuts | alive after cut (closed loop) | latency p50 / p90 / max | ≤ 300 ms |
+|---|---|---|---|---|---|---|---|---|---|
+| shipped detector, watch open (baseline) | 12 / 61 | 117 | 108 | 9 | **948** | 143 | – | 252 / 602 / 12 649 | 70 / 108 |
+| new, watch open | 49 / 61 | 117 | 107–109 | 8–10 | **0** | 0 | – | 200 / 751 / 3 901 | 81 |
+| new, watch_tag open | 51 / 61 | 117 | 115 | 2 | **0** | 0 | – | 200 / 751 / 3 901 | 83 / 115 |
+| new, ringout_tag open (probe fed) | 50 / 61 | 117 | 112 | 5 | **0** | 0 | – | 200 / 553 / 3 901 | 83 |
+| new, watch_tag closed loop | – | 117 | 115 | 2 | **0** | 0 | **0** | as open | |
+| new, ringout_tag closed loop | – | 117 | 112 | 5 | **0** | 0 | **0** | as open | |
+
+The misses are named and physical: X16 (a 240 dB/s howl to −3 dBFS in a show whose drum peaks already read −7 dBFS at arm — two
+visible increments; published as a MODERATE candidate at 200 ms for the CFS tier-B policy, which cuts it), X21 seed 1 (a ring that
+grows inside the cluster of the choir partial that seeded it), X17/X22 in plain watch (65/122 Hz rings, by design uncut until the LF
+window is declared — `_tag` catches both), X7 in *forced* ring-out mode (an established ring with no master steps to probe; the scene
+raises `PROGRAMME_PRESENT`, and in watch mode it is cut at 0.8 s). Scenarios that still fail on *latency* alone: S3 (one seed 700 ms),
+S10/S11a (300–500 ms: 7–13 dB/s rings deliver their 6 dB of own rise 6/R s after visibility), S13/X8 (1.5–5 dB/s rings: seconds), X9 (ring
+exactly between two bands under speech, 1.0–1.4 s), M3 (one seed 550 ms). X11 — the amp-clipped howl every competition design
+missed — 3/3 at 151–203 ms.
+
+**Unseen programme.** Hold-out seeds 4–9, watch and watch_tag: **0 FP** (232/234 caught with the LF tag); never-run seeds 10–15:
+**1 FP** (a choir partial at 1.13 kHz rising 6 dB, one seed). **Analyser variants** (attack constant ×2, biquad bank, skirt order 2 and 5,
+`decay` 4 s, release law, RMS detector, noise ×1.5, peak-hold): **0 FP on every one**; under peak-hold the plateau scenes are missed and
+`PEAK_HOLD_SUSPECTED`/`FROZEN_LINES` are raised (the pref is forced off at arm; the flag is for when someone turns it back on). Display
+gain +12/+24 dB: 18/25 FP (winner as delivered 53/310) — whistles, crowd whoops and ff soprano pushed to within 6 dB of display full
+scale; `set_rta_source` now pins the gain (PR `rta-ballistics`), and whether the pref reaches `/meters/15` at all is item 1 of §8.
+
+**Adversarial corpus** (the 55 auditor breakers + 13 verifier breakers, all written to defeat these designs): 163 detections on
+programme (winner as delivered: 505), every one inside the classes `docs/DETECTOR.md` §7 argues are irreducible on a magnitude-only
+1/10-octave analyser and lists with what the detector does instead (§1.8); the fast-howl-to-quiet-plateau breakers are published as
+MODERATE candidates within 250 ms (17/18) with the fields the tier-B policy needs; the held-howl breaker (excess 4 dB into a limiter,
+AV05) that the first build filed as a false cut now goes −3 → `held` → −6 → confirmed dead, 3/3. Closed loop over all 68: what a wrong
+cut costs is one GEQ band at −3 dB, walked to −9 only when the programme line keeps *rising* after the cut or was cut as LOUD and held.
+
+**Cost.** 287 / 714 / 899 µs per frame (mean / p99 / max) in pure Python 3.13 on busy music; a 48 000-frame soak shows no structure
+growing.
+
+**Same harness, all seven detectors** (the shipped one, the five competition designs as delivered, the final build), blind
+construction, watch mode, identical scoring including the survived-cut verdict:
+
+| detector (blind `FeedbackDetector(cfg, band_hz)`, watch) | main 61: pass | caught / 117 | **FP** | HARM | lat p50 / p90 / max ms | ≤300 | closed: caught | **alive after cut** | cuts | hold-out 4–9: caught / 234 | **FP** | adversarial 68: rings caught | **FP** | closed adv: alive |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| shipped detector (a408a2a) | 12/61 | 108 | **948** | 143 | 252 / 602 / 12649 | 70 | 96 | **1** | 821 | 215 | **2189** | 113/120 | **1338** | 1 |
+| competition: predicates (winner as delivered) | 48/61 | 105 | **0** | 0 | 202 / 702 / 4252 | 77 | 106 | **0** | 108 | 212 | **2** | 58/120 | **522** | 0 |
+| competition: free-hand | 55/61 | 117 | **0** | 24 | 100 / 400 / 2948 | 100 | 113 | **0** | 122 | 227 | **1** | 79/120 | **725** | 0 |
+| competition: track-and-group | 51/61 | 111 | **0** | 0 | 152 / 447 / 2502 | 94 | 111 | **0** | 113 | 220 | **11** | 80/120 | **553** | 0 |
+| competition: minimal-delta | 51/61 | 107 | **0** | 0 | 152 / 650 / 2099 | 90 | 108 | **0** | 115 | 215 | **0** | 77/120 | **561** | 6 |
+| competition: sequential-evidence | 47/61 | 116 | **0** | 0 | 150 / 801 / 6452 | 84 | 118 | **0** | 122 | 233 | **22** | 100/120 | **599** | 9 |
+| **final build (review/detector)** | 49/61 | 109 | **0** | 0 | 200 / 752 / 3901 | 81 | 108 | **0** | 114 | 220 | **0** | 73/120 | **179** | 6 |
+
+Reading it: every redesign removes the false positives on the shared corpus; what separates them is unseen programme and hostile
+programme. The final build is the only detector with **zero** false positives on the main corpus, the hold-out seeds *and* the fewest
+on the 68 hostile scenarios by a factor of three to four (179 vs 522–725), with no harmonic cuts and no detected ring left alive on the
+main corpus. Free-hand as delivered is ~100 ms faster at the median and catches all 117 main-corpus rings blind, at the price of 725
+detections on hostile programme, 24 harmonic cuts and the structural miss its auditor found (a fast howl below −10 dBFS is never cut);
+sequential-evidence catches the most hostile-scenario rings (100/120) at 22 hold-out false positives. The final build's eight blind
+misses on the main corpus are the ones itemised above (tier-B, LF declaration), i.e. they are CFS-policy decisions rather than detector
+failures; its six "alive" hostile cases are AV08/AV09 — ring-out armed into a system already howling under a limiter or 2:1 compressor,
+where the detector cuts once and files `held` and the product's ring-out VERIFY loop (and the back-off probe on `review/detector-cfs`)
+does the deepening the harness's detector-only closed loop cannot model. For a system that writes into a live PA the ordering is: no
+wrong cuts first, then kill what you cut, then speed — which is the ordering this table ranks the final build first on.
+
+
+**End to end against the FakeDesk** (`scripts/verify_watch_fakedesk.py`, the project's new `/verify` recipe; in-process UDP): a
+20 dB/s ring at 2.4 kHz is cut −3 dB at 1.05 s, verdict `confirmed` (drop 6.8 dB), ring at −104 dBFS; a family-less line arriving at
+−6 dBFS and held is cut at 3.4 s and, answering each cut with exactly the bell, goes `held` → −6 → `held` → −9 → stop at the cap — the
+bounded price of deepening limiter-held howls. Identical on the fully integrated branch (two-phase notch + `note_cut`).
 
 ### 1.7 Answers to the brief's four questions
 
@@ -416,8 +488,34 @@ prominent, dead still, family-less and un-moved by the music for seconds, not be
 
 ### 1.8 What the corpus cannot tell us (residual risk for the next hardware test)
 
-*(pending phase B)*
+Stated plainly, because the M7 lesson is that a green suite certifies the simulator:
 
+1. **The analyser model is a model.** τ_a = k/Δf per band, Butterworth skirts, a dB-linear release law, guessed `decay`/`peakhold`/`gain`
+   semantics. The design avoids keying on the exact constants (the settle rule uses k = 1.0, twice the simulator's; 0 FP across the
+   attack/skirt/detector/release sweeps), but the *first* thing to do at the desk is §8 item 2: the console oscillator stepped through
+   ten bands with the bus master down, which turns every `AnalyserSettings` constant into a measurement and — via a replay loader the
+   harness already accepts — lets the corpus score real frames.
+2. **Irreducible on a magnitude-only 1/10-octave analyser** (`docs/DETECTOR.md` §7, each with what the detector does instead): a solo
+   family-less line swelling dB-linearly (flute/soprano crescendo, sine pad fade-in, organ swell pedal, a fader ride on a held
+   family-less note) *is* the ring signature — cut once, deepened only if it keeps rising; a fast howl to a quiet limiter plateau *is* a
+   sine-lead onset — published in 250 ms, cut once by tier-B, deepened slowly with an alert if it holds; a loud steady whistle or ff
+   closed vowel at the loud line *is* a howl at its limiter — cut, `false_cut` when it ends; the at-arm pair (organ note / projector
+   whine vs established howl at −30…−40 dBFS) — resolved by the probe in ring-out, gated to tier-A in watch, alert otherwise; an LF howl
+   that plateaus within two settle times; a ring exactly between two bands under speech (~1 s); slow rings inside chords (seconds);
+   exact-octave co-onset modes with equal excess; a ≥ 150 ms family-less acoustic attack. None of these is fixable by tuning; they are
+   the reason the CFS layer has tiers, alerts and `note_cut()` verdicts rather than a threshold.
+3. **Real mixes are denser than the beds.** 0 FP on the corpus and on 68 hostile scenarios is necessary, not sufficient; the first
+   `feedback_watch` with a band playing should run with a generous `notch_budget` of 0 (alert-only) for one song and the
+   `detection_log` saved — that log is the first labelled real data, and the corpus should be re-scored against it.
+4. **The kill side is modelled, not measured.** The corpus's loop is a scalar single-delay comb with a hard plateau; the FakeDesk's
+   ring is simpler still. Whether −3 dB at the nearest ISO band kills a real ring between GEQ centres (the RBJ bell says −1.5…−2.2 dB
+   at the line) is §8 item 3. The `held` → deepen path exists precisely because the answer will sometimes be no.
+5. **The probe assumes the +1 dB step arrives.** Over Wi-Fi a lost master write means the detector correlates against a step that
+   never happened; the read-after-write settle (PR) bounds this for the master, and a STATIONARY verdict needs two consistent 1 dB/dB
+   answers, but the ring-out should be run wired.
+6. **Latency on slow and mid-band-split rings is physics, not a bug**: 6/R seconds for an R dB/s ring that must show 6 dB of its own
+   rise. In ring-out the probe pre-empts most of these (X23's second mode is cut 1.25 s *before* it crosses threshold); in watch they
+   are the operator's, with an alert on the strip from 250 ms.
 
 ---
 
@@ -918,4 +1016,5 @@ so most of it needs no sound in the room at all).
 | [F](review/F-bug4-investigation.md) | Bug 4: three investigations, two cross-checks, the calibration/transaction design spec |
 | [G](review/G-read-after-write.md) | Read-after-write: site inventory, the three designs, both judgments |
 | [H](review/H-discriminator-competition.md) | The discriminator design competition: both judges' verdicts, the five audits, the designers' summaries |
+| [I](review/I-detector-build.md) | Building the final discriminator: implementer's report and changelog, both verifications, the fix round, the re-measure |
 
