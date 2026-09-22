@@ -80,7 +80,7 @@ git push -u origin review/all-integrated   # optional: everything, pre-merged
 |---|---|---|---|
 | `review/rtasim-corpus` | `tests/rtasim/`: physics-based RTA/loop simulator, 61-scenario corpus, detector harness, baseline driver, `CORPUS.md` | 1.4 | 24 |
 | `review/detector` | The redesigned discriminator (stacked on `rtasim-corpus`): predicates + evidence lanes + probe + `note_cut` verdicts, the 68-scenario adversarial corpus, `docs/DETECTOR.md`, the project `/verify` recipe | 1.5–1.6 | ~70 |
-| `review/detector-cfs` | The CFS policy that consumes the detector's hooks (stacked on `all-integrated`): LF edge from the mics' HPFs, ring-out contract check, tier-B one-shot with held-deepen, scribble-strip candidate alerts, at-arm gating in watch, flag handling | 1.5, 1.7 | (see branch) |
+| `review/detector-cfs` | The CFS policy that consumes the detector's hooks (stacked on `all-integrated`; `docs/CFS_POLICY.md`): LF edge from the mics' HPFs, ring-out contract check, tier-B one-shot cut with verdict-driven follow-up (held → slow deepen with alert, never ignore-listed on drop≈bell; false_cut = the line ended), candidate alerts on the bus scribble strip (restored on every exit path), at-arm gating in watch, analyser-flag actions, back-off probe; independently verified, breakers kept as tests | 1.5, 1.7 | 53 (1087 pass) |
 | `review/rta-ballistics` | `set_rta_source` forces `decay`→min, `peakhold`→OFF, records `gain` and the prefs it found | 1.2c, 2 A3 | 1 |
 | `review/guard-main-processing` | `/main/*/dyn/*`, `/main/*/eq/*` guarded; Tier-1 compressor make-up clamped to 6 dB | 3 S1 | 3 |
 | `review/panic-hardening` | panic cancels ramps, aborts restore/CFS, latches outputs (`clear_panic`, T2), re-asserts on reconnect, reads back and re-sends; honest docs on what it cannot silence | 3 S2/S14/S23 | 6 |
@@ -90,7 +90,7 @@ git push -u origin review/all-integrated   # optional: everything, pre-merged
 | `review/read-after-write` | `settle.read_until`, `conn.sync()`, cache E0/E1 fixes, FakeDesk apply-delay + inbound loss, setup/RTA-source verified-or-not-yet, `scripts/measure_settle.py` | 5 | 15 |
 | `review/discover-mics-signal` | candidates annotated with live input level; "no input signal" warnings; FakeDesk `unplugged` | 2 C6, 6 | 1 |
 | `review/main-lr-stereo-geq` | stereo strip takes a whole slot / both GEQ2 sides written / never lent; two-leg main in the fake | 2 C1 | 1 (+1 changed) |
-| `review/all-integrated` | all of the above merged, conflicts resolved | | 1034+ pass |
+| `review/all-integrated` | all of the above merged except `detector-cfs` (which is stacked on it), conflicts resolved | | 1034 pass |
 
 What is deliberately *not* in a branch (recommendations with designs and test recipes in the sections): the head-amp `/-ha`
 read (§2 C5), linked bus pairs (C2), insert eviction/flatness/PRE fix-ups in `plan_setup` (C4), `/outputs` taps (B4/S23),
