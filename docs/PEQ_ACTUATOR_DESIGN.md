@@ -352,10 +352,16 @@ adopted late (never written shallower).
 
 ## 9. Residual uncertainties only the desk can settle
 
-1. The X32's PEQ shape and Q definition (RBJ half-gain vs −3 dB-bandwidth vs constant-Q) — sets `peq_q_scale_*` and possibly `bell=`;
-   and its symmetry above ~6 kHz (bilinear warping at 48 kHz compresses the upper flank; bracketed by `offset_unc_oct` until measured).
+1. ~~The X32's PEQ shape and Q definition~~ **MEASURED 2026-09-22 (Main LR band 4, 2.04 kHz, oscillator tone ≈1993 Hz, post-EQ
+   RTA): −12 dB Q 6.1 → 10.9 dB, −6 dB Q 6.1 → 5.5 dB, −12 dB Q 10 → 9.6 dB — the RBJ half-gain prototype of §2.1 within 0.3 dB at
+   both Qs (a −3 dB-bandwidth Q would read ~7.4 at Q 10). `peq_q_scale_min/max` = 1.0.** Still open: symmetry above ~6 kHz
+   (bilinear warping; measure at 8 kHz), and the RTA band-centre offset (meters.md 2026-09-22 item 4) that feeds `offset_unc_oct`.
+   Also found: the console oscillator *cannot* be used on a bus — it replaces the bus output downstream of the RTA tap and meter
+   (nothing reads it); desk test 3′ must inject into Main (quietly) or a channel.
 2. Whether the bus EQ is upstream of the post-EQ RTA tap (stat 146+N−1, meters.md:427; the channel overlay text at :439 supports it;
-   HANDOVER.md:165-169 measured only PRE vs POST *insert*) — gates the default flip (D6).
+   HANDOVER.md:165-169 measured only PRE vs POST *insert*) — gates the default flip (D6). **Confirmed for Main LR 2026-09-22** (the
+   post-EQ tap moved with the main EQ); the bus case needs a tone fed into a channel routed to the bus, since the oscillator cannot
+   reach a bus's tap.
 3. Whether `/xremote` echoes our own `eq/B/{f,g,q,type}` writes (echo guard, §4.3) and whether pushes reach us with many clients.
 4. Per-datagram apply latency of a 4–5-datagram open (`measure_settle.py`) — the < 100 ms detect→cut budget on the first notch.
 5. LCut/HCut slope (FakeDesk model only) and whether a rail-parked cut filter is audibly inert (slice-2 reclaim rule).

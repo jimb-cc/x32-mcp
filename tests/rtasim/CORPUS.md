@@ -333,7 +333,10 @@ alternation on split lines (S10, X9, X23).
 
 ## 7. Residual weaknesses of the corpus (designers must not be allowed to exploit these)
 
-1. **The analyser is a model, not a measurement.** Per-band power one-pole (τ_a = 0.5/Δf), Butterworth-2N skirts, dB-linear
+1. **The analyser is a model, not a measurement.** *(Partly measured 2026-09-22, docs/research/meters.md: a 2 kHz tone reads
+   ≈ −40 dB at ±1 band and hits the −97 floor at ±2 — the `skirt_order` 5 end of the sweep, not the N = 3 default, which is kept
+   only for baseline continuity; and the band centres look ~0.05 oct above the nominal formula, unconfirmed pending a sweep.)*
+   Per-band power one-pole (τ_a = 0.5/Δf), Butterworth-2N skirts, dB-linear
    release, guessed peak-hold/decay/gain semantics. A real X32 may smear an LF tone over ±2–4 bands (FFT), have window-shaped
    rises and different skirts. Any design that normalises growth by *this* τ_a(i) curve, matches *this* N=3 skirt template (P11), or
    keys on the exact release slope is fitting the simulator. Claims must hold across `attack_k`∈{0.32,0.5,1}, `skirt_order`∈{2,3,5},

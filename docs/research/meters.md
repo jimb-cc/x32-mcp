@@ -304,7 +304,7 @@ Also stated in [issue #8]: "/meters/15 (RTA output) is the one case where the X3
 - Formula: `dB = int16 / 256.0` → resolution 1/256 dB = 0.0039 dB; range −128.0 (0x8000 = −32768, the floor / "no signal") … 0.0 (0x0000 = clipping). Positive values do not occur (range is [0x8000, 0x0000]).
 - Worked examples (verified): bytes `00 80 00 c0` → shorts −32768, −16384 → −128.0 dB, −64.0 dB. Bytes `40 e0 ff ff` → shorts −8128, −1 → −31.75 dB, −0.0039 dB. Short −6144 (0xE800) → −24.0 dB.
 - Linear (for drawing on the same scale as other meters): `lin = 10 ** (dB/20)`.
-- UNCONFIRMED: whether the reported dB is affected by `/-prefs/rta/gain` / `autogain` (i.e. whether it is the raw analysis or the display-gained value). No source states it. Best inference: values are the analyser output as displayed (the console's own RTA screen is what this stream feeds), so gain/autogain probably *do* shift them — test with a known tone.
+- PARTLY MEASURED (2026-09-22, Verification log): with `/-prefs/rta/gain` 0 and `autogain` OFF the stream reads true dBFS (a −40 dB oscillator on Main read −40.2 in its band). Whether a non-zero `gain` (the desk had sat at +18) offsets the stream is still UNCONFIRMED — the comparison needs the Rack's Meters → RTA page, which X32-Edit does not expose. Best inference unchanged: the console's own RTA screen is what this stream feeds, so `gain` probably *does* shift it; the server pins it to 0 at arm (`rta.gain_db`).
 
 **Band centre frequencies — SOURCE [DOC 4.09] p.19, verbatim table (Hz), 100 entries, index 0 … 99 row-major:**
 ```
@@ -524,3 +524,33 @@ Confirmed without change (VERIFIED tags added in place): request forms and typet
 Material facts added: Automix.c derives tf from milliseconds (`X32i_delay / 50`) and sends a 40-byte `,siii` request every 9 s; x32-osc default tf = 10 (500 ms), clamped 1…99; X-Air `Xdump` treats the LE count as a number of **shorts** (XAir_Command.c), unlike X32; `X32DeskRestore.c`'s commented-out leaf list uses `/-prefs/rta/option` **and** `/-stat/rtaeqpost` (vs DOC/emulator `options` / `rtageqpost`), while Maillot's live desk-save node list (`X32ds_node.h`) only requests the `/-prefs/rta` group node; the emulator's `Smetl[]` lacks the fw-3.0 Automix meter page (5) that the DOC lists; the emulator prints `POST` without a leading space in `/node ,s -prefs/rta` replies; the emulator ignores tf for `,siii` requests to ids other than 5/6 (reads `"1"` + NULs → clamp to 1); the DOC's own tf = 80 capture shows ≈3 s spacing rather than 4 s; the six RTA check boxes and encoder assignments from the X32 manual; fw 3.0 / 3.04 release-note snippets corroborating the automix meters.
 
 Still UNCONFIRMED after verification (see inline markers): whether `/meters/15` values include `/-prefs/rta/gain`/autogain; the exact stream content while a PEQ/GEQ page is displayed; whether `/-action/setrtasrc` accepts ≥ 98 or updates `/-prefs/rta/source`; the meaning of `/-stat/rtasource` 73…97 (25 undocumented values between the pre-EQ block ending at 72 and the post-EQ block starting at 98); the unit of `/-prefs/rta/decay` (DOC calls it "adjustable decay time", so a time unit — presumably seconds — but no source states "s"); whether the console accepts the slash-less `meters/1` spelling; which leaf spelling (`options`/`option`) the console accepts; `/meters/10` and `/meters/14` layouts; the `/meters/7` all-zeros report; the `/meters/9` within-slot order; the label of `/-prefs/rta/source` = 0 ("none" ≈ dynamic selected channel, by elimination); which firmware added decay/peakhold/det. behringer.world (403 even with a browser UA) and behringerwiki (DNS) remain unreachable.
+
+### 2026-09-22 — measured on X32RACK-Jim (FW 4.13), studio, console oscillator, 20 minutes
+
+Method: console oscillator (Monitor → Oscillator tab) sine 2 kHz at −40 dB; `get_rta("main.st")` (server forces autogain OFF,
+gain 0, decay 0.25, peak-hold OFF, POST); Main LR EQ band 4 set by hand; readings are 20-frame averages of `/meters/15`.
+
+1. **Oscillator into a mix bus is invisible to that bus's meter and RTA tap.** With Destination = MixBus 08 every bus meter read
+   −90 and the bus-8 RTA sat at the −97 floor; the Oscillator tab says "replaces destination signal" and it does so at the bus
+   OUTPUT, downstream of the tap. Into Main L+R the tone enters *upstream* of the main EQ (the EQ cut it, audibly and at the tap).
+   Consequence: the oscillator self-tests in DETECTOR.md §6 / PEQ_ACTUATOR_DESIGN.md §10 cannot use a bus as the source; use
+   Main (quietly) or feed a tone into a channel.
+2. **At `/-prefs/rta/gain` 0 the stream reads true dBFS**: a −40 dB oscillator on Main read −40.2 in its band (post-EQ tap, main
+   fader irrelevant — the tap is pre-fader). The desk's pref had been sitting at **+18 dB** (autogain OFF) since before M7, so
+   every absolute level in the M7 log (`min_level_db −45`, the 25 dB override datum) was taken 18 dB above true dBFS *if* the
+   pref offsets the stream — the +18 comparison itself was not run (Edit has no RTA-gain control; it is on the Rack's Meters →
+   RTA page). Still UNCONFIRMED whether the pref offsets `/meters/15`; what is confirmed is that gain 0 = dBFS.
+3. **Band skirts are far steeper than the corpus default.** Tone at −40.2 dB: neighbouring bands −79.2 / −82.3 (≈ −40 dB at
+   ±0.1 oct), ±2 bands at −90 and the −97 floor. That is the `skirt_order` 5 end of the CORPUS.md §5 sweep (60 dB prominence
+   ceiling), not the N = 3 default (36 dB). The M7 "60 dB-prominent line" was real.
+4. **The band centres appear offset by roughly half a band from `10000·2^((i−90)/10)`.** A ≈1993 Hz tone (fitted from the three
+   notch readings below) read −40.2 in band 66 (nominal 1894.7 Hz, 0.073 oct below the tone) and −45.5 in band 67 (nominal
+   2030.6 Hz, 0.027 oct above it) — the *farther* nominal centre was 5 dB louder. Either the real centres sit ~0.05 oct above the
+   nominal formula or the bands are asymmetric. This moves the detector's interpolated `freq_hz` (and therefore a PEQ notch) by up
+   to half a band; a 3-minute sweep (tone at 1900/1950/2000/2050/2100 Hz, read bands 65–68) settles it. UNCONFIRMED until then.
+5. **The Main LR PEQ is the RBJ prototype, Q defined at the half-gain points.** Band 4 PEQ at 2.04 kHz on the tone:
+   −12 dB Q 6.1 → both tone bands dropped **10.9 dB**; −6 dB Q 6.1 → **5.5 dB**; −12 dB Q 10 → **9.6 dB**. All three fit one RBJ
+   bell with the tone 0.034 oct below the centre (RBJ predicts 11.1 / 5.6 / 9.9 at 0.03 oct; a −3 dB-bandwidth Q would have
+   given ~7.4 for the Q 10 case). `peq_q_scale_min/max` can be 1.0; the post-EQ RTA tap sees the main EQ.
+6. Neighbour bands moved with the notch as the bell predicts (−79 → −93 at +0.12 oct for −12 dB), and the RTA's own floor is
+   −97 (display), not −128.

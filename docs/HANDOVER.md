@@ -284,3 +284,20 @@ A full review against `a408a2a` is in [`docs/REVIEW_REPORT.md`](REVIEW_REPORT.md
   oscillator, GEQ bell, `scripts/measure_settle.py`, the Main LR GEQ2 experiment, panic under load, the M7 re-test).
 - The review branches are local (`git branch --list 'review/*'`); §0.3 has the push commands. `review/all-integrated` merges
   them all.
+
+## 4d. Studio measurements, 2026-09-22 (console oscillator, 20 minutes) and repo state
+
+Repo: `main` now carries everything — PRs #1–#13 (the review branches, `review/detector` @ e396480, `review/detector-cfs` with the
+policy layer and the kill check) fast-forwarded and PR #11 (report) merged; PR #14 (`review/peq-sim`: bus-PEQ actuator in the
+simulator, K7/K8 hop scenarios) is open. On real sockets `main` runs 1108 passed / 3 failed, all three being test-side races on
+in-flight datagrams (`test_cfs_policy_breakers.py::test_e…`, `test_cfs_policy_desk.py::test_colour…`, `…cut_within_k1`).
+
+Measured on X32RACK-Jim (full detail: docs/research/meters.md, Verification log 2026-09-22; PEQ_ACTUATOR_DESIGN.md §9):
+
+* The Main LR PEQ **is** the RBJ prototype the detector and simulator use (Q 6.1 and Q 10, −6 and −12 dB, all within 0.3 dB).
+* The console oscillator is unusable on a bus (replaces the bus *output*, below the meter and RTA tap); into Main it sits before the EQ.
+* RTA gain 0 = true dBFS; the desk had been at **+18** since before M7 — every M7 absolute level is suspect by that much.
+* RTA band skirts ≈ −40 dB at ±1 band (the simulator's steep-skirt end); band centres look ~half a band above the nominal formula.
+
+Next desk session (10 min each): the tone sweep 1900…2100 Hz for the band-centre offset; the +18 gain comparison from the Rack's
+Meters → RTA page; a tone into a *channel* routed to a bus for the bus tap-order check; the PEQ at 8 kHz for warping.
