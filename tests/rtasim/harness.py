@@ -26,7 +26,13 @@ EARLY_CREDIT_S before the onset satisfies the event (negative latency).
 Closed loop (``closed_loop=True``): each detection is passed to ``x32mcp.detector.NotchController.plan``
 (budget = cfg.notch_budget_default, −3 dB steps to −9) and the resulting GEQ gain is written into the live
 renderer (PRE insert: programme at that band drops by the bell, every ring's excess drops by the bell's gain
-at its frequency), so "ring emerges, gets cut, next ring appears" is scored end to end.
+at its frequency), so "ring emerges, gets cut, next ring appears" is scored end to end. The detector's ``note_cut()``
+is called as cfs does after each GEQ write. A closed-loop run also records every ring's state at the last frame
+(``rings_end``: level, effective excess, alive = still regenerating or held at its plateau) and FAILS a scene whose
+ring, having produced a visible episode that was detected, is still ALIVE at the end (a cut that only took the tap
+down by its own bell while the loop howls on at a limiter is not a kill) -- ``alive`` = effective excess > ALIVE_EXCESS_DB
+(0.25 dB) at the last frame: regenerating, not a marginal re-crossing in the scene's last second that no detector could
+have seen grow yet.
 """
 
 from __future__ import annotations
@@ -48,6 +54,7 @@ ACTUATION_DELAY_FRAMES = 1 # closed loop: a cut decided on frame k is written ov
                            # so it is fully in effect from frame k+2 (0 = the optimistic "before the next frame")
 EARLY_CREDIT_S = 2.0       # an EARLY (sub-threshold ringing) detection this close before onset satisfies the event
 OCT_TOL = 1.0 / 6.0
+ALIVE_EXCESS_DB = 0.25     # closed loop: a ring with more effective excess than this at the last frame is still howling
 HARMONIC_KS = (2, 3, 4, 5, 6, 7)
 VERDICTS = ("TP", "DUP", "EARLY", "TAIL", "HARM", "FP")
 
@@ -68,6 +75,8 @@ class Det:
     slope_db_per_s: float | None = None
     attributed: int | None = None      # ring index
     verdict: str = "FP"                # TP | DUP | EARLY | TAIL | HARM | FP  (see module docstring)
+    reasons: tuple[str, ...] = ()      # the detector's own justification, when it provides one (diagnostics only)
+    klass: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         d = {"ts": round(self.ts, 3), "band": self.band, "freq_hz": round(self.freq_hz, 1),
@@ -77,6 +86,10 @@ class Det:
             v = getattr(self, k)
             if v is not None:
                 d[k] = round(float(v), 2)
+        if self.reasons:
+            d["reasons"] = list(self.reasons)
+        if self.klass:
+            d["class"] = self.klass
         return d
 
 
@@ -90,6 +103,7 @@ class RunResult:
     cuts: list[tuple[float, int, float]]
     latency_budget_ms: float
     wall_s: float = 0.0
+    rings_end: list[dict[str, Any]] = field(default_factory=list)   # closed loop: per ring {label, level_db, e_eff, alive} at the end
 
     # derived -----------------------------------------------------------------------------------
     @property
@@ -150,8 +164,18 @@ class RunResult:
         return sorted({geq_band_for(d.freq_hz) for d in self.fps})
 
     @property
+    def alive(self) -> list[dict[str, Any]]:
+        """Closed loop: rings that had a visible, DETECTED episode and are still regenerating / held at their plateau at the
+        end of the run (a missed ring is a miss, not an 'alive'; an open-loop run has no cuts and reports none)."""
+        if not self.closed_loop:
+            return []
+        hit = {e.ring for i, e in enumerate(self.episodes) if e.visible and self.first_tp(i) is not None}
+        return [r for r in self.rings_end if r.get("alive") and r.get("ring") in hit]
+
+    @property
     def passed(self) -> bool:
-        return not self.fps and not self.misses and all(l <= self.latency_budget_ms for l in self.latencies_ms)
+        return (not self.fps and not self.misses and all(l <= self.latency_budget_ms for l in self.latencies_ms)
+                and not self.alive)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -162,6 +186,7 @@ class RunResult:
             "tail": len(self.tail), "harm": len(self.harm),
             "fp_geq_bands": self.fp_geq_bands, "latencies_ms": self.latencies_ms,
             "cuts": [{"ts": round(t, 3), "geq_band": b, "gain_db": g} for t, b, g in self.cuts],
+            "rings_end": self.rings_end, "alive": len(self.alive),
             "passed": self.passed, "latency_budget_ms": self.latency_budget_ms, "wall_s": round(self.wall_s, 3),
         }
 
@@ -258,7 +283,8 @@ def run_one(detector_factory: Callable[[Sequence[float]], Any], scenario: Scenar
         for o in out or ():
             got.append(Det(ts=float(o.ts), band=int(o.band), freq_hz=float(o.freq_hz), confidence=float(o.confidence),
                            level_db=getattr(o, "level_db", None), prominence_db=getattr(o, "prominence_db", None),
-                           slope_db_per_s=getattr(o, "slope_db_per_s", None)))
+                           slope_db_per_s=getattr(o, "slope_db_per_s", None),
+                           reasons=tuple(getattr(o, "reasons", ()) or ()), klass=getattr(o, "klass", None)))
         return got
 
     if not closed_loop:
@@ -278,6 +304,8 @@ def run_one(detector_factory: Callable[[Sequence[float]], Any], scenario: Scenar
                 _, band, gain, ts0 = pending.pop(0)
                 r.set_geq_gain(band, gain)
                 cuts.append((ts0, band, gain))
+                if hasattr(det, "note_cut"):        # what cfs does after its GEQ write: the detector's post-cut watch
+                    det.note_cut(float(geq_band_hz[band - 1]), float(gain), None)
             fr = r.step_frame()
             if fr is None:
                 continue
@@ -293,7 +321,16 @@ def run_one(detector_factory: Callable[[Sequence[float]], Any], scenario: Scenar
                     pending.append((r.k + actuation_delay_frames, notch.band, notch.depth_db, ts))
         episodes = ring_episodes(r)
     _attribute(dets, r, episodes)
-    return RunResult(sc.name, seed, closed_loop, episodes, dets, cuts, sc.latency_budget_ms, time.perf_counter() - t0)
+    rings_end: list[dict[str, Any]] = []
+    if closed_loop:
+        for i, rg in enumerate(r.scene.rings):
+            tr = r.trace[i]
+            if not tr:
+                continue
+            last = tr[-1]
+            rings_end.append({"ring": i, "label": rg.label, "level_db": round(last.level_db, 1), "e_eff": round(last.e_eff, 2),
+                              "alive": bool(last.active and last.e_eff > ALIVE_EXCESS_DB)})
+    return RunResult(sc.name, seed, closed_loop, episodes, dets, cuts, sc.latency_budget_ms, time.perf_counter() - t0, rings_end)
 
 
 @dataclass
@@ -311,6 +348,7 @@ class Results:
         rows = []
         for name, runs in self.by_scenario().items():
             sc = SCENARIOS.get(name)
+            budget = sc.latency_budget_ms if sc else runs[0].latency_budget_ms
             lats = [l for r in runs for l in r.latencies_ms]
             rows.append({
                 "scenario": name,
@@ -326,10 +364,11 @@ class Results:
                 "harm": sum(len(r.harm) for r in runs),
                 "dup": sum(1 for r in runs for d in r.detections if d.verdict == "DUP"),
                 "cuts": sum(len(r.cuts) for r in runs),
+                "alive": sum(len(r.alive) for r in runs),
                 "lat_min_ms": min(lats) if lats else None,
                 "lat_med_ms": median(lats) if lats else None,
                 "lat_max_ms": max(lats) if lats else None,
-                "budget_ms": sc.latency_budget_ms if sc else None,
+                "budget_ms": budget,
                 "passed_seeds": sum(1 for r in runs if r.passed),
                 "verdict": "PASS" if all(r.passed for r in runs) else "FAIL",
             })
@@ -337,7 +376,7 @@ class Results:
 
     def table(self) -> str:
         rows = self.summary_rows()
-        hdr = (f"{'scenario':<38} {'ev':>3} {'TP':>3} {'miss':>4} {'FP':>4} {'erly':>4} {'tail':>4} {'harm':>4} {'cuts':>4} "
+        hdr = (f"{'scenario':<38} {'ev':>3} {'TP':>3} {'miss':>4} {'FP':>4} {'erly':>4} {'tail':>4} {'harm':>4} {'cuts':>4} {'alv':>3} "
                f"{'lat ms min/med/max':>19} {'bud':>4}  FP at GEQ bands (Hz)       verdict")
         lines = [hdr, "-" * len(hdr)]
         for r in rows:
@@ -346,7 +385,7 @@ class Results:
             if len(r["fp_geq_bands"]) > 7:
                 fpb += ",..."
             lines.append(f"{r['scenario']:<38} {r['events']:>3} {r['tp']:>3} {r['miss']:>4} {r['fp']:>4} {r['early']:>4} "
-                         f"{r['tail']:>4} {r['harm']:>4} {r['cuts']:>4} {lat:>19} {r['budget_ms']:>4.0f}  {fpb:<26} "
+                         f"{r['tail']:>4} {r['harm']:>4} {r['cuts']:>4} {r['alive']:>3} {lat:>19} {r['budget_ms']:>4.0f}  {fpb:<26} "
                          f"{r['verdict']} ({r['passed_seeds']}/{r['seeds']})")
         tot_fp = sum(r["fp"] for r in rows)
         tot_miss = sum(r["miss"] for r in rows)
@@ -354,12 +393,38 @@ class Results:
         tot_tp = sum(r["tp"] for r in rows)
         npass = sum(1 for r in rows if r["verdict"] == "PASS")
         lines.append("-" * len(hdr))
-        lines.append(f"{len(rows)} scenarios, {npass} pass; events {tot_ev}, TP {tot_tp}, miss {tot_miss}, FP {tot_fp}; "
-                     f"wall {self.meta.get('wall_s', 0):.1f} s")
+        tot_alive = sum(r["alive"] for r in rows)
+        lines.append(f"{len(rows)} scenarios, {npass} pass; events {tot_ev}, TP {tot_tp}, miss {tot_miss}, FP {tot_fp}"
+                     f"{f', ALIVE after cuts {tot_alive}' if tot_alive else ''}; wall {self.meta.get('wall_s', 0):.1f} s")
         return "\n".join(lines)
 
+    def totals(self) -> dict[str, Any]:
+        """Whole-run-set totals + latency distribution (first TP per visible event, ms, nearest-rank quantiles)."""
+        rows = self.summary_rows()
+        lats = sorted(l for r in self.runs for l in r.latencies_ms)
+
+        def q(p: float) -> float | None:
+            if not lats:
+                return None
+            return lats[min(len(lats) - 1, max(0, int(math.ceil(p * len(lats))) - 1))]
+
+        return {
+            "scenarios": len(rows), "pass": sum(1 for r in rows if r["verdict"] == "PASS"),
+            "events": sum(r["events"] for r in rows), "tp": sum(r["tp"] for r in rows), "miss": sum(r["miss"] for r in rows),
+            "fp": sum(r["fp"] for r in rows), "early": sum(r["early"] for r in rows), "tail": sum(r["tail"] for r in rows),
+            "harm": sum(r["harm"] for r in rows), "dup": sum(r["dup"] for r in rows), "cuts": sum(r["cuts"] for r in rows),
+            "alive": sum(r["alive"] for r in rows),
+            "lat_n": len(lats), "lat_min": lats[0] if lats else None, "lat_p50": q(0.5), "lat_p75": q(0.75), "lat_p90": q(0.9),
+            "lat_p95": q(0.95), "lat_max": lats[-1] if lats else None,
+            "le300": sum(1 for l in lats if l <= 300.0),
+            "in_budget": sum(1 for r in self.runs for l in r.latencies_ms if l <= r.latency_budget_ms),
+            "fp_scenarios": sorted({r["scenario"] for r in rows if r["fp"]}),
+            "miss_scenarios": sorted({r["scenario"] for r in rows if r["miss"]}),
+            "alive_scenarios": sorted({r["scenario"] for r in rows if r["alive"]}),
+        }
+
     def to_json(self) -> dict[str, Any]:
-        return {"meta": self.meta, "summary": self.summary_rows(), "runs": [r.to_dict() for r in self.runs]}
+        return {"meta": self.meta, "summary": self.summary_rows(), "totals": self.totals(), "runs": [r.to_dict() for r in self.runs]}
 
     def dump(self, path: str) -> None:
         with open(path, "w") as fh:
@@ -382,15 +447,20 @@ def evaluate(detector_factory: Callable[[Sequence[float]], Any], scenarios: Iter
     return res
 
 
-def _main() -> None:   # pragma: no cover - convenience CLI: python -m rtasim.harness [--closed] [scenario ...]
+def _main() -> None:   # pragma: no cover - CLI: python -m rtasim.harness [--closed] [--adversarial] [--mode=watch|ringout] [scenario ...]
     import sys
     from x32mcp.descriptor import Descriptor
     from x32mcp.detector import DetectorConfig, FeedbackDetector
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     closed = "--closed" in sys.argv
+    mode = ([a[7:] for a in sys.argv[1:] if a.startswith("--mode=")] or ["watch"])[0]
     cfg = DetectorConfig.from_descriptor(Descriptor.load())
-    res = evaluate(lambda bh: FeedbackDetector(cfg, bh), args or None, closed_loop=closed, notch_cfg=cfg,
-                   label="current FeedbackDetector")
+    scen: Any = args or None
+    if "--adversarial" in sys.argv:
+        from .scenarios_adversarial import ADVERSARIAL
+        scen = [ADVERSARIAL[a] for a in args] if args else list(ADVERSARIAL.values())
+    res = evaluate(lambda bh: FeedbackDetector(cfg, bh, mode=mode), scen, closed_loop=closed, notch_cfg=cfg,
+                   label=f"current FeedbackDetector ({mode})")
     print(res.table())
     out = [a[7:] for a in sys.argv[1:] if a.startswith("--json=")]
     if out:

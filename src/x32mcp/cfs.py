@@ -73,7 +73,6 @@ Decisions where DESIGN.md is silent:
 from __future__ import annotations
 
 import asyncio
-import dataclasses
 import json
 import logging
 import math
@@ -97,7 +96,6 @@ __all__ = ["CfsError", "CfsMode", "CfsState", "STAGES", "ReportStore", "CfsManag
 
 log = logging.getLogger(__name__)
 
-_FLOOR_FIRST_FRAME_S = 0.3  # no RTA frame within this: the source is idle, skip calibration
 
 STAGES: tuple[str, ...] = ("PREFLIGHT", "SNAPSHOT", "ARM", "RAISE", "HOLD", "NOTCH", "VERIFY", "BACKOFF", "DONE", "ABORT")
 
@@ -119,8 +117,6 @@ class CfsError(Exception):
         self.code = code
         self.message = message
         self.details: dict[str, Any] = details
-        self._floor_db: float | None = None
-        self._gate_db: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {"code": self.code, "message": self.message}
@@ -821,61 +817,6 @@ class CfsManager:
         self._ids.add(sid)
         return sid
 
-    async def _calibrate_floor(self, cfg: DetectorConfig) -> DetectorConfig:
-        """Raise ``min_level_db`` to sit above the room's measured noise floor.
-
-        A fixed gate cannot work: at M7 the configured -60 dB sat 8 dB *below* the studio's own
-        floor (48 Hz rumble peaking at -51.7 dB), so ordinary room noise qualified as a feedback
-        candidate and spent the notch budget before the operator touched a fader. A pub, a field
-        and a studio all differ, so measure instead of guessing: sample the RTA for
-        ``floor_sample_s`` with the loop quiet, take the loudest band, and gate
-        ``floor_margin_db`` above it. The configured value is a floor for the floor - calibration
-        only ever raises it.
-        """
-        margin = float(self._d.detector.get("floor_margin_db", 0.0) or 0.0)
-        secs = float(self._d.detector.get("floor_sample_s", 0.0) or 0.0)
-        want = int(self._d.detector.get("floor_sample_frames", 40) or 40)
-        if margin <= 0.0 or secs <= 0.0 or self._frames is None:
-            return cfg
-        peaks: list[float] = []
-        done = asyncio.Event()
-
-        def grab(frame: Any) -> None:
-            if frame.values:
-                peaks.append(max(frame.values))
-                if len(peaks) >= want:
-                    done.set()
-
-        first = asyncio.Event()
-        unsub = self._frames.subscribe(lambda f: (grab(f), first.set()) and None)
-        try:
-            # Bail out at once if nothing is streaming: _open_session also runs on the preflight
-            # (pending) call of ring_out, where the frame source is idle, and stalling there for
-            # the whole window delays a call that does no detection at all.
-            try:
-                await asyncio.wait_for(first.wait(), timeout=_FLOOR_FIRST_FRAME_S)
-            except asyncio.TimeoutError:
-                return cfg
-            # Then enough frames, or the time limit — whichever comes first.
-            try:
-                await asyncio.wait_for(done.wait(), timeout=secs)
-            except asyncio.TimeoutError:
-                pass
-        finally:
-            unsub()
-        if not peaks:
-            log.warning("cfs: no RTA frames while calibrating the noise floor; keeping %.1f dB",
-                        cfg.min_level_db)
-            return cfg
-        floor = max(peaks)
-        gate = max(cfg.min_level_db, floor + margin)
-        self._floor_db, self._gate_db = floor, gate
-        if gate > cfg.min_level_db:
-            log.info("cfs: room floor %.1f dB over %d frame(s) -> gating candidates at %.1f dB (was %.1f)",
-                     floor, len(peaks), gate, cfg.min_level_db)
-            return dataclasses.replace(cfg, min_level_db=gate)
-        return cfg
-
     async def _open_session(self, mode: CfsMode, t: Target, pf: Preflight, notch_budget: int | None) -> _Session:
         cfg = self._cfg
         budget = cfg.notch_budget_default if notch_budget is None else int(notch_budget)
@@ -887,8 +828,11 @@ class CfsManager:
         bus_int = 0 if t.family == "main" else int(t.index)
         nc = NotchController(cfg, self._geq_hz, self._policy.validate_notch, budget=budget, existing=existing)
         writer = _DeskGeqWriter(self._desk, self._policy, bus_int, ins.fx_slot, ins.side, existing)
-        cfg = await self._calibrate_floor(cfg)
-        det = FeedbackDetector(cfg, self._band_hz)
+        # (no arm-time 'noise floor calibration': the detector's per-band baseline and arm-time spectrum reference
+        # replace the absolute min_level_db gate it used to raise, and sampling 2 s here delayed arming under the
+        # not-yet-forced RTA ballistics)
+        # detector mode: ring_out owns the gain (wider LF window, active probe via note_gain_step); watch does not
+        det = FeedbackDetector(cfg, self._band_hz, mode="ringout" if mode is CfsMode.RINGOUT else "watch")
         start = float(pf.master_db)
         ses = _Session(
             session_id=self._new_id(mode.value, t), mode=mode, target=t, bus=bus_label(t), bus_int=bus_int, bus_name=pf.bus_name,
@@ -1084,6 +1028,9 @@ class CfsManager:
             if isinstance(e, DeskError) and e.code == "NOT_CONNECTED" or isinstance(e, NotConnected):
                 await self._lose_connection(ses, f"desk write failed: {e}")
             return None
+        # tell the detector the cut landed: it verifies the line's response against the bell expected at the line and
+        # classifies it (confirmed / insufficient / held / false_cut) -- which gates any deepening of this band
+        ses.det.note_cut(freq_hz=n.freq_hz, depth_db=n.depth_db, ts=ses.last_ts if ses.last_ts is not None else self._clock())
         ses.confidence[n.band] = max(ses.confidence.get(n.band, 0.0), det.confidence)
         item = self._notch_dict(ses, n)
         item.update(rta_band=det.band, rta_freq_hz=det.freq_hz, level_db=det.level_db, master_db=_db1(ses.master_db))
@@ -1191,6 +1138,9 @@ class CfsManager:
                 ses.master_db = after
                 reason = f"master clamped at {format_db(after)} dB"
                 break
+            # tell the detector about our own gain step: a line that answers a +1 dB step with much more than
+            # +1 dB is loop-gain dependent (the active probe, loop brief §1.5); one that follows it 1 dB/dB is not
+            ses.det.note_gain_step(after - ses.master_db, ses.last_ts if ses.last_ts is not None else self._clock())
             ses.master_db = after
             ses.max_master_db = max(ses.max_master_db, after)
             await self._stage(ses, "RAISE")
@@ -1389,6 +1339,12 @@ class CfsManager:
             "notches": mine, "existing_cuts": pre,
             "detections": len(ses.detections), "detection_log": ses.detections[-_MAX_DETECTIONS_IN_REPORT:],
             "notch_log": ses.notch_log, "stages": ses.stages, "frames": ses.frames,
+            # the detector's own account of the instrument and of each cut: analyser flags at the end (HOT_SPECTRUM /
+            # PEAK_HOLD_SUSPECTED / SLOW_RELEASE / PROGRAMME_PRESENT / FROZEN_LINES), its measured display release rate and
+            # arm-time level reference, and the post-cut verdicts (confirmed / insufficient / held / false_cut / ambiguous)
+            "detector": {"flags": sorted(ses.det.flags), "release_db_per_s": ses.det.release_db_per_s,
+                         "arm_p95_db": ses.det.arm_p95_db, "loud_threshold_db": ses.det.loud_threshold_db,
+                         "cut_verdicts": list(ses.det.cut_log)},
             "final_stage": ses.final_stage, "aborted": aborted, "abort_reason": ses.abort_reason,
             "connection_lost": ses.connection_lost, "restored": ses.restored,
             "preflight": {"warnings": list(ses.warnings), "mics": [m.to_dict() for m in ses.preflight.mics],

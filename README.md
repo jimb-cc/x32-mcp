@@ -223,9 +223,15 @@ the standard remedy is to find the offending frequencies and cut them before the
 out**.
 
 **What CFS² does.** It subscribes to the console's RTA (100 bands, 20 frames a second), watches for
-the signature of a runaway — a band far above its neighbours, *persistent*, and *still growing* —
-and cuts that band on a graphic EQ. The growth test is what separates feedback from music: a
-sustained vocal note is loud and persistent but **plateaus**; feedback keeps climbing.
+the signature of a regenerating loop — a *narrow* spectral line with *no harmonic family* (a note
+carries partials at exact ratios that share its onset and envelope; a linear loop carries none),
+*rock-steady in pitch* (vibrato, scoops and glides move; a room mode cannot), *sustained*, and then
+one piece of positive evidence: the line was watched *growing* exponentially, it sits at the desk's
+clip / an implausibly *loud* level, it was *already established* when the session armed, or it
+*over-responds* to the server's own gain steps — and cuts that band on a graphic EQ. Growth is
+evidence, never a requirement: a howl caught by a limiter plateaus like a held note, and low bands
+"grow" on every bass onset because a 1/10-octave filter cannot settle faster than ~1/Δf. The full
+design and its measured behaviour are in [`docs/DETECTOR.md`](docs/DETECTOR.md).
 
 Three levels, each building on the last:
 
@@ -676,15 +682,26 @@ the desk back into the file while keeping the human-only columns. `discover_mics
 **How it works.** The console's RTA (`/meters/15`: 100 log-spaced bands, 20 Hz–20 kHz, one
 frame every 50 ms, values in dB) is pointed at the bus under test (`/-prefs/rta/source`, post-EQ,
 verified through `/-stat/rtasource`). A pure-Python detector
-([`detector.py`](src/x32mcp/detector.py)) runs *inside the server* on every frame:
+([`detector.py`](src/x32mcp/detector.py), design and evidence in [`docs/DETECTOR.md`](docs/DETECTOR.md))
+runs *inside the server* on every frame and decides with explicit physical predicates, each with its
+own `device.yaml` threshold and a `reasons` string in the report:
 
-- **prominence** ≥ 12 dB above the median of the ±3 neighbouring bands (and ≥ −60 dB),
-- **persistence** ≥ 3 consecutive frames on a stable band (±1),
-- **growth**: a monotonic, roughly linear rise of ≥ 6 dB/s (20 dB/s = full score); a held
-  note plateaus and scores 0 on growth, which is what stops the system from notching a
-  sustained vocal or a bass note.
+- **BASE** = a narrow line (cluster prominence ≥ 12 dB, narrowness ≥ 8 dB) ∧ no co-moving harmonic
+  family (H2..H5 at the exact 1/10-octave offsets) ∧ centroid stable over 5 frames (±30 cents)
+  ∧ sustained ∧ new energy over the band's baseline (or present at arm) ∧ inside the session's
+  frequency window (160 Hz watch / 63 Hz ring_out / lower when an LF feedback path is declared);
+- **STRONG** = BASE ∧ one of: RISE (own rise ≥ 6 dB after the band's analyser settle time, net
+  of common-mode gain moves), FAST-RISE (≥ 3 watched increments into a plateau, ≥ 15 dB), LOUD
+  (clip flag, or above the arm-referenced loud line and 6 dB above everything else), AT-ARM (an
+  established family-less line when the session armed; in ring_out only after the probe), PROBE
+  (over-response to the server's own master steps in ring_out);
+- **MODERATE** (BASE only) is published as `cfs.candidate` for the caller's policy and never cut
+  by the detector; a line that follows the gain steps 1 dB/dB is STATIONARY (a room source), and
+  after each cut the detector verifies the band's response (`confirmed` / `insufficient` / `held`
+  / `false_cut`) before any deepening.
 
-Confidence = 0.3·prominence + 0.2·persistence + 0.5·growth, threshold 0.7. A detection becomes
+There is no weighted confidence sum and no absolute level gate (`confidence` is a monotone display
+number ≥ 0.7 on emitted lines). A detection becomes
 a −3 dB cut on the nearest band of a **31-band dual-mono GEQ (GEQ2)** inserted on that bus from
 the FX rack (insert-only slots 5–8; one dual slot serves two buses via its L and R sides).
 Re-detections deepen the same notch in −3 dB steps to −9 dB; adjacent-band detections merge;
