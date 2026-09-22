@@ -91,6 +91,7 @@ git push -u origin review/all-integrated   # optional: everything, pre-merged
 | `review/discover-mics-signal` | candidates annotated with live input level; "no input signal" warnings; FakeDesk `unplugged` | 2 C6, 6 | 1 |
 | `review/main-lr-stereo-geq` | stereo strip takes a whole slot / both GEQ2 sides written / never lent; two-leg main in the fake | 2 C1 | 1 (+1 changed) |
 | `review/kill-check`, `review/acceptance-gate` (independent reviewer) | K-series kill-check scenarios + strict `survived` verdict; the pre-registered acceptance gate script. Both merged into `detector-cfs` | 1.6 | – |
+| *(design only)* `docs/PEQ_ACTUATOR_DESIGN.md` | the bus PEQ as notch actuator: the next iteration after the desk tests; not a PR yet | 6, 8 | – |
 | `review/all-integrated` | all of the above merged except `detector-cfs` (which is stacked on it), conflicts resolved | | 1035 pass |
 
 What is deliberately *not* in a branch (recommendations with designs and test recipes in the sections): the head-amp `/-ha`
@@ -962,6 +963,14 @@ Smaller than the five workstreams, each verified by reading the code; most are o
   an untested firmware is accepted silently. Warn (do not refuse) on mismatch; the node-width UNCONFIRMED items make this matter.
 * **The highest-leverage missing fixture** is a committed FW 4.13 `dump_desk_state` JSON from the M5 desk (`snapshots/` is empty
   in git). Every parser/renderer/diff/restore test currently compares our formatter with our parser.
+* **The actuator should be the bus PEQ, not the GEQ** (found after the review, from the engineer and from the ProSoundWeb LAB
+  thread on X32 ring-out): a ring is < 1/10 octave wide and almost never on a 1/3-octave centre; a GEQ band removes ~an octave of
+  programme; experienced engineers use the bus's 6-band parametric with the RTA overlay. The engineer applies no EQ to the mix
+  buses beyond an occasional HPF, so the bands are free. `docs/PEQ_ACTUATOR_DESIGN.md` is the full design (RBJ maths, allocation
+  rules, safety, tests, a ~1.4 k-line first slice in six PRs): Q 6 first (a ±0.03-octave centroid error costs < 0.4 dB of kill; a
+  Q-6 notch at −6 dB removes less programme than one GEQ slider at −3), −3 dB steps to −12, notches left in place and recorded,
+  Main LR stays on the GEQ, default stays `geq` until desk test 3″ shows the bus EQ at the post-EQ tap. Nothing in the detector's
+  decisions changes — only the cut lands where the ring is.
 * **`discover_mics`** (HANDOVER §4b: 7 candidates, 1 microphone) — PR `discover-mics-signal` annotates candidates with the live
   input meter and flags "no input signal"; it also gives FakeDesk an `unplugged` switch, the first of §2.3's realism switches.
 
@@ -1025,6 +1034,13 @@ so most of it needs no sound in the room at all).
    difference — i.e. every `AnalyserSettings` constant in `tests/rtasim/physics.py`. Ten minutes; makes the corpus true.
 3. **GEQ bell shape** — pink noise (oscillator `type` PINK) into the bus, GEQ PRE, one band −6 dB: read the RTA at 0/±1/±2/±3
    RTA bands. Sets the RBJ Q in the corpus and the flank-pair rule (§1.3).
+3′. **PEQ bell shape** — oscillator sine into the bus, RTA on the bus post-EQ, PEQ band 2 at the tone at −6/−12 dB, Q 6.1 and 10,
+   at 2 kHz and 8 kHz; read the RTA at 0/±1/±2/±3 bands and compare with `PEQ_ACTUATOR_DESIGN.md` §2.1 (fixes the Q-scale bracket;
+   shows the bilinear warping above ~6 kHz).
+3″. **Tap order** — the same notch with the bus EQ on/off and with a PRE and a POST GEQ insert: the post-EQ RTA must move with the
+   bus EQ. This gates switching the default actuator to `auto` (PEQ on buses).
+3‴. **PEQ pushes** — turn a bus-EQ encoder mid-session (must arrive as a `/bus/NN/eq/B/g` push); switch the bus EQ off on the console
+   (must abort); check whether `/xremote` echoes our own eq writes.
 4. **Read-after-write latencies** — `python scripts/measure_settle.py <desk> --trials 30 --second-socket [--fx-slot 8]` (PR
    `read-after-write`); paste the printed `timing:` block into `device.yaml`. Note especially: stale replies after SET (is the
    desk in-order-synchronous per class?), `/` echo vs applied, FX type-load time.
