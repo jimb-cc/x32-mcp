@@ -49,7 +49,8 @@ TAIL (after the episode: stale display), HARM (±1 band of a harmonic of a howl 
 acoustic clip), FP (everything else; reported with the 1/3-oct GEQ band it would have cut). A run passes iff FP = 0, miss = 0 and
 every latency ≤ the scenario budget — and, in closed loop, no ring **survived**: still regenerating (e_eff > 0) at the last
 frame although the detector saw it or a cut landed within one GEQ band of it (`RunResult.survived`, table column `surv`;
-misses are not survivors, open loop has none). Closed loop: each detection → `x32mcp.detector.NotchController.plan` (device.yaml: −3 dB
+misses are not survivors, open loop has none; every applied cut is also handed to the detector's `note_cut(freq_hz, depth_db, None)`
+when it has one, as `cfs.py` does after each GEQ write, so verdict-gated deepening counts). Closed loop: each detection → `x32mcp.detector.NotchController.plan` (device.yaml: −3 dB
 steps to −9, budget 6) → RBJ bell (Q 3) written into the live renderer **one frame later** (OSC write lands during the next
 frame); programme, beds and the ring's excess all see the PRE-insert cut.
 

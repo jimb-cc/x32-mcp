@@ -34,6 +34,8 @@ although the detector saw it (a TP/DUP/EARLY of its episode) or a cut landed wit
 its job and the notch policy did not finish it: a plateaued howl with excess >= the cut depth answers a cut
 with exactly the cut depth and sits flat (limiter/compressor/clip re-pins it), which is what programme
 through the same EQ does too, so a policy that stops on "dropped ~ bell, flat" leaves the room howling.
+Every applied cut is also handed to ``det.note_cut(freq_hz, depth_db, None)`` when the detector has that hook
+(cfs.py does the same after each GEQ write), so verdict-gated deepening is exercised as on the desk.
 A closed-loop run fails if any ring survived (``RunResult.survived``, table column ``surv``). Misses are
 not survivors (nothing was done about them); open loop never has survivors (nothing is cut).
 ``rings_end`` additionally records every ring's state at the last frame (level, e_eff, and ``alive`` = e_eff above
@@ -329,7 +331,10 @@ def run_one(detector_factory: Callable[[Sequence[float]], Any], scenario: Scenar
                 _, band, gain, ts0 = pending.pop(0)
                 r.set_geq_gain(band, gain)
                 cuts.append((ts0, band, gain))
-                if hasattr(det, "note_cut"):        # what cfs does after its GEQ write: the detector's post-cut watch
+                if hasattr(det, "note_cut"):
+                    # what cfs.py does after every GEQ write: hand the detector its own cut so a verdict-gated
+                    # deepening policy (post-cut watch) is exercised here exactly as on the desk; a detector without
+                    # the hook is unaffected. Same call as the implementer's harness (review/detector).
                     det.note_cut(float(geq_band_hz[band - 1]), float(gain), None)
             fr = r.step_frame()
             if fr is None:
