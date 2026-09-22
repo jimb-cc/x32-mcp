@@ -1406,6 +1406,7 @@ class CfsManager:
         return {
             "config": pol.cfg.to_dict(),
             "lf_edge": self._lf_edge_dict(ses),
+            "lf_feedback_possible": pol.lf_feedback_possible,
             "programme_present": {"detected": pol.programme_present, "first_seen_s": pol.programme_first_seen_s,
                                   "armed_in_silence": pol.armed_in_silence, "arm_reference_refreshed_s": pol.arm_ref_refreshed_s,
                                   "emit_moderate_forced_off": pol.emit_moderate_forced_off},
@@ -1981,10 +1982,12 @@ class CfsManager:
         pre = [float(h[2]) for h in list(c.hist)[-8:]]
         before = median(pre) if pre else float(c.level_db)
         start = ses.master_db
+        ts0 = ses.last_ts if ses.last_ts is not None else self._clock()
         if math.isinf(start) or start - cfg.drop_db < FADER_FLOOR_DB:
+            pol.backoff_log.append({"t": self._t_rel(pol, ts0), "freq_hz": round(freq, 1), "rta_band": band,
+                                    "verdict": f"not run: master at {format_db(start)} dB cannot come down {cfg.drop_db:g} dB"})
             return
         target = start - cfg.drop_db
-        ts0 = ses.last_ts if ses.last_ts is not None else self._clock()
         await self._stage(ses, "PROBE", freq_hz=round(freq, 1), rta_band=band, from_db=_db1(start), to_db=_db1(target))
         try:
             after = await self._write_master(ses, target, force=True)      # lowering: emergency lane, never clamped
