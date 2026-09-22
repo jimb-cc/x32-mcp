@@ -538,6 +538,9 @@ class DashboardServer:
             "stage": st.get("stage"),
             "connection": self._connection(),
             "rta_source": st.get("rta_source"),
+            # policy layer (docs/CFS_POLICY.md §4): the live "suspicious, not cut" list and whether the bus strip shows the alert colour
+            "alert": bool(st.get("alert")),
+            "candidates": list(st.get("candidates") or []),
         }
 
     def notches_message(self) -> dict[str, Any]:

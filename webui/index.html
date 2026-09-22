@@ -279,7 +279,8 @@ function applyState(s) {
   $('bus').textContent = busLabel(s.bus);
   $('busName').textContent = (s.bus_name || '') + (s.session_id ? '  ·  ' + s.session_id : '') || ' ';
   $('master').innerHTML = ''; $('master').append(fmtDb(s.master_db), Object.assign(document.createElement('small'), { textContent: ' dB' }));
-  $('stage').textContent = 'stage ' + (s.stage || '—');
+  $('stage').textContent = 'stage ' + (s.stage || '—') + (s.alert ? '  ·  ALERT ' + ((s.candidates || []).length || '') : '');
+  $('stage').style.color = s.alert ? 'var(--red)' : '';
   $('budget').textContent = s.budget_left == null ? '—' : s.budget_left;
   $('rtaSrc').textContent = s.rta_source || '—';
   const cand = s.candidate, conf = cand ? Math.max(0, Math.min(1, Number(cand.confidence) || 0)) : 0;
