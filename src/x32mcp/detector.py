@@ -318,6 +318,8 @@ class DetectorConfig:
                                          #   a killed loop falls away by far more than the bell [L §4.1 / P13]
     cut_false_tol_db: float = 1.0        # drop within bell +- this and flat at cut_verify_s, line still there => 'held' (programme through
     cut_verify_s: float = 1.5            #   the EQ, or a howl held by a limiter/compressor with more excess than the cut: passively identical);
+    held_deepen_excess_db: float = 20.0  #   (see below) a held plateau-class line that rose >= this over its band's baseline is deepened even
+                                         #   when quiet: a howl held by a CHANNEL compressor sits well under the loud-ish line [K4, L §1.4(2)]
                                          #   the line ENDS on its own after the response window => 'false_cut' (a loop that survived a cut
                                          #   does not switch itself off: it was a note; never re-emitted); drop < bell - this after the
                                          #   response window => 'insufficient'. A 'held'/'insufficient' line that was cut on plateau-class
@@ -604,6 +606,7 @@ class Candidate:
     cuts_held: int = 0             # consecutive held/insufficient verdicts on this line (report)
     emit_evidence: tuple[str, ...] = ()   # evidence names at the latest emission ('fastrise', 'loud', 'probe', 'established_at_arm', 'rise')
     emit_peak_db: float | None = None     # peak level at the latest emission
+    emit_excess_db: float | None = None   # excess over the band's baseline at the latest emission
     false_cut: bool = False        # a cut went through this line like programme through an EQ: never re-emitted (klass FALSE_CUT)
     false_cut_level_db: float | None = None   # cluster level when false_cut was declared (fresh growth above it re-admits the line)
     ever_qualified: bool = False   # has reached P1 qualification at least once (programme-flux bookkeeping)
@@ -758,6 +761,48 @@ class FeedbackDetector:
         if len(self._steps) > 64 or (self._steps and self._steps[0][1] < horizon and len(self._steps) > 8):
             self._steps = [st for st in self._steps if st[1] >= horizon][-64:]
 
+    def note_emission(self, cand: "Candidate", ts: float | None = None, *, reason: str = "tier_b") -> bool:
+        """cfs cut the line ``cand`` (one of :attr:`candidates`) BY POLICY -- tier B, an at-arm alert it later acted on, a
+        back-off probe -- without a :class:`Detection` from :meth:`feed`. Record that emission on the track exactly as
+        ``feed()`` records its own (emission count, level and probe hits at emission, per-band cooldown) so that (1) the
+        :meth:`note_cut` verdict treats it as THE cut line -- a policy-cut ring that collapses time-locked to the write is
+        'confirmed', not a verdict-less bystander -- and (2) a later re-emission by the detector needs evidence gathered
+        since (regrowth above the cut level, LOUD without having come down, a new probe hit). ``reason`` is added to the
+        track's emission evidence; it is not plateau-class evidence, so the detector never deepens such a cut by itself.
+        Call it right before :meth:`note_cut` for the write. Returns False when ``cand`` is not a live track."""
+        if not isinstance(cand, Candidate) or not any(c is cand for c in self._cands):
+            return False
+        t = float(self.last_ts if ts is None else ts) if (ts is not None or self.last_ts is not None) else 0.0
+        c = cand
+        c.emitted += 1
+        c.last_emit_ts = t
+        c.last_emit_level_db = c.cluster_db
+        c.emit_peak_db = c.level_db if c.emit_peak_db is None else max(c.emit_peak_db, c.level_db)
+        c.emit_excess_db = c.excess_db if c.emit_excess_db is None else max(c.emit_excess_db, c.excess_db)
+        c.emit_evidence = tuple(sorted(set(c.emit_evidence) | {str(reason)}))
+        c.probe_hits_at_emit = c.probe_hits
+        self._cooldown[c.band] = t + self.cfg.cooldown_s
+        log.debug("policy emission noted: band %d (%.0f Hz) %.1f dB [%s]", c.band, c.freq_hz, c.level_db, reason)
+        return True
+
+    def note_suppressed(self, cand: "Candidate", *, reason: str = "at_arm") -> bool:
+        """cfs DECLINED to act on the :class:`Detection` that :meth:`feed` just returned for ``cand`` (the watch's at-arm
+        rule: an established-at-arm line that is neither LOUD nor prominent enough is alerted and left to the policy's tier
+        B, docs/CFS_POLICY.md §5). The emission stays on the track's record -- so the detector re-emits only on evidence
+        gathered since (regrowth, LOUD, a probe hit) -- but the AT-ARM name is withdrawn from the emission evidence and any
+        pending deepen right is cleared: a later 'held' / 'insufficient' verdict on a POLICY cut of this line must not
+        entitle the detector to deepen it by itself on the very observation cfs declined to act on (that deepening is the
+        policy's verdict-gated cadence). ``suppressed_<reason>`` is recorded in its place. Nothing else about the track
+        changes (klass, reasons, verdict machinery). Returns False when ``cand`` is not a live track."""
+        if not isinstance(cand, Candidate) or not any(c is cand for c in self._cands):
+            return False
+        c = cand
+        c.emit_evidence = tuple(sorted((set(c.emit_evidence) - {"established_at_arm"}) | {f"suppressed_{reason}"}))
+        c.cut_deepen = False
+        log.debug("emission suppressed by cfs (%s): band %d (%.0f Hz) %.1f dB; evidence now [%s]", reason, c.band, c.freq_hz, c.level_db,
+                  ",".join(c.emit_evidence))
+        return True
+
     @staticmethod
     def bell_attenuation_db(depth_db: float, offset_oct: float, q: float) -> float:
         """Attenuation (dB, >= 0) of an RBJ peaking cut of ``depth_db`` (< 0) and quality ``q`` at ``offset_oct`` octaves
@@ -890,7 +935,13 @@ class FeedbackDetector:
             # alone had e < 3 dB and cannot be 'held' as a howl, so for it (and for quiet lines: tier B's level line) the
             # ambiguity is resolved as 'a note went through the EQ': cut once, report [L §4.3 tier A/B]
             plateau_class = any(e in ("fastrise", "loud", "probe", "established_at_arm") for e in c.emit_evidence)
-            c.cut_deepen = bool(c.emitted and plateau_class and c.emit_peak_db is not None and c.emit_peak_db >= self.loudish_threshold_db)
+            # ... and is EITHER loud-ish OR rose far above its band's own baseline: a howl held by a channel compressor can
+            # sit 20-30 dB under the loud-ish line (kill-check K4: e 6.5 dB at -22 dBFS), but it still climbed tens of dB out
+            # of the bed to get there, which a soft family-less instrument attack from the bed (the wrong-cut class the level
+            # gate protects, AV02) does by far less. Bounded either way: one GEQ band, -3 dB per verified 'held', to notch_max.
+            big_rise = c.emit_excess_db is not None and c.emit_excess_db >= self.cfg.held_deepen_excess_db
+            loudish = c.emit_peak_db is not None and c.emit_peak_db >= self.loudish_threshold_db
+            c.cut_deepen = bool(c.emitted and plateau_class and (loudish or big_rise))
         else:
             c.cuts_held = 0
         self.cut_log.append({"ts": round(ts, 3), "freq_hz": round(c.freq_hz, 1), "band": c.band, "step_db": step,
@@ -1613,6 +1664,7 @@ class FeedbackDetector:
         c.cuts_held = 0
         c.emit_evidence = ()
         c.emit_peak_db = None
+        c.emit_excess_db = None
         c.false_cut = False
         c.false_cut_level_db = None
         c.last_emit_level_db = None
@@ -2259,6 +2311,7 @@ class FeedbackDetector:
             c.last_emit_ts = ts
             c.last_emit_level_db = c.cluster_db
             c.emit_peak_db = c.level_db if c.emit_peak_db is None else max(c.emit_peak_db, c.level_db)
+            c.emit_excess_db = c.excess_db if c.emit_excess_db is None else max(c.emit_excess_db, c.excess_db)
             names = tuple(x for x in ("fastrise", "loud", "probe", "established_at_arm", "rise", "growth") if any(r.startswith(x) for r in c.reasons))
             c.emit_evidence = tuple(sorted(set(c.emit_evidence) | set(names)))
             c.probe_hits_at_emit = c.probe_hits

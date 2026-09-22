@@ -944,6 +944,7 @@ detector:
   cut_confirm_extra_db: 3      # note_cut(): drop >= bell + this (or the CUT line collapses within cut_settle_s + cut_response_s) => 'confirmed'
   cut_false_tol_db: 1.0        #   drop = bell ± this, flat, still there at cut_verify_s => 'held' (note through the EQ, or limiter-held howl
   cut_verify_s: 1.5            #   with e > cut: deepened once per verdict iff loud-ish and cut on FAST-RISE/LOUD/PROBE/AT-ARM); the line ends by
+  held_deepen_excess_db: 20.0
   cut_settle_s: 0.15           #   itself after the response window => 'false_cut' (never re-emitted); drop < bell - tol after the response
   cut_response_s: 0.3          #   window => 'insufficient' (bell = RBJ peaking-cut attenuation at the line's offset, Q geq_q_min..geq_q_max)
   geq_q_min: 2.0               # X32 GEQ bell Q UNCERTAIN: proportional-Q graphic ~2 .. true 1/3 octave 4.3 (loop brief §4.1)
