@@ -758,6 +758,29 @@ class FeedbackDetector:
         if len(self._steps) > 64 or (self._steps and self._steps[0][1] < horizon and len(self._steps) > 8):
             self._steps = [st for st in self._steps if st[1] >= horizon][-64:]
 
+    def note_emission(self, cand: "Candidate", ts: float | None = None, *, reason: str = "tier_b") -> bool:
+        """cfs cut the line ``cand`` (one of :attr:`candidates`) BY POLICY -- tier B, an at-arm alert it later acted on, a
+        back-off probe -- without a :class:`Detection` from :meth:`feed`. Record that emission on the track exactly as
+        ``feed()`` records its own (emission count, level and probe hits at emission, per-band cooldown) so that (1) the
+        :meth:`note_cut` verdict treats it as THE cut line -- a policy-cut ring that collapses time-locked to the write is
+        'confirmed', not a verdict-less bystander -- and (2) a later re-emission by the detector needs evidence gathered
+        since (regrowth above the cut level, LOUD without having come down, a new probe hit). ``reason`` is added to the
+        track's emission evidence; it is not plateau-class evidence, so the detector never deepens such a cut by itself.
+        Call it right before :meth:`note_cut` for the write. Returns False when ``cand`` is not a live track."""
+        if not isinstance(cand, Candidate) or not any(c is cand for c in self._cands):
+            return False
+        t = float(self.last_ts if ts is None else ts) if (ts is not None or self.last_ts is not None) else 0.0
+        c = cand
+        c.emitted += 1
+        c.last_emit_ts = t
+        c.last_emit_level_db = c.cluster_db
+        c.emit_peak_db = c.level_db if c.emit_peak_db is None else max(c.emit_peak_db, c.level_db)
+        c.emit_evidence = tuple(sorted(set(c.emit_evidence) | {str(reason)}))
+        c.probe_hits_at_emit = c.probe_hits
+        self._cooldown[c.band] = t + self.cfg.cooldown_s
+        log.debug("policy emission noted: band %d (%.0f Hz) %.1f dB [%s]", c.band, c.freq_hz, c.level_db, reason)
+        return True
+
     @staticmethod
     def bell_attenuation_db(depth_db: float, offset_oct: float, q: float) -> float:
         """Attenuation (dB, >= 0) of an RBJ peaking cut of ``depth_db`` (< 0) and quality ``q`` at ``offset_oct`` octaves

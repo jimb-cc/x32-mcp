@@ -606,6 +606,14 @@ def _trim_report(rep: dict[str, Any]) -> dict[str, Any]:
     out = dict(rep)
     if "detection_log" in out:
         out["detection_log_entries"] = len(out.pop("detection_log") or [])
+    pol = out.get("policy")
+    if isinstance(pol, dict):   # the tool envelope carries the policy summary, not its per-event logs (the saved report keeps them)
+        pol = dict(pol)
+        for key in ("alerts", "config"):
+            if key in pol:
+                v = pol.pop(key)
+                pol[f"{key}_entries"] = len(v) if isinstance(v, (list, dict)) else 0
+        out["policy"] = pol
     return out
 
 
@@ -1856,17 +1864,23 @@ def _watch_summary(res: dict[str, Any], verb: str) -> str:
 
 @server.tool()
 @_tool()
-async def feedback_watch(bus: int | str, notch_budget: int = 6, patch_file: str | None = None) -> dict[str, Any]:
+async def feedback_watch(bus: int | str, notch_budget: int = 6, patch_file: str | None = None,
+                         lf_feedback_possible: bool = False) -> dict[str, Any]:
     """Arm the feedback detector on bus (1..16 or 'main'): the operator raises the gain by hand and
     the server cuts up to notch_budget (1..12) GEQ notches (-3 dB steps, max -9 dB) the moment a
     ring is detected. Preflight refuses if the GEQ is missing, the bus is muted or no mic feeds it.
-    Stop with feedback_watch_stop. Tier 1."""
+    The feedback window's low edge follows the open mics' high-pass filters; set lf_feedback_possible
+    for a kick / floor-tom mic into subs or a drum fill (opens the window to 40 Hz). Quiet suspicious
+    lines the detector will not cut are alerted on the bus's scribble strip (it turns red while one is
+    live) and in cfs_status. Stop with feedback_watch_stop. Tier 1."""
     a = _app()
     _desk()
     budget = _int_arg(notch_budget, "notch_budget", 1, 12)
     patch = _load_patch(patch_file)
-    res = await a.cfs.feedback_watch(_bus_target(bus), notch_budget=budget, patch=patch)
-    return _ok(_watch_summary(res, "Feedback watch armed") + f"; budget {budget} notch(es)", patch_file=patch_file, **res)
+    res = await a.cfs.feedback_watch(_bus_target(bus), notch_budget=budget, patch=patch, lf_feedback_possible=bool(lf_feedback_possible))
+    le = res.get("lf_edge") or {}
+    extra = f"; feedback window from {le.get('window_low_hz'):g} Hz ({le.get('from')})" if isinstance(le.get("window_low_hz"), (int, float)) else ""
+    return _ok(_watch_summary(res, "Feedback watch armed") + extra + f"; budget {budget} notch(es)", patch_file=patch_file, **res)
 
 
 @server.tool()
@@ -1908,10 +1922,14 @@ async def cfs_status() -> dict[str, Any]:
         )
     else:
         cand = st.get("candidate")
+        alerts = st.get("candidates") or []
         summary = (
             f"CFS² {st['mode']} on {'Main LR' if st.get('bus') == 'main' else 'Bus ' + str(st.get('bus'))} '{st.get('bus_name')}': master {_db_from_float(st.get('master_db'))}, "
             f"budget left {st.get('budget_left')}, stage {st.get('stage')}, {len(st.get('notches') or [])} notch(es)"
             + (f", candidate {_hz(cand.get('freq_hz'))} confidence {cand.get('confidence'):.2f}" if cand else "")
+            + (f"; ALERT: {len(alerts)} suspicious line(s) not cut: "
+               + ", ".join(f"{_hz(c.get('freq_hz'))} {c.get('alert') or c.get('klass')} {c.get('level_db')} dBFS"
+                           + (f" (cut {c.get('cut_verdict')})" if c.get('cut_verdict') else "") for c in alerts[:4]) if alerts else "")
         )
     return _ok(summary, frames=src, **st)
 
@@ -1933,14 +1951,17 @@ async def ring_out(
     dwell_ms: int = 1500,
     notch_budget: int = 6,
     patch_file: str | None = None,
+    lf_feedback_possible: bool = False,
     confirm_token: str | None = None,
 ) -> dict[str, Any]:
     """Automatic ring-out of bus (1..16 or 'main'): snapshot, then raise the bus master in step_db
     steps (dwell_ms each) up to target_gain_db (default and hard ceiling 0 dB), cutting up to
     notch_budget GEQ notches as rings appear; stops at the target or the budget, backs off 3 dB and
-    writes a report. Nobody may play during the run. Refused in show mode. TIER 2 confirmation
-    dance: the first call runs preflight and returns the plan + confirm_token; call again with it
-    after the user has confirmed the open-mic list. Runs for up to several minutes."""
+    writes a report. Nobody may play during the run (programme detected during the run is reported
+    and quiet lines are then only alerted). lf_feedback_possible: as for feedback_watch. Refused in
+    show mode. TIER 2 confirmation dance: the first call runs preflight and returns the plan +
+    confirm_token; call again with it after the user has confirmed the open-mic list. Runs for up
+    to several minutes."""
     a = _app()
     desk = _desk()
     a.policy.check_show_mode_allows("ring_out")
@@ -1963,6 +1984,7 @@ async def ring_out(
     payload = {
         "bus": _prov.bus_label(t), "target_gain_db": None if target_gain_db is None else float(target_gain_db),
         "step_db": step, "dwell_ms": dwell, "notch_budget": budget, "patch_file": patch_file,
+        "lf_feedback_possible": bool(lf_feedback_possible),
         # what the user is actually asked to confirm: the live mics this run will drive into feedback
         "open_mics": [int(m.ch) for m in pf.included_mics],
     }
@@ -1972,6 +1994,7 @@ async def ring_out(
         f"(dwell {dwell} ms), cutting up to {budget} notch(es) on GEQ {ins.sel if ins else '?'}; open mics: "
         + (", ".join(f"Ch {m.ch} '{m.name}'" + (f" ({m.owner})" if m.owner else "") for m in pf.included_mics) or "none")
         + (". Warnings: " + "; ".join(pf.warnings) if pf.warnings else "")
+        + (". LF feedback declared possible (feedback window from 40 Hz)" if lf_feedback_possible else "")
         + ". Nobody may play or sing during the run."
     )
     pending = _confirm("ring_out", summary, payload, confirm_token, preflight=pf.to_dict(), target_db=target)
@@ -1979,7 +2002,8 @@ async def ring_out(
         return pending
     timeout = _ring_out_timeout(pf.master_db, target, step, dwell, budget)
     rep = await asyncio.wait_for(
-        a.cfs.ring_out(t, target_gain_db=target_gain_db, step_db=step, dwell_ms=dwell, notch_budget=budget, patch=patch),
+        a.cfs.ring_out(t, target_gain_db=target_gain_db, step_db=step, dwell_ms=dwell, notch_budget=budget, patch=patch,
+                       lf_feedback_possible=bool(lf_feedback_possible)),
         timeout=timeout,
     )
     return _ok(_report_summary(rep), **_trim_report(rep))

@@ -71,6 +71,7 @@ __all__ = [
     "band_for_hz",
     "encode_meter_blob",
     "encode_meter_datagram",
+    "force_rta_ballistics",
     "lin_to_db",
     "parse_meter_blob",
     "parse_meter_datagram",
@@ -555,6 +556,7 @@ class _Tone:
     growth: float = 0.0  # rings: dB/s
     cap: float = 0.0  # rings: ceiling dB
     age: int = 0  # notes: frames since injection
+    rise_frames: int = 5  # notes: frames the NOTE_RISE_DB onset ramp takes (1 = arrives within one frame)
 
 
 class SyntheticRta(_Emitter):
@@ -641,10 +643,13 @@ class SyntheticRta(_Emitter):
     def stop_ring(self, freq_hz: float) -> bool:
         return self._rings.pop(self.band_for_hz(freq_hz), None) is not None
 
-    def inject_note(self, freq_hz: float, level_db: float) -> int:
-        """Start (or replace) a held note that rises over ~5 frames to ``level_db`` and stays."""
+    def inject_note(self, freq_hz: float, level_db: float, *, rise_frames: int | None = None) -> int:
+        """Start (or replace) a held note that rises ``NOTE_RISE_DB`` over ``rise_frames`` frames (default
+        ``NOTE_RISE_FRAMES`` = 5: what a held guitar note looks like; 1 = a source that arrives within one frame,
+        e.g. a howl slamming into a limiter faster than the frame rate, or a switched-on tone) to ``level_db`` and stays."""
         b = self.band_for_hz(freq_hz)
-        self._notes[b] = _Tone(b, float(freq_hz), float(level_db))
+        n = self.NOTE_RISE_FRAMES if rise_frames is None else max(1, int(rise_frames))
+        self._notes[b] = _Tone(b, float(freq_hz), float(level_db), rise_frames=n)
         return b
 
     def stop_note(self, freq_hz: float) -> bool:
@@ -682,7 +687,8 @@ class SyntheticRta(_Emitter):
 
     @property
     def notes(self) -> list[dict[str, Any]]:
-        return [{"band": n.band, "freq_hz": n.hz, "level_db": n.level, "age_frames": n.age} for n in self._notes.values()]
+        return [{"band": n.band, "freq_hz": n.hz, "level_db": n.level, "age_frames": n.age, "rise_frames": n.rise_frames}
+                for n in self._notes.values()]
 
     @property
     def cuts(self) -> dict[int, float]:
@@ -690,7 +696,7 @@ class SyntheticRta(_Emitter):
 
     # -- generation --------------------------------------------------------------------------
     def _note_level(self, n: _Tone) -> float:
-        rise = max(0.0, 1.0 - n.age / self.NOTE_RISE_FRAMES)
+        rise = max(0.0, 1.0 - n.age / max(1, n.rise_frames))
         return n.level - self.NOTE_RISE_DB * rise
 
     def _spread(self, contrib: list[list[float]], band: int, level: float) -> None:
@@ -999,6 +1005,41 @@ _RESTORABLE_PREFS = (("source", "source_param", "/-prefs/rta/source"), ("pos", "
                      ("autogain", "autogain_param", "/-prefs/rta/autogain"), ("det", "det_param", "/-prefs/rta/det"),
                      ("decay", "decay_param", "/-prefs/rta/decay"), ("peakhold", "peakhold_param", "/-prefs/rta/peakhold"),
                      ("gain", "gain_param", "/-prefs/rta/gain"))
+
+
+async def force_rta_ballistics(conn: Any, d: Descriptor, *, read_timeout_s: float = 1.0) -> dict[str, Any]:
+    """Re-assert the analyser ballistics the detector depends on -- ``decay`` at its minimum (raw 0.0) and
+    ``peakhold`` OFF (0) -- mid-session. :func:`set_rta_source` forces them at arm; this is for when the
+    detector's ``PEAK_HOLD_SUSPECTED`` / ``FROZEN_LINES`` flags say somebody changed them on the console since
+    (a peak-held display freezes lines into dead-flat prominent bands; a long release stretches every note).
+    Unconditional writes (a read that lies is exactly the failure mode), preceded by best-effort reads for the
+    report. Returns ``{"decay_before", "peakhold_before", "written": [...], "failed": [...]}``; never raises on a
+    failed write (logged and listed)."""
+    rta = d.rta
+    decay_addr = rta.get("decay_param", "/-prefs/rta/decay")
+    ph_addr = rta.get("peakhold_param", "/-prefs/rta/peakhold")
+
+    async def _read(addr: str) -> Any:
+        try:
+            return await asyncio.wait_for(conn.get(addr), timeout=read_timeout_s)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            log.debug("rta: reading %s failed: %s", addr, e)
+            return None
+
+    out: dict[str, Any] = {"decay_before": await _read(decay_addr), "peakhold_before": await _read(ph_addr), "written": [], "failed": []}
+    for key, addr, value in (("decay", decay_addr, 0.0), ("peakhold", ph_addr, 0)):
+        try:
+            await conn.set(addr, value)
+            out["written"].append(key)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            log.warning("rta: re-forcing %s=%r failed: %s", addr, value, e)
+            out["failed"].append(key)
+    log.info("RTA ballistics re-forced (decay 0, peakhold OFF): was decay=%r peakhold=%r", out["decay_before"], out["peakhold_before"])
+    return out
 
 
 async def restore_rta_prefs(conn: Any, d: Descriptor, prefs_before: dict[str, Any] | None) -> dict[str, Any]:

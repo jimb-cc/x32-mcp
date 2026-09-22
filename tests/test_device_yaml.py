@@ -21,6 +21,7 @@ ROOT = Path(__file__).resolve().parent.parent
 DEVICE_YAML = ROOT / "device.yaml"
 
 TOP_LEVEL_KEYS = ["meta", "scales", "enums", "strips", "params", "nodes", "guarded", "policy", "rta", "geq", "detector", "ringout", "mics"]
+OPTIONAL_TOP_LEVEL_KEYS = ["cfs_policy"]   # the CFS² policy layer's block (docs/CFS_POLICY.md); absent = all defaults
 SCALE_KINDS = {"level", "lin", "log", "enum", "int", "bool", "str", "pan"}
 # DESIGN.md §9 vocabulary + the research-driven additions documented at the top of device.yaml.
 NODE_FORMATS_DESIGN = {"str", "int", "sint", "onoff", "enum", "db1", "db2", "float1", "float2", "freq", "pct", "float", "hex"}
@@ -100,7 +101,7 @@ def tokenize(line: str) -> list[str]:
 # ---------------------------------------------------------------------------------------------- schema
 
 def test_loads_with_fixed_top_level_keys(dev):
-    assert list(dev) == TOP_LEVEL_KEYS
+    assert list(dev) == TOP_LEVEL_KEYS + OPTIONAL_TOP_LEVEL_KEYS
     assert dev["meta"]["model"] == "X32" and dev["meta"]["osc_port"] == 10023
     assert set(dev["meta"]["roots"]) == NON_STRIP_FAMILIES
     for fam, root in dev["meta"]["roots"].items():

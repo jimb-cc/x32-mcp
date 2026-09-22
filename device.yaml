@@ -1015,3 +1015,50 @@ mics:
   # plugged in reads the preamp floor (DOC: ~-100). Below this a candidate is flagged "no input signal" (not excluded).
   signal_floor_db: -80
   mute_group_convention: 6
+
+# CFS² policy layer (docs/CFS_POLICY.md, src/x32mcp/cfs_policy.py + cfs.py): what the session manager does with the detector's
+# hooks -- the MODERATE candidates it will not cut (tier B), the verdict filed after every cut, the analyser flags and the
+# ring-out contract check. Every key equals the CfsPolicyConfig default (tests/test_cfs_policy.py asserts it both ways).
+cfs_policy:
+  # LF edge of the feedback window from the open mics' high-pass filters (REVIEW_REPORT §1.7 Q3): per included mic
+  # edge = hpf_factor x HPF corner (HPF on) else no_hpf_hz; session edge = max(floor_hz, min over mics) -> detector lf_edge_hz
+  lf_edge:
+    hpf_factor: 0.7
+    no_hpf_hz: 100.0
+    floor_hz: 60.0
+  programme_check_s: 5.0                    # G8: programme_present() evaluated over the first >= 5 s of frames (and on any later rise)
+  refresh_arm_reference_on_programme: true  # watch armed in silence, programme starts later: re-open the detector's 2 s level reference
+  # Tier B: ONE -3 dB cut on a MODERATE line (BASE, no evidence) that is loud-ish (>= det.loudish_threshold_db) or >= min_excess_db
+  # over its band's baseline and >= min_age_s old; then the detector's verdict drives the rest: confirmed -> done; false_cut (the
+  # line ended by itself) -> ignore-listed, never written shallower; held (dropped by the bell, still there: a note through the EQ
+  # OR a limiter/compressor-held howl) -> alert, and if still a held family-less BASE line after held_deepen_s -> -6, then -9;
+  # insufficient -> one immediate deepen; ambiguous -> report only. Every action is tagged tier "B" in the notch log / events.
+  tier_b:
+    enabled: true
+    min_excess_db: 20.0
+    min_age_s: 0.6
+    cooldown_s: 2.0
+    held_deepen_s: 3.0
+    verdict_timeout_s: 4.0
+    ringout_probe_wait_dwells: 2.0          # ring_out: a line the probe has not judged (steps_seen < 2) waits unless loud-ish AND MODERATE this long
+    ringout_hold_raise: true                # ring_out: the master is not raised while a tier-B engagement is unresolved
+  # Alerts that reach the desk: cfs.candidate on/off events for MODERATE / held / stationary(backoff_advised) / at-arm lines, and the
+  # bus scribble strip turned `color` while any is live (restored clear_s after the last one, always at stop / abort / panic)
+  alerts:
+    events: true
+    scribble_strip: true
+    color: RDi                              # enums.color token (inverted red)
+    clear_s: 2.0
+    min_write_interval_s: 1.0
+    hold_s: 0.5
+  at_arm_watch_min_prominence_db: 30.0      # watch: an established-at-arm line is cut only if LOUD or >= this prominent (else alert / tier B)
+  reforce_ballistics_on_freeze: true        # PEAK_HOLD_SUSPECTED / FROZEN_LINES mid-session: write decay 0 / peakhold OFF once more ...
+  frozen_abort_s: 5.0                       # ... and abort if the display still looks frozen this long after (it cannot be rung out)
+  # ring_out: a STATIONARY line >= 30 dB prominent ('backoff_advised') gets one back-off probe: master -drop_db for a dwell; a fall
+  # of more than min_response_db (regenerative 1/(1-g)) or the line dying = feedback -> cut (reason backoff_probe); ~drop_db = a
+  # source in the room -> the level is restored and the line left alone
+  backoff_probe:
+    enabled: true
+    drop_db: 3.0
+    min_response_db: 4.5
+    settle_s: 0.3

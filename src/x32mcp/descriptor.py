@@ -52,6 +52,7 @@ from .targets import Target, families as target_families
 
 __all__ = [
     "TOP_LEVEL_KEYS",
+    "OPTIONAL_TOP_LEVEL_KEYS",
     "TEMPLATE_VARS",
     "DescriptorError",
     "StripFamily",
@@ -67,6 +68,8 @@ TOP_LEVEL_KEYS: tuple[str, ...] = (
     "meta", "scales", "enums", "strips", "params", "nodes", "guarded",
     "policy", "rta", "geq", "detector", "ringout", "mics",
 )
+# optional top-level blocks: absent = an empty mapping (every consumer has defaults for every key)
+OPTIONAL_TOP_LEVEL_KEYS: tuple[str, ...] = ("cfs_policy",)
 TEMPLATE_VARS: frozenset[str] = frozenset({"n", "id", "band", "send", "idx"})
 _SPEC_KEYS = frozenset({"osc", "scale", "enum", "node", "tier", "clamp", "inverted_mute"})
 _STRIP_KEYS = frozenset({"count", "ids", "path", "label", "sends", "send_target", "eq_bands", "preamp", "gate", "dyn", "insert"})
@@ -505,7 +508,7 @@ class Descriptor:
     Attributes (all read-only by convention): ``path``, ``meta``, ``roots`` (non-strip family →
     root template), ``scales``, ``enums``, ``strips``, ``params`` (family → relpath template →
     :class:`ParamSpec`), ``guarded`` (globs), and the plain dicts ``policy``, ``rta``, ``geq``,
-    ``detector``, ``ringout``, ``mics``.
+    ``detector``, ``ringout``, ``mics`` and the optional ``cfs_policy`` (``{}`` when absent).
     """
 
     def __init__(self, data: Mapping[str, Any], *, path: Path | None = None) -> None:
@@ -514,7 +517,7 @@ class Descriptor:
         missing = [k for k in TOP_LEVEL_KEYS if k not in data]
         if missing:
             raise DescriptorError(f"missing top-level keys {missing}", path="<root>")
-        _no_unknown_keys(data, frozenset(TOP_LEVEL_KEYS), "<root>")
+        _no_unknown_keys(data, frozenset(TOP_LEVEL_KEYS) | frozenset(OPTIONAL_TOP_LEVEL_KEYS), "<root>")
 
         self.meta: dict[str, Any] = dict(_expect_mapping(data["meta"], "meta"))
         self.roots: dict[str, str] = self._build_roots(self.meta)
@@ -535,6 +538,8 @@ class Descriptor:
         self.detector: dict[str, Any] = dict(_expect_mapping(data["detector"], "detector"))
         self.ringout: dict[str, Any] = dict(_expect_mapping(data["ringout"], "ringout"))
         self.mics: dict[str, Any] = dict(_expect_mapping(data["mics"], "mics"))
+        # CFS² policy layer (docs/CFS_POLICY.md): optional; x32mcp.cfs_policy.CfsPolicyConfig validates the keys
+        self.cfs_policy: dict[str, Any] = dict(_expect_mapping(data.get("cfs_policy") or {}, "cfs_policy"))
 
         self._by_head: dict[str, list[ParamSpec]] = {}
         for fam_specs in self.params.values():
