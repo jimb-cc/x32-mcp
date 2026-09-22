@@ -280,3 +280,33 @@ TIMBRES: dict[str, tuple[float, ...]] = {
     # square / symmetric clip: odd only (H3 -9.5, H5 -14, H7 -17)
     "square": (0.0, -60.0, -9.5, -60.0, -14.0, -60.0, -17.0),
 }
+
+
+# -- bus PEQ actuator (docs/PEQ_ACTUATOR_DESIGN.md) ---------------------------------------------------
+# The X32 bus has six parametric bands (device.yaml: f log 20..20000 Hz in 201 steps = 0.0498 oct/step; q log 10 -> 0.3
+# in 72 steps = x1.0506/step; g +-15 dB in 0.25 dB). A notch placed at the detection's interpolated frequency lands
+# within +-0.025 oct of the ring, so peaking_gain_db above -- the same RBJ prototype as the detector's
+# bell_attenuation_db -- serves the PEQ actuator unchanged. The desk's own PEQ shape is UNCONFIRMED (design S9).
+PEQ_BANDS = 6
+PEQ_Q_DEFAULT = 6.103            # "Q 6" on the desk grid: the design's first-notch Q (D3)
+PEQ_NOTCH_STEP_DB = -3.0
+PEQ_NOTCH_MAX_DB = -12.0         # per-actuator cap (D3): a Q 6 -12 removes less programme than a GEQ -9 at any GEQ Q
+PEQ_BUDGET_DEFAULT = 4           # distinct bands per session: 4 of the 6, two left to the engineer
+PEQ_MERGE_OCT = 0.08             # a detection this close to an owned notch deepens it (peq_merge_oct)
+_PEQ_F_LO, _PEQ_F_HI, _PEQ_F_STEPS = 20.0, 20000.0, 201
+_PEQ_Q_HI, _PEQ_Q_LO, _PEQ_Q_STEPS = 10.0, 0.3, 72
+
+
+def peq_grid_hz(f_hz: float) -> float:
+    """Snap ``f_hz`` to the desk's frequency grid: the nearest of 201 log steps from 20 to 20000 Hz
+    (2331 -> 2349.8, 525.4 -> 532.1, 1788.9 -> 1782.5)."""
+    x = math.log(max(_PEQ_F_LO, min(_PEQ_F_HI, float(f_hz))) / _PEQ_F_LO) / math.log(_PEQ_F_HI / _PEQ_F_LO)
+    i = round(x * (_PEQ_F_STEPS - 1))
+    return _PEQ_F_LO * (_PEQ_F_HI / _PEQ_F_LO) ** (i / (_PEQ_F_STEPS - 1))
+
+
+def peq_grid_q(q: float) -> float:
+    """Snap ``q`` to the desk's Q grid: 72 log steps from 10 down to 0.3 (6 -> 6.103, 4 -> 3.913, 8 -> 7.812)."""
+    x = math.log(max(_PEQ_Q_LO, min(_PEQ_Q_HI, float(q))) / _PEQ_Q_HI) / math.log(_PEQ_Q_LO / _PEQ_Q_HI)
+    i = round(x * (_PEQ_Q_STEPS - 1))
+    return _PEQ_Q_HI * (_PEQ_Q_LO / _PEQ_Q_HI) ** (i / (_PEQ_Q_STEPS - 1))

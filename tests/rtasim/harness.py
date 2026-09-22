@@ -41,10 +41,19 @@ not survivors (nothing was done about them); open loop never has survivors (noth
 ``rings_end`` additionally records every ring's state at the last frame (level, e_eff, and ``alive`` = e_eff above
 ALIVE_EXCESS_DB 0.25 dB, a lenient variant that excuses a marginal re-crossing in the scene's last second) for
 reporting; it is not the pass criterion.
+
+ACTUATORS: ``run_one(..., actuator="geq")`` (default) cuts through ``NotchController`` on the 31-band GEQ as above;
+``actuator="peq"`` cuts through :class:`PeqPlanner`, a stand-in for the product's ``PeqNotchController``
+(docs/PEQ_ACTUATOR_DESIGN.md): a Q 6 peaking notch on the bus PEQ at the detection's interpolated frequency snapped to
+the desk grid, -3 dB steps to -12, deepened when a later detection lands within ``peq_merge_oct`` of it, otherwise a
+new band (budget 4). ``RunResult.notches`` records every write with its actuator, frequency, Q and gain; ``cuts`` keeps
+its (ts, band, gain) shape with band = the GEQ band nearest the notch so scoring, ``survived`` and tests are
+actuator-agnostic. The detector's ``note_cut`` receives ``q=`` when its signature accepts it (PEQ design S2.4).
 """
 
 from __future__ import annotations
 
+import inspect
 import json
 import math
 import time
@@ -52,7 +61,8 @@ from dataclasses import dataclass, field
 from statistics import median
 from typing import Any, Callable, Iterable, Sequence
 
-from .physics import FRAME_S, RTA_BAND_HZ, GEQ_BAND_HZ
+from .physics import (FRAME_S, RTA_BAND_HZ, GEQ_BAND_HZ, PEQ_BUDGET_DEFAULT, PEQ_MERGE_OCT, PEQ_NOTCH_MAX_DB,
+                      PEQ_NOTCH_STEP_DB, PEQ_Q_DEFAULT, peq_grid_hz, peq_grid_q)
 from .render import Episode, Renderer, ring_episodes
 from .scenarios import SCENARIOS, Scenario, render as render_cached
 
@@ -113,6 +123,7 @@ class RunResult:
     wall_s: float = 0.0
     rings_end: list[dict[str, Any]] = field(default_factory=list)   # closed loop: per ring {label, level_db, e_eff, alive} at the end
     survived: list[int] = field(default_factory=list)   # closed loop: rings (indices) still regenerating at the end (pass criterion)
+    notches: list[dict[str, Any]] = field(default_factory=list)   # closed loop: every actuator write {ts, actuator, band, notch_hz, q, gain_db}
 
     # derived -----------------------------------------------------------------------------------
     @property
@@ -196,6 +207,7 @@ class RunResult:
             "fp_geq_bands": self.fp_geq_bands, "latencies_ms": self.latencies_ms,
             "cuts": [{"ts": round(t, 3), "geq_band": b, "gain_db": g} for t, b, g in self.cuts],
             "rings_end": self.rings_end, "alive": len(self.alive), "survived": list(self.survived),
+            "notches": list(self.notches),
             "passed": self.passed, "latency_budget_ms": self.latency_budget_ms, "wall_s": round(self.wall_s, 3),
         }
 
@@ -295,15 +307,63 @@ def _survivors(rr: "RunResult", renderer: Renderer, geq_band_hz: Sequence[float]
     return out
 
 
+@dataclass
+class PeqNotch:
+    """One planned bus-PEQ write (the stand-in's counterpart of ``x32mcp.detector.Notch``)."""
+    band: int              # PEQ band 1..6
+    notch_hz: float        # centre on the desk grid
+    q: float               # Q on the desk grid
+    depth_db: float        # new TOTAL gain of the band (<= 0)
+    actuator: str = "peq"
+
+
+class PeqPlanner:
+    """Stand-in for the product's ``PeqNotchController`` (PEQ_ACTUATOR_DESIGN.md D1/D3): a detection within
+    ``merge_oct`` of an owned notch deepens it by ``step_db`` down to ``max_db``; otherwise a new band opens at the
+    detection's interpolated frequency snapped to the desk grid, at ``q``; at most ``budget`` bands. Lowest free band
+    first (the design keeps band 1 last for the engineer's HPF; irrelevant here). No verdicts: like
+    ``NotchController`` it acts on emissions and leaves deepening policy to the detector."""
+
+    def __init__(self, *, q: float = PEQ_Q_DEFAULT, step_db: float = PEQ_NOTCH_STEP_DB, max_db: float = PEQ_NOTCH_MAX_DB,
+                 budget: int = PEQ_BUDGET_DEFAULT, merge_oct: float = PEQ_MERGE_OCT) -> None:
+        self.q = peq_grid_q(q)
+        self.step_db, self.max_db, self.budget, self.merge_oct = float(step_db), float(max_db), int(budget), float(merge_oct)
+        self.notches: dict[int, list[float]] = {}     # band -> [f_hz, q, gain_db]
+
+    def plan(self, det: Any, bus: int = 0, session_id: str = "sim") -> PeqNotch | None:
+        f = float(det.freq_hz)
+        for band, (fc, qq, g) in self.notches.items():
+            if abs(math.log2(f / fc)) <= self.merge_oct:
+                if g <= self.max_db:
+                    return None
+                g2 = max(self.max_db, g + self.step_db)
+                self.notches[band][2] = g2
+                return PeqNotch(band, fc, qq, g2)
+        if len(self.notches) >= self.budget:
+            return None
+        band = next(b for b in range(2, 7) if b not in self.notches) if len(self.notches) < 5 else 1
+        fc = peq_grid_hz(f)
+        self.notches[band] = [fc, self.q, self.step_db]
+        return PeqNotch(band, fc, self.q, self.step_db)
+
+    @property
+    def budget_left(self) -> int:
+        return max(0, self.budget - len(self.notches))
+
+
 def run_one(detector_factory: Callable[[Sequence[float]], Any], scenario: Scenario | str, seed: int, *,
             closed_loop: bool = False, analyser_overrides: dict[str, Any] | None = None,
             notch_cfg: Any = None, geq_band_hz: Sequence[float] = GEQ_BAND_HZ,
-            actuation_delay_frames: int = ACTUATION_DELAY_FRAMES) -> RunResult:
+            actuation_delay_frames: int = ACTUATION_DELAY_FRAMES, actuator: str = "geq",
+            peq: dict[str, Any] | None = None) -> RunResult:
     sc = SCENARIOS[scenario] if isinstance(scenario, str) else scenario
     t0 = time.perf_counter()
     det = detector_factory(RTA_BAND_HZ)
     dets: list[Det] = []
     cuts: list[tuple[float, int, float]] = []
+    notches: list[dict[str, Any]] = []
+    if actuator not in ("geq", "peq"):
+        raise ValueError(f"actuator must be 'geq' or 'peq', got {actuator!r}")
 
     def collect(out: Iterable[Any]) -> list[Det]:
         got = []
@@ -322,20 +382,37 @@ def run_one(detector_factory: Callable[[Sequence[float]], Any], scenario: Scenar
     else:
         from x32mcp.detector import DetectorConfig, NotchController
         cfg = notch_cfg or DetectorConfig()
-        nc = NotchController(cfg, geq_band_hz, lambda cur, new: None, budget=cfg.notch_budget_default)
+        if actuator == "peq":
+            nc: Any = PeqPlanner(**(peq or {}))
+        else:
+            nc = NotchController(cfg, geq_band_hz, lambda cur, new: None, budget=cfg.notch_budget_default)
         from x32mcp.detector import Detection
         r = Renderer(sc.build(seed, analyser_overrides), seed, geq_band_hz=geq_band_hz)
-        pending: list[tuple[int, int, float, float]] = []      # (apply_before_frame, band, gain, ts_decided)
+        note_cut = getattr(det, "note_cut", None)
+        # what cfs.py does after every actuator write: hand the detector its own cut so a verdict-gated deepening
+        # policy (post-cut watch) is exercised here exactly as on the desk; a detector without the hook is
+        # unaffected. ``q=`` is passed only to a note_cut that accepts it (PEQ design S2.4); older detectors
+        # bracket the drop with their GEQ Q range, which a full-depth on-centre PEQ notch still satisfies.
+        note_cut_q = bool(note_cut) and "q" in inspect.signature(note_cut).parameters
+        pending: list[tuple[int, Any, float]] = []      # (apply_before_frame, notch, ts_decided)
         while not r.done:
             while pending and pending[0][0] <= r.k:
-                _, band, gain, ts0 = pending.pop(0)
-                r.set_geq_gain(band, gain)
-                cuts.append((ts0, band, gain))
-                if hasattr(det, "note_cut"):
-                    # what cfs.py does after every GEQ write: hand the detector its own cut so a verdict-gated
-                    # deepening policy (post-cut watch) is exercised here exactly as on the desk; a detector without
-                    # the hook is unaffected. Same call as the implementer's harness (review/detector).
-                    det.note_cut(float(geq_band_hz[band - 1]), float(gain), None)
+                _, n, ts0 = pending.pop(0)
+                if getattr(n, "actuator", "geq") == "peq":
+                    r.set_peq_notch(n.band, n.notch_hz, n.q, n.depth_db)
+                    f_cut, q_cut = float(n.notch_hz), float(n.q)
+                    cuts.append((ts0, geq_band_for(n.notch_hz, geq_band_hz), n.depth_db))
+                else:
+                    r.set_geq_gain(n.band, n.depth_db)
+                    f_cut, q_cut = float(geq_band_hz[n.band - 1]), float(r.scene.geq_q)
+                    cuts.append((ts0, n.band, n.depth_db))
+                notches.append({"ts": round(ts0, 3), "actuator": getattr(n, "actuator", "geq"), "band": n.band,
+                                "notch_hz": round(f_cut, 1), "q": round(q_cut, 3), "gain_db": float(n.depth_db)})
+                if note_cut is not None:
+                    if note_cut_q and getattr(n, "actuator", "geq") == "peq":
+                        note_cut(f_cut, float(n.depth_db), None, q=q_cut)
+                    else:
+                        note_cut(f_cut, float(n.depth_db), None)
             fr = r.step_frame()
             if fr is None:
                 continue
@@ -348,7 +425,7 @@ def run_one(detector_factory: Callable[[Sequence[float]], Any], scenario: Scenar
                                frames=0, confidence=d.confidence)
                 notch = nc.plan(dd, 0, "sim")
                 if notch is not None:
-                    pending.append((r.k + actuation_delay_frames, notch.band, notch.depth_db, ts))
+                    pending.append((r.k + actuation_delay_frames, notch, ts))
         episodes = ring_episodes(r)
     _attribute(dets, r, episodes)
     rings_end: list[dict[str, Any]] = []
@@ -361,6 +438,7 @@ def run_one(detector_factory: Callable[[Sequence[float]], Any], scenario: Scenar
             rings_end.append({"ring": i, "label": rg.label, "level_db": round(last.level_db, 1), "e_eff": round(last.e_eff, 2),
                               "alive": bool(last.active and last.e_eff > ALIVE_EXCESS_DB)})
     rr = RunResult(sc.name, seed, closed_loop, episodes, dets, cuts, sc.latency_budget_ms, time.perf_counter() - t0, rings_end)
+    rr.notches = notches
     if closed_loop:
         rr.survived = _survivors(rr, r, geq_band_hz)
     return rr
@@ -469,15 +547,17 @@ class Results:
 def evaluate(detector_factory: Callable[[Sequence[float]], Any], scenarios: Iterable[str | Scenario] | None = None,
              seeds: Sequence[int] = (1, 2, 3), *, closed_loop: bool = False,
              analyser_overrides: dict[str, Any] | None = None, notch_cfg: Any = None,
-             geq_band_hz: Sequence[float] = GEQ_BAND_HZ, label: str = "") -> Results:
+             geq_band_hz: Sequence[float] = GEQ_BAND_HZ, label: str = "", actuator: str = "geq",
+             peq: dict[str, Any] | None = None) -> Results:
     names = list(scenarios) if scenarios is not None else list(SCENARIOS)
     t0 = time.perf_counter()
-    res = Results(meta={"label": label, "seeds": list(seeds), "closed_loop": closed_loop,
+    res = Results(meta={"label": label, "seeds": list(seeds), "closed_loop": closed_loop, "actuator": actuator,
                         "analyser_overrides": analyser_overrides or {}, "scenarios": [s if isinstance(s, str) else s.name for s in names]})
     for s in names:
         for seed in seeds:
             res.runs.append(run_one(detector_factory, s, seed, closed_loop=closed_loop,
-                                    analyser_overrides=analyser_overrides, notch_cfg=notch_cfg, geq_band_hz=geq_band_hz))
+                                    analyser_overrides=analyser_overrides, notch_cfg=notch_cfg, geq_band_hz=geq_band_hz,
+                                    actuator=actuator, peq=peq))
     res.meta["wall_s"] = round(time.perf_counter() - t0, 2)
     return res
 
@@ -489,13 +569,14 @@ def _main() -> None:   # pragma: no cover - CLI: python -m rtasim.harness [--clo
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     closed = "--closed" in sys.argv
     mode = ([a[7:] for a in sys.argv[1:] if a.startswith("--mode=")] or ["watch"])[0]
+    actuator = ([a[11:] for a in sys.argv[1:] if a.startswith("--actuator=")] or ["geq"])[0]
     cfg = DetectorConfig.from_descriptor(Descriptor.load())
     scen: Any = args or None
     if "--adversarial" in sys.argv:
         from .scenarios_adversarial import ADVERSARIAL
         scen = [ADVERSARIAL[a] for a in args] if args else list(ADVERSARIAL.values())
     res = evaluate(lambda bh: FeedbackDetector(cfg, bh, mode=mode), scen, closed_loop=closed, notch_cfg=cfg,
-                   label=f"current FeedbackDetector ({mode})")
+                   label=f"current FeedbackDetector ({mode}, {actuator})", actuator=actuator)
     print(res.table())
     out = [a[7:] for a in sys.argv[1:] if a.startswith("--json=")]
     if out:

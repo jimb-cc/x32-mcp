@@ -92,10 +92,14 @@ def load_factory(spec: str) -> tuple[Callable[[Sequence[float]], Any], DetectorC
     return obj, cfg, spec
 
 
-def _evaluate(factory, names, *, seeds, closed_loop, notch_cfg, label, overrides=None):
+def _evaluate(factory, names, *, seeds, closed_loop, notch_cfg, label, overrides=None, actuator="geq"):
     """evaluate() with only the keyword arguments this harness version accepts."""
     accepted = inspect.signature(evaluate).parameters
     kw: dict[str, Any] = {"seeds": seeds, "closed_loop": closed_loop}
+    if actuator != "geq":
+        if "actuator" not in accepted:
+            raise SystemExit(f"this harness version has no actuator {actuator!r}; cannot run the gate on it")
+        kw["actuator"] = actuator
     if "notch_cfg" in accepted:
         kw["notch_cfg"] = notch_cfg
     if "label" in accepted:
@@ -136,6 +140,8 @@ def main() -> int:
     ap.add_argument("--quick", action="store_true", help="2 hold-out seeds, 2 sweeps (~2 min)")
     ap.add_argument("--out", default=None, help="directory for gate.json / gate.md")
     ap.add_argument("--max-fails", type=int, default=12, help="failing scenarios to list per gate")
+    ap.add_argument("--actuator", default="geq", choices=("geq", "peq"),
+                    help="closed-loop actuator: the GEQ insert (pre-registered) or the bus PEQ stand-in (docs/PEQ_ACTUATOR_DESIGN.md)")
     a = ap.parse_args()
 
     try:
@@ -148,7 +154,7 @@ def main() -> int:
     sweeps = QUICK_SWEEPS if a.quick else SWEEPS
     all_names = list(SCENARIOS)
     feedback_names = [n for n, sc in SCENARIOS.items() if sc.has_feedback]
-    print(f"acceptance gate - candidate: {label}")
+    print(f"acceptance gate - candidate: {label}" + (f"  [closed-loop actuator: {a.actuator}]" if a.actuator != "geq" else ""))
     print(f"  corpus {len(all_names)} scenarios ({len(feedback_names)} with feedback), hold-out seeds {seeds}, "
           f"{len(sweeps)} analyser sweeps, EARLY_CREDIT_S default {harness.EARLY_CREDIT_S}\n")
 
@@ -157,7 +163,8 @@ def main() -> int:
 
     def run_gate(key: str, name: str, names: list[str], *, closed: bool = False, overrides=None) -> dict[str, Any]:
         t0 = time.perf_counter()
-        res = _evaluate(factory, names, seeds=seeds, closed_loop=closed, notch_cfg=notch_cfg, label=name, overrides=overrides)
+        res = _evaluate(factory, names, seeds=seeds, closed_loop=closed, notch_cfg=notch_cfg, label=name, overrides=overrides,
+                        actuator=a.actuator if closed else "geq")
         s = summarise(res)
         s["wall_s"] = round(time.perf_counter() - t0, 1)
         gates[key] = s
