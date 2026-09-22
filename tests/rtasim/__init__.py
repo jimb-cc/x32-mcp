@@ -11,6 +11,7 @@ Modules
                             gain) and the electro-acoustic :class:`FeedbackRing` loop model.
 * :mod:`rtasim.render`    — the mixer/renderer: sources + rings + GEQ + analyser → frames + ground-truth trace.
 * :mod:`rtasim.scenarios` — the corpus registry ``SCENARIOS`` and ``frames(scenario, seed)``.
+* :mod:`rtasim.scenarios_adversarial` — the auditors' 55 breaker scenarios, ``ADVERSARIAL`` (separate registry).
 * :mod:`rtasim.harness`   — ``evaluate(detector_factory, ...)`` open/closed loop, metrics, table, JSON.
 """
 
@@ -22,4 +23,5 @@ from .sources import (  # noqa: F401
 )
 from .render import Renderer, Scene  # noqa: F401
 from .scenarios import SCENARIOS, Scenario, frames, ground_truth  # noqa: F401
+from .scenarios_adversarial import ADVERSARIAL  # noqa: F401
 from .harness import evaluate, Results  # noqa: F401

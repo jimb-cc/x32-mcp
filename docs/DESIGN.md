@@ -261,25 +261,34 @@ geq:
   gain_scale: geq_gain          # linf -15..+15 dB (0.5 dB grid → 61 steps)
   insert_slots_preferred: [5, 6, 7, 8]   # fx 5-8 are insert-only; NOTE fx 5-8 use a DIFFERENT type enum (fx_type_58: GEQ2 = 0) from fx 1-4 (fx_type_14: GEQ2 = 27)
   insert_sel_enum: insert_sel   # 0 OFF, 1 FX1L, 2 FX1R, … 16 FX8R, 17-22 AUX1-6 (23 entries)
-detector:
-  prominence_db: 12
+detector:                    # one key per DetectorConfig field; every value == the dataclass default (tested). Excerpt -- the full
+  prominence_db: 12          # block with every threshold's physical origin is in device.yaml itself and docs/DETECTOR.md §2-§4
   neighbour_bins: 3
-  min_level_db: -60
-  persistence_frames: 3
-  growth_min_db_per_s: 6
-  growth_ref_db_per_s: 20
-  monotonic_tolerance_db: 1.0
-  weights: {prominence: 0.3, persistence: 0.2, growth: 0.5}
-  confidence_threshold: 0.7
+  track_prominence_db: 6
+  narrow_db: 8
+  stable_frames: 5           # K1 = 250 ms
+  confirm_frames: 12         # K2
+  rise_db: 6                 # RISE evidence (own rise after the band settled, net of common mode)
+  fast_rise_db: 15           # FAST-RISE (>= 3 watched increments into the plateau)
+  loud_line_db: -10          # LOUD: >= max(this, min(arm p95 + loud_above_arm_db, loud_ceiling_db)) and loud_margin_db above all else
+  loud_above_arm_db: 20
+  loud_ceiling_db: -6
+  loudish_level_db: -20      # tier B's level line (FAST-RISE bed step, deepen-on-held)
+  arm_line_min_level_db: -40 # AT-ARM
+  window_low_hz_watch: 160   # P6 (63 ring_out / 40 with lf_feedback_possible / lf_edge_hz from the channels' HPF)
+  cut_verify_s: 1.5          # note_cut() verdicts: confirmed / insufficient / held / false_cut / ambiguous
+  confidence_threshold: 0.7  # display contract only
   band_tolerance: 1
   cooldown_s: 1.0
   notch_step_db: -3
   notch_max_db: -9
   notch_budget_default: 6
   merge_adjacent_bands: 1
-  decay_verify_db: 6         # ring must drop ≥ this within decay_verify_s after a notch
+  decay_verify_db: 6         # cfs ring_out VERIFY: ring must drop ≥ this within decay_verify_s after a notch
   decay_verify_s: 1.5
   frame_period_s: 0.05
+  min_level_db: -45          # legacy keys (accepted, not used by the decision): min_level_db, persistence_frames, growth_*,
+  weights: {prominence: 0.3, persistence: 0.2, growth: 0.5}   #   monotonic_tolerance_db, weights, override_*
 ringout:
   step_db: 1.0
   dwell_ms: 1500
@@ -501,29 +510,57 @@ in dB and a note that plateaus.
 
 ## 12. `detector.py` (pure; no asyncio, no I/O)
 
+Full design, thresholds and evidence: **docs/DETECTOR.md**. Contract:
+
 ```python
 @dataclass(frozen=True)
-class DetectorConfig: ... (fields = descriptor.detector keys) ; @classmethod from_descriptor(d)
+class DetectorConfig: ...        # one field per device.yaml `detector:` key; every yaml value == the dataclass default (tested)
+    @classmethod from_descriptor(d) / from_dict(mapping)   # unknown keys ignored; `weights` mapping flattened (legacy)
+    mode: "watch" | "ringout"; lf_feedback_possible: bool; lf_edge_hz: float | None; window_low_hz (property)
 @dataclass(frozen=True)
-class Detection: ts: float; band: int; freq_hz: float; level_db: float; prominence_db: float; slope_db_per_s: float; frames: int; confidence: float
+class Detection: ts; band (0-based RTA peak band); freq_hz (interpolated centroid frequency -> feed NotchController);
+    level_db; prominence_db; slope_db_per_s; frames; confidence (>= confidence_threshold, display only);
+    reasons: tuple[str, ...]   # predicates + evidence that fired, for the notch report ('rise7dB', 'fastrise17dB@120dB/s',
+                               # 'loud', 'established_at_arm', 'probe2', 'pre_emptive', 'glided_in', ...)
+    klass: "STRONG" | "PROBE" ("MODERATE" only with ringout_emit_moderate, reason 'confirmed_K2'); a deepen request adds
+                               # 'deepen_held' / 'deepen_insufficient'; centroid_band; narrow_db; rise_db; excess_db
 @dataclass
-class Candidate: band, first_ts, frames, levels: list[float], ts_list: list[float], confidence
+class Candidate: band, freq_hz, first_ts, last_ts, frames, level_db, cluster_db, prominence_db, narrow_db, excess_db, rise_db,
+    fast_rise_db, klass ("TRACK" | "MUSICAL" | "STATIONARY" | "MODERATE" | "STRONG" | "FALSE_CUT"), reasons, confidence,
+    emitted, born_at_arm (cleared when another source lands on the track), onset_fi, glided, probe_hits / probe_linear /
+    probe_pinned / steps_seen, stationary, cut_verdict (None | "pending" | "confirmed" | "insufficient" | "held" | "false_cut" |
+    "ambiguous"), cut_deepen (a held/insufficient verdict entitles one re-emission), cuts_held, emit_evidence, age_s (property);
+    to_dict() carries all of these (keys `klass`, `level_db`, `prominence_db`, `excess_db`, `age_s`, `reasons`, `freq_hz`,
+    `cut_verdict`, `cut_deepen`, `cuts_held`, `steps_seen`, `fast_rise_db`, `born_at_arm`, `stationary` are the tier-B hook;
+    reasons may carry 'backoff_advised' on a >= 30 dB-prominent STATIONARY line)
 class FeedbackDetector:
-    def __init__(self, cfg: DetectorConfig, band_hz: Sequence[float])
-    def feed(self, values_db: Sequence[float], ts: float) -> list[Detection]   # one call per frame; returns detections that crossed threshold THIS frame (each band at most once per cooldown)
-    @property
-    def candidates(self) -> list[Candidate]      # for the dashboard ("current candidate confidence")
-    def reset(self) -> None
+    def __init__(self, cfg, band_hz, *, mode=None, lf_feedback_possible=None, lf_edge_hz=None)   # overrides replace cfg fields
+    def feed(self, values_db: Sequence[float], ts: float) -> list[Detection]   # one call per frame (values clamped to [-128, 0]);
+                                                                              # STRONG lines (and ring_out pre-emptive PROBE lines), once per
+                                                                              # cooldown, re-emitted only on regrowth / LOUD-and-not-dropped /
+                                                                              # a new probe hit / a held|insufficient verdict with deepen right
+    def note_gain_step(self, delta_db: float, ts: float) -> None   # ring_out: cfs calls it right after each master write (the probe)
+    def note_cut(self, freq_hz: float | None = None, depth_db: float = 0.0, ts: float | None = None, *,
+                 band: int | None = None, step_db: float | None = None) -> None
+        # after each GEQ write (cfs._notch does it): depth_db = the band's new TOTAL gain (<= 0) at the GEQ centre freq_hz (or RTA
+        # band); starts the post-cut watch of every track within 1/3 octave; outcome in Candidate.cut_verdict and det.cut_log
+        # ({ts, freq_hz, band, step_db, depth_db, bell_db [lo, hi], drop_db, verdict, deepen, emitted}): confirmed | insufficient |
+        # held (dropped by the bell and sits there: note through the EQ OR limiter-held howl -- deepened once per verdict iff the
+        # line was emitted on FAST-RISE/LOUD/PROBE/AT-ARM and loud-ish) | false_cut (the line ended by itself: never re-emitted) |
+        # ambiguous
+    def programme_present(self, ts=None) -> bool                    # the ring_out contract check ('stage is quiet'); informational
+    def refresh_arm_reference(self) -> None                         # re-open the 2 s arm-time level reference (LOUD / loud-ish)
+    flags: set[str]      # PEAK_HOLD_SUSPECTED | FROZEN_LINES | HOT_SPECTRUM | SLOW_RELEASE | PROGRAMME_PRESENT (refreshed per frame)
+    arm_p95_db, loud_threshold_db, loudish_threshold_db, release_db_per_s   # measured references (cfs reports them under "detector")
+    candidates -> list[Candidate]; mode; reset()
+    @staticmethod bell_attenuation_db(depth_db, offset_oct, q) -> float   # RBJ peaking-cut attenuation at an offset (loop brief 4.1)
 ```
-Heuristic (all thresholds from cfg):
-- prominence(i) = level[i] − median(level[i−k..i+k] excluding i), k = neighbour_bins; candidate iff
-  prominence ≥ prominence_db and level ≥ min_level_db.
-- Track candidates by band with ±band_tolerance drift; a frame without the condition ends the streak.
-- growth: least-squares slope of levels vs time over the streak; monotonic iff every step ≥ −monotonic_tolerance_db.
-  growth_score = 0 if not monotonic or slope < growth_min_db_per_s else min(1, slope/growth_ref_db_per_s).
-- confidence = w_p·min(1, prominence/prominence_db) + w_s·min(1, frames/persistence_frames) + w_g·growth_score;
-  emit when frames ≥ persistence_frames and confidence ≥ confidence_threshold. Weights are chosen so a
-  held note (plateau → growth 0) cannot reach threshold.
+Decision (see DETECTOR.md): BASE = P1 narrow line ∧ P2 no harmonic family ∧ P3 stable centroid over K1 = 5 frames ∧ P4 sustained
+∧ (P5 new energy over the per-band baseline ∨ present at arm) ∧ P6 inside the session window ∧ not a frozen display value;
+STRONG = BASE ∧ one of RISE (own rise ≥ 6 dB after the band settled, net of common mode) | FAST-RISE (≥ 3 watched increments
+into the plateau, ≥ 15 dB; the step out of the bed counts only for a loud-ish line) | LOUD (clip flag unless HOT, or ≥ max(−10 dBFS,
+min(arm p95 + 20, −6)) — under HOT also ≥ arm max + 3 — and 6 dB above all else) | AT-ARM | PROBE. MODERATE (BASE only) is
+published, never cut by the detector. No absolute candidate gate, no growth-rate window, no weighted sum.
 ```python
 @dataclass
 class Notch: bus: int; band: int; freq_hz: float; depth_db: float; session_id: str; ts: float; detections: int
@@ -540,11 +577,13 @@ class NotchController:
     @property
     def notches(self) -> list[Notch]; budget_left: int; spent: bool
 ```
-Tests (synthetic streams, deterministic): clean music → 0 detections over 200 frames; held note 330 Hz →
-0; regenerating ring 2.4 kHz (+15 dB/s from −40 dB) → detection within ≤ 6 frames of crossing prominence,
-band within ±1 of 2.4 kHz; two simultaneous rings (2.4 k + 630 Hz) → both; notch controller: first
-detection → −3 dB on the 2.5 kHz GEQ band, repeated → −6, −9, then no deeper; adjacent-band detection
-merges; budget exhaustion → `plan` returns None; `policy_validate` rejecting a boost raises.
+Tests: `tests/test_detector.py` (synthetic streams: clean music 0 detections; held note 0; 15 dB/s ring within 7 frames of its
+12 dB crossing in a stream where a melody note masks its early climb, 20 dB/s ring within 6; two rings; noise; established
+plateaued howl caught, bit-identical (peak-held) copy flagged not cut; device.yaml == defaults; notch controller),
+`tests/test_detector_predicates.py` (one test per predicate / evidence rule / flag / hook), `tests/test_detector_regressions.py`
+(rendered corpus scenarios: X11, AP02, AF05, AP07, AS08, AF14, tier-B publication; the verifier round's AV03/X1 at-arm
+inheritance, AV02/AV01/X21 fast-rise boundary, AV05/AV06/AV07 closed-loop deepen-on-held, X16/X14 hold-out loud show),
+`tests/test_detector_corpus.py` (harness).
 
 ## 13. `desk.py` — facade (all public methods return plain dicts/dataclasses in engineering units)
 

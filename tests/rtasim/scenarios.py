@@ -34,6 +34,9 @@ class Scenario:
     tags: tuple[str, ...] = ()
     mode: str = "feedback_watch"    # or "ring_out" (informational: who owns the gain)
     lf_optin: bool = False          # scenario needs the LF window relaxed (loop brief §3.4)
+    salt_name: str | None = None    # noise-salt source when a scenario is registered under a new name (the
+                                    # adversarial ports keep the auditors' original names here so their
+                                    # realisations stay byte-identical); None = ``name``
 
     def settings(self, overrides: dict[str, Any] | None = None) -> AnalyserSettings:
         kw = dict(self.analyser)
@@ -46,7 +49,7 @@ class Scenario:
         sc = self.build_fn(seed, st)
         sc.analyser = st
         sc.duration_s = self.duration_s
-        sc.salt = sum((i + 1) * b for i, b in enumerate(self.name.encode())) % 9973
+        sc.salt = sum((i + 1) * b for i, b in enumerate((self.salt_name or self.name).encode())) % 9973
         return sc
 
     @property

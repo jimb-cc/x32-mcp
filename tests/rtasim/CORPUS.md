@@ -10,16 +10,19 @@ band *i* centre = 10000·2^((i−90)/10) Hz.
 ## 1. How to use the harness
 
 ```bash
-# simulator + harness sanity (21 tests, ~8 s)
+# simulator + harness sanity (~8 s)
 python -m pytest tests/test_rtasim.py tests/test_detector_corpus.py -k "not baseline and not closed_loop"
 
-# the four baselines of §6 (current detector / pre-M7, open / closed loop, seeds 1-3; ~55 s; JSON + baseline_tables.md)
+# the shipped-detector baselines of §6 (open / closed loop, seeds 1-3; JSON + baseline_tables.md)
 PYTHONPATH=src:tests python -m rtasim.run_baseline [out_dir]
 
-# ad hoc: any subset, current detector, table on stdout
-PYTHONPATH=src:tests python -m rtasim.harness [--closed] [--json=out.json] X7_plateaued_ring_under_music_from_t0 S1_bass_under_quiet_music
+# ad hoc: any subset, current detector, table on stdout; --adversarial runs the auditors' breaker set
+PYTHONPATH=src:tests python -m rtasim.harness [--closed] [--adversarial] [--json=out.json] X7_plateaued_ring_under_music_from_t0 S1_bass_under_quiet_music
 
-# pytest wrapper that writes baseline_current_detector*.json (RTASIM_REPORT_DIR sets the output dir)
+# the full measurement battery used for docs/DETECTOR.md §6 (main, hold-out, sweeps, adversarial, cost)
+PYTHONPATH=src:tests python -m rtasim.run_detector_eval --help
+
+# pytest wrapper that writes baseline_current_detector*.json (RTASIM_REPORT_DIR overrides the output dir)
 python -m pytest tests/test_detector_corpus.py -s
 ```
 
