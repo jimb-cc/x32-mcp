@@ -318,6 +318,8 @@ class DetectorConfig:
                                          #   a killed loop falls away by far more than the bell [L §4.1 / P13]
     cut_false_tol_db: float = 1.0        # drop within bell +- this and flat at cut_verify_s, line still there => 'held' (programme through
     cut_verify_s: float = 1.5            #   the EQ, or a howl held by a limiter/compressor with more excess than the cut: passively identical);
+    held_deepen_excess_db: float = 20.0  #   (see below) a held plateau-class line that rose >= this over its band's baseline is deepened even
+                                         #   when quiet: a howl held by a CHANNEL compressor sits well under the loud-ish line [K4, L §1.4(2)]
                                          #   the line ENDS on its own after the response window => 'false_cut' (a loop that survived a cut
                                          #   does not switch itself off: it was a note; never re-emitted); drop < bell - this after the
                                          #   response window => 'insufficient'. A 'held'/'insufficient' line that was cut on plateau-class
@@ -604,6 +606,7 @@ class Candidate:
     cuts_held: int = 0             # consecutive held/insufficient verdicts on this line (report)
     emit_evidence: tuple[str, ...] = ()   # evidence names at the latest emission ('fastrise', 'loud', 'probe', 'established_at_arm', 'rise')
     emit_peak_db: float | None = None     # peak level at the latest emission
+    emit_excess_db: float | None = None   # excess over the band's baseline at the latest emission
     false_cut: bool = False        # a cut went through this line like programme through an EQ: never re-emitted (klass FALSE_CUT)
     false_cut_level_db: float | None = None   # cluster level when false_cut was declared (fresh growth above it re-admits the line)
     ever_qualified: bool = False   # has reached P1 qualification at least once (programme-flux bookkeeping)
@@ -775,6 +778,7 @@ class FeedbackDetector:
         c.last_emit_ts = t
         c.last_emit_level_db = c.cluster_db
         c.emit_peak_db = c.level_db if c.emit_peak_db is None else max(c.emit_peak_db, c.level_db)
+        c.emit_excess_db = c.excess_db if c.emit_excess_db is None else max(c.emit_excess_db, c.excess_db)
         c.emit_evidence = tuple(sorted(set(c.emit_evidence) | {str(reason)}))
         c.probe_hits_at_emit = c.probe_hits
         self._cooldown[c.band] = t + self.cfg.cooldown_s
@@ -931,7 +935,13 @@ class FeedbackDetector:
             # alone had e < 3 dB and cannot be 'held' as a howl, so for it (and for quiet lines: tier B's level line) the
             # ambiguity is resolved as 'a note went through the EQ': cut once, report [L §4.3 tier A/B]
             plateau_class = any(e in ("fastrise", "loud", "probe", "established_at_arm") for e in c.emit_evidence)
-            c.cut_deepen = bool(c.emitted and plateau_class and c.emit_peak_db is not None and c.emit_peak_db >= self.loudish_threshold_db)
+            # ... and is EITHER loud-ish OR rose far above its band's own baseline: a howl held by a channel compressor can
+            # sit 20-30 dB under the loud-ish line (kill-check K4: e 6.5 dB at -22 dBFS), but it still climbed tens of dB out
+            # of the bed to get there, which a soft family-less instrument attack from the bed (the wrong-cut class the level
+            # gate protects, AV02) does by far less. Bounded either way: one GEQ band, -3 dB per verified 'held', to notch_max.
+            big_rise = c.emit_excess_db is not None and c.emit_excess_db >= self.cfg.held_deepen_excess_db
+            loudish = c.emit_peak_db is not None and c.emit_peak_db >= self.loudish_threshold_db
+            c.cut_deepen = bool(c.emitted and plateau_class and (loudish or big_rise))
         else:
             c.cuts_held = 0
         self.cut_log.append({"ts": round(ts, 3), "freq_hz": round(c.freq_hz, 1), "band": c.band, "step_db": step,
@@ -1654,6 +1664,7 @@ class FeedbackDetector:
         c.cuts_held = 0
         c.emit_evidence = ()
         c.emit_peak_db = None
+        c.emit_excess_db = None
         c.false_cut = False
         c.false_cut_level_db = None
         c.last_emit_level_db = None
@@ -2300,6 +2311,7 @@ class FeedbackDetector:
             c.last_emit_ts = ts
             c.last_emit_level_db = c.cluster_db
             c.emit_peak_db = c.level_db if c.emit_peak_db is None else max(c.emit_peak_db, c.level_db)
+            c.emit_excess_db = c.excess_db if c.emit_excess_db is None else max(c.emit_excess_db, c.excess_db)
             names = tuple(x for x in ("fastrise", "loud", "probe", "established_at_arm", "rise", "growth") if any(r.startswith(x) for r in c.reasons))
             c.emit_evidence = tuple(sorted(set(c.emit_evidence) | set(names)))
             c.probe_hits_at_emit = c.probe_hits
