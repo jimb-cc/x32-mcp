@@ -542,10 +542,10 @@ snapshot-before-first-write) · **T2** guarded (confirmation token, see the safe
 | `validate_ringout_eqs(buses)` | T0 | Read-only check that each bus (1..16 or `"main"`) has a usable, unshared, switched-on GEQ insert; step zero of any ring-out |
 | `setup_ringout_eqs(buses, confirm_token=None)` | T2* | Provision dual-mono GEQ2s in free FX insert slots 5–8 (one slot serves two buses) and insert them; idempotent; *T2 only when something must change; refused in show mode |
 | `discover_mics(bus, patch_file=None)` | T0 | Which channels feed the bus and look like live stage mics (unmuted, send ≥ −40 dB, physical preamp), cross-checked with the patch plan and mute group 6; `include` is a suggestion to confirm |
-| `feedback_watch(bus, notch_budget=6, patch_file=None)` | T1 | Arm the detector; you raise the gain, the server cuts up to `notch_budget` notches |
+| `feedback_watch(bus, notch_budget=6, patch_file=None, lf_feedback_possible=False)` | T1 | Arm the detector; you raise the gain, the server cuts up to `notch_budget` notches; `lf_feedback_possible` for a kick / floor-tom mic into subs (window from 40 Hz instead of the open mics' HPF edge) |
 | `feedback_watch_stop()` | T1 | Disarm / abort a running ring-out (backs the master off first) and save the report |
-| `cfs_status()` | T0 | Mode, session, bus, master, budget left, candidate, stage, notches |
-| `ring_out(bus, target_gain_db=None, step_db=1.0, dwell_ms=1500, notch_budget=6, patch_file=None, confirm_token=None)` | T2 | Automatic ring-out of one bus (see below); refused in show mode; the first call runs preflight and returns the plan |
+| `cfs_status()` | T0 | Mode, session, bus, master, budget left, candidate, stage, notches, the live alert list (`candidates`, `alert`) and the policy summary |
+| `ring_out(bus, target_gain_db=None, step_db=1.0, dwell_ms=1500, notch_budget=6, patch_file=None, lf_feedback_possible=False, confirm_token=None)` | T2 | Automatic ring-out of one bus (see below); refused in show mode; the first call runs preflight and returns the plan |
 | `ring_out_system(plan=None, confirm_token=None)` | T2 | Several buses, then Main LR, under one confirmation; without a plan every bus whose GEQ validates |
 | `list_ringout_reports(bus=None)` | T0 | Saved reports, newest first |
 | `get_ringout_report(id)` | T0 | One report in full (levels, notches, stages, detections) plus a Markdown rendering |
@@ -707,10 +707,20 @@ own `device.yaml` threshold and a `reasons` string in the report:
   (clip flag, or above the arm-referenced loud line and 6 dB above everything else), AT-ARM (an
   established family-less line when the session armed; in ring_out only after the probe), PROBE
   (over-response to the server's own master steps in ring_out);
-- **MODERATE** (BASE only) is published as `cfs.candidate` for the caller's policy and never cut
-  by the detector; a line that follows the gain steps 1 dB/dB is STATIONARY (a room source), and
-  after each cut the detector verifies the band's response (`confirmed` / `insufficient` / `held`
-  / `false_cut`) before any deepening.
+- **MODERATE** (BASE only) is published, never cut by the detector; a line that follows the gain
+  steps 1 dB/dB is STATIONARY (a room source), and after each cut the detector verifies the band's
+  response (`confirmed` / `insufficient` / `held` / `false_cut`) before any deepening.
+- The **policy layer** in `cfs.py` ([`docs/CFS_POLICY.md`](docs/CFS_POLICY.md), knobs in the
+  `cfs_policy:` block of `device.yaml`) acts on those hooks: it takes the feedback window's low
+  edge from the open mics' high-pass filters (≈ 0.7 × the lowest HPF corner, 100 Hz without one,
+  floored at 60; `lf_feedback_possible` opens it to 40 Hz), checks the ring-out's "stage is quiet"
+  contract (`programme_present`) and says so in the report, gives a loud-ish MODERATE line **one**
+  −3 dB cut (tier B, tagged in the report) and lets the detector's verdict decide the rest (held →
+  alert and, only while still a held family-less line, −6/−9; false_cut → ignore-listed, the cut
+  stays), turns the bus's **scribble strip red** while a suspicious line it will not cut is live
+  (always restored), declines to cut a quiet line that was already sounding when a watch armed
+  (alerted instead), re-forces the RTA ballistics when the display looks frozen (and aborts if it
+  stays frozen) and answers a stationary-but-suspicious line in a ring-out with a 3 dB back-off probe.
 
 There is no weighted confidence sum and no absolute level gate (`confidence` is a monotone display
 number ≥ 0.7 on emitted lines). A detection becomes
@@ -718,7 +728,7 @@ a −3 dB cut on the nearest band of a **31-band dual-mono GEQ (GEQ2)** inserted
 the FX rack (insert-only slots 5–8; one dual slot serves two buses via its L and R sides).
 Re-detections deepen the same notch in −3 dB steps to −9 dB; adjacent-band detections merge;
 each session has a **notch budget** (default 6). The policy allows **cuts only**, only on the
-bus under test. All thresholds are the `detector`, `ringout` and `mics` blocks of `device.yaml`.
+bus under test. All thresholds are the `detector`, `ringout`, `mics` and `cfs_policy` blocks of `device.yaml`.
 The bus-PEQ fallback mentioned in the brief is not built — a bus without a GEQ insert fails
 validation.
 
@@ -738,7 +748,10 @@ group 6 = all stage mics**. Disagreements are listed per channel.
 
 1. `feedback_watch(bus)` — Tier 1. Arms the detector; you bring the wedge up by hand (or walk
    the stage with the mic) and the server notches rings the instant they appear, up to the
-   budget. `feedback_watch_stop()` disarms and writes the report.
+   budget. A suspicious line it will not cut on the evidence (a quiet steady family-less line, a
+   line that was already there when you armed, a cut that "held") turns the bus's scribble strip
+   red on the console while it is live and is listed by `cfs_status`. `feedback_watch_stop()`
+   disarms, gives the strip its colour back and writes the report.
 2. `ring_out(bus)` — Tier 2, one confirmation that includes the open-mic list. A state machine
    (`PREFLIGHT → SNAPSHOT → ARM → RAISE → HOLD → NOTCH → VERIFY → … → BACKOFF → DONE`) raises the
    bus master in 1 dB steps with a 1.5 s dwell towards the target (default and hard ceiling
@@ -758,8 +771,11 @@ group 6 = all stage mics**. Disagreements are listed per channel.
    without a plan every bus whose GEQ validates is rung out with defaults.
 
 **Reports.** Every session writes `ringout_reports/<YYYYMMDD-HHMMSS-mode-bus03>.json` plus a
-`.md` summary: start/peak/end master levels, every notch (band, Hz, depth), the stages with
-timestamps, the detections, warnings and whether it aborted. `list_ringout_reports` and
+`.md` summary: start/peak/end master levels, every notch (band, Hz, depth, tier A = detector /
+B = policy), the stages with timestamps, the detections, the detector's account (flags, measured
+display release, arm-time level reference, every post-cut verdict), the policy log (LF edge and
+where it came from, programme detected, every tier-B step with its verdict, alerts, at-arm lines
+not cut, ignore-listed bands, back-off probes), warnings and whether it aborted. `list_ringout_reports` and
 `get_ringout_report` read them back; `validate_ringout_eqs` reports which saved session a
 bus's GEQ still matches (`matched_session`) so you can tell "rung out this afternoon" from
 "someone reset the EQ".
@@ -767,7 +783,8 @@ bus's GEQ still matches (`matched_session`) so you can tell "rung out this after
 **What the dashboard shows** during a session: the RTA bars, the waterfall with the ring as a
 vertical streak before the detector trips, the notch markers with their depth on the RTA, the
 state panel (mode, bus, master dB, budget left, candidate confidence meter, stage, connection)
-and the event log (`cfs.stage`, `cfs.candidate`, `cfs.notch`, `cfs.abort`, `cfs.report`).
+and the event log (`cfs.stage`, `cfs.candidate` incl. alert on/off, `cfs.notch` with its tier,
+`cfs.alert`, `cfs.policy`, `cfs.programme_present`, `cfs.abort`, `cfs.report`).
 
 **Non-goal.** CFS² is a soundcheck / ring-out assistant. It is **not** a mid-set automatic
 feedback suppressor: there is no "sentry mode", and show mode refuses ring-outs. If something
@@ -862,20 +879,22 @@ the tools as plain async functions without the MCP transport.
 Layout:
 
 ```
-device.yaml                  the descriptor (scales, enums, strips, params, nodes, guarded, policy, rta, geq, detector, ringout, mics)
+device.yaml                  the descriptor (scales, enums, strips, params, nodes, guarded, policy, rta, geq, detector, ringout, mics, cfs_policy)
 src/x32mcp/
   config.py events.py targets.py      settings, EventBus, Target parser
   osc.py scales.py descriptor.py      OSC codec, fader taper & scales, device.yaml loader
   connection.py nodes.py              X32Connection; /node parse/render, DeskState, snapshots, diff, restore plan
   policy.py desk.py                   safety policy; the Desk facade
   meters.py detector.py               meter blobs, FrameSources, SyntheticRta; FeedbackDetector + NotchController
-  provision.py cfs.py patches.py      GEQ provisioning/mic discovery/preflight; CFS² sessions + reports; patch plans
+  provision.py cfs.py patches.py      GEQ provisioning/mic discovery/preflight; CFS² sessions + policy layer + reports; patch plans
+  cfs_policy.py                       the policy layer's knobs (cfs_policy:) and pure rules (LF edge, tier B, at-arm, alerts)
   webui.py fakedesk.py server.py      dashboard; X32 emulator; MCP tools + main()
 webui/index.html             the dashboard page        patches/  plans + README
 snapshots/ ringout_reports/  data (gitignored)         tests/ tests/integration/
 docs/BRIEF.md                why (use cases, tiers, milestones)
 docs/DESIGN.md               the binding module contract — implement exactly what it says; deviations are recorded in module docstrings
 docs/research/               verified protocol ground truth (transport, scales/params, meters, FX/routing/scenes, MCP SDK/hosts)
+docs/DETECTOR.md             the feedback discriminator: design, evidence, results; docs/CFS_POLICY.md  what cfs does with its hooks
 docs/HANDOVER.md             how the build was driven; docs/GIG_CHECKLIST.md  operating + manual verification checklists
 ```
 

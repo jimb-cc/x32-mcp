@@ -546,9 +546,10 @@ frames 2260: mean **287.9 µs**, median 244.7, p99 **716.8**, max **857.3 µs**;
 2. **Fast howl to a quiet plateau** — > ~300 dB/s under a bed reaches a limiter/compressor plateau below the LOUD line within ≤ 2
    visible increments (AM01 417 dB/s → −14, AT02 600 → −15, AF03 800 → −13, AS02 1200 → −22, AT06/AM09 inside a cymbal wash): the same
    observation as a sine-lead/whistle onset [J §5.1, C §7.10]. Published as MODERATE at K1 (250 ms) with the tier-B fields; cfs's
-   one-shot policy decides. This branch's cfs has no tier-B policy yet (G7 lives in another branch): until it lands these are
-   alert-only (`cfs.candidate`). The same holds for any fast howl in a HOT show that does not clear the arm-window maximum by 3 dB
-   (X16 seed 3 of 9), and for M1 / X14 under a +12/+24 dB display gain offset (the loud-ish line and the LOUD legs shift with p95).
+   one-shot policy decides (docs/CFS_POLICY.md §3: loud-ish or ≥ 20 dB over the band's baseline and ≥ 0.6 s old → one −3 dB cut, then
+   the verdict; quieter ones are alerted on the desk, not cut). The same holds for any fast howl in a HOT show that does not clear the
+   arm-window maximum by 3 dB (X16 seed 3 of 9), and for M1 / X14 under a +12/+24 dB display gain offset (the loud-ish line and the
+   LOUD legs shift with p95).
 3. **A loud steady whistle / ff sung closed vowel** at ≥ the LOUD line with < ±30 c of movement for 250 ms (AF08 −7 dBFS over a −40
    bed; AV04 a soprano's ff climax note at −6 dBFS with the band tacet, vibrato developing only 300 ms in; in a HOT show a whistle
    3 dB above anything the show reached — AM03's are not and stay MODERATE): LOUD by the loop brief's own tier-A criterion [L §4.3];
@@ -619,18 +620,33 @@ det.cut_log                                  # [{ts, freq_hz, band, step_db, dep
 det.flags                                    # {"PROGRAMME_PRESENT", "PEAK_HOLD_SUSPECTED", "FROZEN_LINES", "HOT_SPECTRUM", "SLOW_RELEASE"}
 det.programme_present()                      # the ring_out contract check (G8: if True, run watch policy and say so) -- evaluate over >= 5 s
 det.refresh_arm_reference()                  # re-open the 2 s arm level reference (call on PROGRAMME_PRESENT's rising edge after arming in silence)
+det.note_emission(candidate, ts, reason="tier_b")   # cfs cut this live Candidate BY POLICY (no Detection from feed): record the emission on the
+                                             #   track as feed() does for its own (emitted, level / probe hits at emission, cooldown) so note_cut()'s
+                                             #   verdict treats it as THE cut line and a later re-emission needs fresh evidence; not plateau-class,
+                                             #   so never self-deepened. Call right before note_cut(). Returns False for a non-track. (policy round)
 det.arm_p95_db, det.loud_threshold_db, det.loudish_threshold_db, det.release_db_per_s   # report them (cfs puts flags / release / p95 /
                                              #   cut verdicts in the session report under "detector")
 ```
-Tier-B (G7, cfs policy, not implemented in this branch): a MODERATE candidate with `level_db ≥ det.loudish_threshold_db` (or
-`excess_db ≥ 20`), `age_s ≥ 0.6`, `cut_verdict is None` → one −3 dB cut → `note_cut()` → `confirmed` (deepen only on regrowth),
-`held` / `false_cut` (ignore-list, release if policy allows), `insufficient` / `ambiguous` (policy). The detector never deepens a
-tier-B cut by itself (MODERATE is not plateau-class evidence). Requires decay forced to 0.25 or the verdicts read the display.
-**What ships in cfs.py in this branch**: mode + `note_gain_step` (winner), `note_cut()` after every GEQ write and the detector's flags /
-release / p95 / cut verdicts in the report (this round), `_calibrate_floor` removed (F6). NOT in this branch: the LF declaration
-(`lf_edge_hz` from the channels' HPF / `lf_feedback_possible`), the tier-B one-shot, the G8 arm check, prefs pinning, a
-`programme_present()` / `backoff_advised` / `refresh_arm_reference()` consumer — so the shipped configuration is the plain `watch` /
-`ringout` column of §6 (X17/X22/AF04/AF14 need the LF declaration), and those wirings gate the desk re-test.
+Tier-B (G7, cfs policy — implemented in docs/CFS_POLICY.md §3): a MODERATE candidate with `level_db ≥ det.loudish_threshold_db` (or
+`excess_db ≥ 20`), `age_s ≥ 0.6` and a presence run as long, `cut_verdict is None` → one −3 dB cut → `note_emission()` + `note_cut()`
+→ `confirmed` (deepen only on regrowth), `false_cut` (ignore-list; the cut stays, never written shallower), `held` (alert; deepen
+after `held_deepen_s` only while still a held family-less BASE line — never on drop ≈ bell alone), `insufficient` (one immediate
+deepen), `ambiguous` (report). The detector never deepens a tier-B cut by itself (MODERATE is not plateau-class evidence). Requires
+decay forced to 0.25 or the verdicts read the display.
+**What ships in cfs.py**: mode + `note_gain_step` (winner), `note_cut()` after every GEQ write and the detector's flags / release /
+p95 / cut verdicts in the report, `_calibrate_floor` removed (F6), prefs pinning (rta-ballistics branch) — and, with the policy layer
+(**docs/CFS_POLICY.md**, `src/x32mcp/cfs_policy.py` + the "policy layer" section of `cfs.py`): the LF declaration (`lf_edge_hz` from
+the included mics' `preamp/hpon`/`hpf`, ≈ 0.7 × the lowest corner, 100 Hz without an HPF, floored at 60; `lf_feedback_possible` on
+`feedback_watch` / `ring_out` and the server tools), the tier-B one-shot with the verdict-driven follow-up described above (held →
+alert, deepen after `held_deepen_s` only while still a held family-less BASE line; false_cut → ignore-list, never written shallower;
+insufficient → one immediate deepen; every step tagged tier "B"), the G8 contract check over the first 5 s and on later rising edges
+(`cfs.programme_present`, report warning, `ringout_emit_moderate` forced off, `refresh_arm_reference()` in a watch armed in silence),
+candidate alerts that reach the desk (`cfs.candidate` on/off + the bus scribble strip turned RDi while a MODERATE / held / at-arm /
+backoff-advised line is live, always restored), the AT-ARM rule in watch (an `established_at_arm` cut only if LOUD or ≥ 30 dB
+prominent: AP09's −36 dBFS whine is now alerted, not cut; M7's 60 dB howl still cut at K1), the flag actions (re-force decay /
+peak-hold on PEAK_HOLD_SUSPECTED / FROZEN_LINES, abort after `frozen_abort_s`; SLOW_RELEASE / HOT_SPECTRUM warnings) and the
+back-off probe on `backoff_advised` (§11 N1). With the LF edge wired, the `_tag` columns of §6 are the shipped configuration for rigs
+whose channels carry HPFs at or below the scene's LF source; `lf_feedback_possible` gives the 40 Hz window.
 
 ## 10. Tests
 

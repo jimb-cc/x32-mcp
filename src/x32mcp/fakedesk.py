@@ -1406,7 +1406,8 @@ class FakeDesk:
             elif cmd == "ring/stop":
                 self.rta.stop_ring(float(args[0]))
             elif cmd == "note":
-                self.rta.inject_note(float(args[0]), float(args[1]) if len(args) > 1 else -20.0)
+                self.rta.inject_note(float(args[0]), float(args[1]) if len(args) > 1 else -20.0,
+                                     rise_frames=int(args[2]) if len(args) > 2 else None)
             elif cmd == "note/stop":
                 self.rta.stop_note(float(args[0]))
             elif cmd == "silence":

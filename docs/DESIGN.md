@@ -87,7 +87,8 @@ class Settings:            # frozen dataclass, built by Settings.from_env()
 class Event:
     ts: float              # time.time()
     type: str              # dotted: "connection.state", "write", "cfs.state", "cfs.candidate",
-                           # "cfs.notch", "cfs.stage", "cfs.abort", "cfs.report", "meters.frame"
+                           # "cfs.notch", "cfs.stage", "cfs.abort", "cfs.report", "cfs.alert", "cfs.policy",
+                           # "cfs.programme_present", "meters.frame"
     data: dict[str, Any]   # JSON-serialisable
 class EventBus:
     def publish(self, type: str, **data) -> Event
@@ -550,6 +551,8 @@ class FeedbackDetector:
         # ambiguous
     def programme_present(self, ts=None) -> bool                    # the ring_out contract check ('stage is quiet'); informational
     def refresh_arm_reference(self) -> None                         # re-open the 2 s arm-time level reference (LOUD / loud-ish)
+    def note_emission(self, cand: Candidate, ts=None, *, reason="tier_b") -> bool   # cfs cut this live candidate by policy: record the
+        # emission on the track as feed() does (so note_cut()'s verdict treats it as THE cut line; never self-deepened) -- CFS_POLICY.md §3
     flags: set[str]      # PEAK_HOLD_SUSPECTED | FROZEN_LINES | HOT_SPECTRUM | SLOW_RELEASE | PROGRAMME_PRESENT (refreshed per frame)
     arm_p95_db, loud_threshold_db, loudish_threshold_db, release_db_per_s   # measured references (cfs reports them under "detector")
     candidates -> list[Candidate]; mode; reset()
@@ -655,11 +658,12 @@ class CfsMode(str, Enum): IDLE, WATCH, RINGOUT, SYSTEM
 @dataclass class CfsState: mode; session_id; bus; bus_name; master_db; budget_left; candidate: dict|None; notches: list[dict]; stage: str|None; started: float|None; plan: dict|None
 class ReportStore: dir; def save(report: dict) -> Path (JSON + .md summary); def latest_for_bus(bus) -> dict|None; def list() -> list
 class CfsManager:
-    def __init__(self, desk: Desk, policy: Policy, events: EventBus, reports: ReportStore, frames: FrameSource | None = None, *, clock=time.time)
-    state: CfsState
-    async def feedback_watch(self, bus: int, *, notch_budget: int = 6, patch=None) -> dict   # runs preflight (raises with explanation if blocked), sets RTA source, starts LiveMeters (or injected frames) + detector task; returns preflight + state
-    async def stop(self) -> dict                                                            # disarm; returns session log + saves report
-    async def ring_out(self, bus: int, *, target_gain_db: float | None, step_db, dwell_ms, notch_budget, patch=None) -> dict   # runs to completion (or abort) — the server awaits it; publishes "cfs.stage" events; restores start level on abort/connection loss; returns report
+    def __init__(self, desk: Desk, policy: Policy, events: EventBus, reports: ReportStore, frames: FrameSource | None = None, *, clock=time.time,
+                 detector_cfg=None, snapshots=None, cfs_policy: CfsPolicyConfig | None = None)
+    state: CfsState          # + candidates (live alert list), alert (bool), policy (summary) -- docs/CFS_POLICY.md §4
+    async def feedback_watch(self, bus: int, *, notch_budget: int = 6, patch=None, lf_feedback_possible=False) -> dict   # runs preflight (raises with explanation if blocked), reads the open mics' HPFs (LF edge), sets RTA source, starts LiveMeters (or injected frames) + detector task; returns preflight + lf_edge + state
+    async def stop(self) -> dict                                                            # disarm; restores the strip colour; returns session log + saves report
+    async def ring_out(self, bus: int, *, target_gain_db: float | None, step_db, dwell_ms, notch_budget, patch=None, lf_feedback_possible=False) -> dict   # runs to completion (or abort) — the server awaits it; publishes "cfs.stage" events; restores start level on abort/connection loss; returns report
     async def ring_out_system(self, plan: dict) -> dict     # plan = {"stages": [{"bus": 3, "target_gain_db": …, "mics": [ch…]}, …, {"bus": "main"}]}
     async def abort(self, reason: str) -> None
 ```
@@ -671,6 +675,11 @@ BACKOFF, DONE, ABORT): snapshot bus master → set RTA source → loop: raise ma
 with backoff `abort_backoff_db`); stop when budget spent or target reached; then back off `safety_margin_db`
 → DONE → report. Connection DEGRADED at any point → restore starting master immediately (fire-and-forget
 retries every 500 ms until acked or 10 s) → ABORT.
+The **policy layer** (docs/CFS_POLICY.md; `cfs_policy.py` for the `cfs_policy:` knobs and pure rules, `CfsManager._policy_frame`
+after every `feed()`): LF edge from the mics' HPFs, the `programme_present` contract check, the tier-B one-shot cut on MODERATE
+lines with the verdict-driven follow-up (policy writes in ring_out are queued to the ring-out task; stage `PROBE` = the back-off
+probe on a `backoff_advised` STATIONARY line), candidate alerts (`cfs.candidate` on/off + the bus scribble strip, restored in
+`_finish` on every exit path), the AT-ARM rule in watch, flag actions (re-force ballistics / abort on a frozen display).
 
 ## 16. `patches.py`
 

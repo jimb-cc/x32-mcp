@@ -552,3 +552,48 @@ async def test_backoff_probe_separates_a_room_source_from_a_compressor_held_howl
         assert rep["notches"] and rep["notch_log"][0]["policy"] == "backoff_probe" and rep["notch_log"][0]["tier"] == "B"
         assert rep["notches"][0]["band"] == GEQ_BAND_1K
         assert rep["final_stage"] == "DONE"
+
+
+# ---------------------------------------------------------------------------------------------- the server tools carry it
+
+async def test_server_tools_plumb_lf_feedback_possible_and_expose_the_alert_list(fakedesk, tmp_path):
+    """feedback_watch / ring_out take lf_feedback_possible (bound into the ring_out token payload), cfs_status carries the live
+    alert list, and the trimmed report envelope keeps the policy summary."""
+    from x32mcp import server as srv
+    from test_server_tools import assert_err, assert_pending, fset, make_app, settle
+
+    a = await make_app(fakedesk, tmp_path)
+    try:
+        token = assert_pending(await srv.setup_ringout_eqs([1]))
+        assert (await srv.setup_ringout_eqs([1], confirm_token=token))["ok"]
+        for ch in (1, 2):
+            fset(a, fakedesk, f"/ch/{ch:02d}/mix/01/level", -20.0)
+        fset(a, fakedesk, "/ch/01/preamp/hpon", True)
+        fset(a, fakedesk, "/ch/01/preamp/hpf", 120.0)
+        fset(a, fakedesk, "/bus/01/mix/fader", -20.0)
+        fw = await srv.feedback_watch(1, notch_budget=4, lf_feedback_possible=True)
+        assert fw["ok"] and fw["lf_edge"]["lf_feedback_possible"] is True and fw["lf_edge"]["window_low_hz"] == 40.0
+        assert fw["lf_edge"]["lf_edge_hz"] == pytest.approx(84.7, abs=0.11) and "feedback window from 40 Hz" in fw["summary"]
+        assert fw["summary"].endswith("budget 4 notch(es)")
+        st = await srv.cfs_status()
+        assert st["ok"] and st["candidates"] == [] and st["alert"] is False and st["policy"]["window_low_hz"] == 40.0 and st["policy"]["lf_edge_hz"] == pytest.approx(84.7, abs=0.11)
+        stop = await srv.feedback_watch_stop()
+        assert stop["ok"] and stop["report"]["policy"]["lf_edge"]["lf_feedback_possible"] is True
+        assert "alerts_entries" in stop["report"]["policy"] and "config_entries" in stop["report"]["policy"]   # trimmed in the envelope
+        assert (await srv.get_ringout_report(stop["session_id"]))["policy"]["config"]["tier_b"]["enabled"] is True   # kept on disk
+        fw = await srv.feedback_watch(1)
+        assert fw["ok"] and fw["lf_edge"]["window_low_hz"] == pytest.approx(84.7, abs=0.11) and "ch 1 HPF 121 Hz" in fw["summary"]
+        await srv.feedback_watch_stop()
+        # the ring_out payload binds the declaration: a token minted without it does not run a request with it
+        pend = await srv.ring_out(1, target_gain_db=-19.0, dwell_ms=10)
+        token = assert_pending(pend)
+        assert_err(await srv.ring_out(1, target_gain_db=-19.0, dwell_ms=10, lf_feedback_possible=True, confirm_token=token), "BAD_TOKEN")
+        pend = await srv.ring_out(1, target_gain_db=-19.0, dwell_ms=10, lf_feedback_possible=True)
+        token = assert_pending(pend)
+        assert "LF feedback declared possible" in pend["action_summary"]
+        rep = await srv.ring_out(1, target_gain_db=-19.0, dwell_ms=10, lf_feedback_possible=True, confirm_token=token)
+        assert rep["ok"] and rep["final_stage"] == "DONE" and rep["policy"]["lf_edge"]["window_low_hz"] == 40.0
+        await settle(a)
+    finally:
+        await a.close()
+        srv.app = None
