@@ -624,6 +624,11 @@ det.note_emission(candidate, ts, reason="tier_b")   # cfs cut this live Candidat
                                              #   track as feed() does for its own (emitted, level / probe hits at emission, cooldown) so note_cut()'s
                                              #   verdict treats it as THE cut line and a later re-emission needs fresh evidence; not plateau-class,
                                              #   so never self-deepened. Call right before note_cut(). Returns False for a non-track. (policy round)
+det.note_suppressed(candidate, reason="at_arm")     # cfs DECLINED the Detection feed() just returned for this track (watch at-arm rule, CFS_POLICY §5):
+                                             #   the emission stays on record (re-emission needs fresh evidence) but 'established_at_arm' leaves
+                                             #   emit_evidence (-> 'suppressed_at_arm') and cut_deepen is cleared, so a later held / insufficient
+                                             #   verdict on a POLICY cut of the line does not hand the detector a deepen right on the observation cfs
+                                             #   declined to act on. Klass / reasons / verdict machinery untouched. False for a non-track. (fix round)
 det.arm_p95_db, det.loud_threshold_db, det.loudish_threshold_db, det.release_db_per_s   # report them (cfs puts flags / release / p95 /
                                              #   cut verdicts in the session report under "detector")
 ```

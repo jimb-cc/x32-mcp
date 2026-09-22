@@ -66,6 +66,8 @@ def test_from_dict_nested_overrides_unknown_keys_and_validation():
     ([MicHpf(3, True, 160.0), MicHpf(4, False, 250.0)], 100.0, "ch 4 HPF off"),           # min(112, 100) = 100
     ([MicHpf(1, False, 80.0), MicHpf(2, False, 80.0)], 100.0, "ch 1 HPF off"),            # no HPF anywhere -> 100
     ([MicHpf(1, None, None)], 100.0, "ch 1 HPF unread"),                                    # unreadable preamp -> permissive 100
+    ([MicHpf(33, False, None)], 100.0, "input 33 has no HPF"),                              # aux / USB input on the bus: no HPF -> 100
+    ([MicHpf(33, False, None), MicHpf(3, True, 120.0)], 84.0, "ch 3 HPF 120 Hz"),          # ... and it does not beat a lower HPF edge
     ([MicHpf(7, True, 40.0)], 60.0, "floor 60 Hz (ch 7 HPF 40 Hz)"),                         # floored at 60
     ([MicHpf(7, True, 100.0), MicHpf(8, True, 80.0)], 60.0, "floor 60 Hz (ch 8 HPF 80 Hz)"),  # 56 -> 60
     ([], None, "no included mic"),                                                          # nothing to go on: detector mode default
@@ -141,6 +143,13 @@ def test_at_arm_rule_in_watch():
     assert at_arm_cut_allowed(det(base + ("established_at_arm", "rise6dB"), 20.0), min_prominence_db=30.0)   # grew on its own since
     assert at_arm_cut_allowed(det(base + ("established_at_arm",), 30.0), min_prominence_db=30.0)
     assert not at_arm_cut_allowed(det(base + ("established_at_arm",), 29.9), min_prominence_db=30.0)
+    # a deepen re-emission passes only when the detector earned the deepen right on plateau evidence OTHER than at-arm
+    deepen = det(base + ("established_at_arm", "deepen_held"), 26.0)
+    assert at_arm_cut_allowed(deepen, min_prominence_db=30.0)                                                   # no candidate: trusted
+    assert not at_arm_cut_allowed(deepen, min_prominence_db=30.0, cand=SimpleNamespace(emit_evidence=("at_arm", "suppressed_at_arm")))
+    assert not at_arm_cut_allowed(deepen, min_prominence_db=30.0, cand=SimpleNamespace(emit_evidence=("established_at_arm", "tier_b")))
+    assert at_arm_cut_allowed(deepen, min_prominence_db=30.0, cand=SimpleNamespace(emit_evidence=("established_at_arm", "loud")))
+    assert at_arm_cut_allowed(deepen, min_prominence_db=30.0, cand=SimpleNamespace(emit_evidence=("fastrise", "suppressed_at_arm")))
 
 
 def test_alert_worthiness():
@@ -225,3 +234,38 @@ def test_note_emission_held_line_is_not_deepened_by_the_detector():
         out += det.feed(vals, ts)
     assert c.cut_verdict == "held" and c.cut_deepen is False
     assert out == []                          # no re-emission (deepen) from the detector: tier B decides
+
+
+def test_note_suppressed_withdraws_the_at_arm_evidence_from_the_emission_record():
+    """cfs declined a watch at-arm Detection (note_suppressed): the emission stays on record (re-emission needs fresh evidence)
+    but 'established_at_arm' leaves emit_evidence and any deepen right is cleared, so a later 'held' verdict on a POLICY cut of
+    the line does not make the detector deepen it by itself; nothing else about the track changes."""
+    cfg = DetectorConfig()
+    det = FeedbackDetector(cfg, RTA_BAND_HZ, mode="watch")
+    ts = 0.0
+    gen = _tone_frames(4000, -15.0)           # loud-ish (a plateau-class emission would earn a deepen right on 'held')
+    for _ in range(40):
+        ts, vals = next(gen)
+        det.feed(vals, ts)
+    c = next(x for x in det.candidates if abs(x.band - 57) <= 1)
+    assert det.note_suppressed(object()) is False                     # not a live track
+    # stand in for feed() having emitted the line on the at-arm observation
+    c.emitted, c.last_emit_ts, c.last_emit_level_db, c.emit_peak_db = 1, ts, c.cluster_db, c.level_db
+    c.emit_evidence = ("established_at_arm",)
+    c.cut_deepen = True
+    klass, reasons = c.klass, c.reasons
+    assert det.note_suppressed(c, reason="at_arm") is True
+    assert c.emit_evidence == ("suppressed_at_arm",) and c.cut_deepen is False and c.emitted == 1
+    assert (c.klass, c.reasons) == (klass, reasons)
+    # the policy then cuts it (note_emission 'at_arm') and the line drops by the bell and holds: 'held', NO detector deepen right
+    assert det.note_emission(c, ts, reason="at_arm")
+    det.note_cut(freq_hz=1000.0, depth_db=-3.0, ts=ts)
+    out = []
+    for _ in range(60):
+        ts, vals = next(gen)
+        vals = list(vals)
+        for b in (56, 57, 58):
+            vals[b] -= 3.0
+        out += det.feed(vals, ts)
+    assert c.cut_verdict == "held" and c.cut_deepen is False and out == []
+    assert det.cut_log[-1]["verdict"] == "held" and det.cut_log[-1]["deepen"] is False

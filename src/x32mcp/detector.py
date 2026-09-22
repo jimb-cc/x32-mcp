@@ -781,6 +781,24 @@ class FeedbackDetector:
         log.debug("policy emission noted: band %d (%.0f Hz) %.1f dB [%s]", c.band, c.freq_hz, c.level_db, reason)
         return True
 
+    def note_suppressed(self, cand: "Candidate", *, reason: str = "at_arm") -> bool:
+        """cfs DECLINED to act on the :class:`Detection` that :meth:`feed` just returned for ``cand`` (the watch's at-arm
+        rule: an established-at-arm line that is neither LOUD nor prominent enough is alerted and left to the policy's tier
+        B, docs/CFS_POLICY.md §5). The emission stays on the track's record -- so the detector re-emits only on evidence
+        gathered since (regrowth, LOUD, a probe hit) -- but the AT-ARM name is withdrawn from the emission evidence and any
+        pending deepen right is cleared: a later 'held' / 'insufficient' verdict on a POLICY cut of this line must not
+        entitle the detector to deepen it by itself on the very observation cfs declined to act on (that deepening is the
+        policy's verdict-gated cadence). ``suppressed_<reason>`` is recorded in its place. Nothing else about the track
+        changes (klass, reasons, verdict machinery). Returns False when ``cand`` is not a live track."""
+        if not isinstance(cand, Candidate) or not any(c is cand for c in self._cands):
+            return False
+        c = cand
+        c.emit_evidence = tuple(sorted((set(c.emit_evidence) - {"established_at_arm"}) | {f"suppressed_{reason}"}))
+        c.cut_deepen = False
+        log.debug("emission suppressed by cfs (%s): band %d (%.0f Hz) %.1f dB; evidence now [%s]", reason, c.band, c.freq_hz, c.level_db,
+                  ",".join(c.emit_evidence))
+        return True
+
     @staticmethod
     def bell_attenuation_db(depth_db: float, offset_oct: float, q: float) -> float:
         """Attenuation (dB, >= 0) of an RBJ peaking cut of ``depth_db`` (< 0) and quality ``q`` at ``offset_oct`` octaves

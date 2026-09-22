@@ -717,10 +717,14 @@ own `device.yaml` threshold and a `reasons` string in the report:
   contract (`programme_present`) and says so in the report, gives a loud-ish MODERATE line **one**
   −3 dB cut (tier B, tagged in the report) and lets the detector's verdict decide the rest (held →
   alert and, only while still a held family-less line, −6/−9; false_cut → ignore-listed, the cut
-  stays), turns the bus's **scribble strip red** while a suspicious line it will not cut is live
-  (always restored), declines to cut a quiet line that was already sounding when a watch armed
-  (alerted instead), re-forces the RTA ballistics when the display looks frozen (and aborts if it
-  stays frozen) and answers a stationary-but-suspicious line in a ring-out with a 3 dB back-off probe.
+  stays; a held line that is merely masked by a loud passage is not mistaken for one that ended),
+  turns the bus's **scribble strip red** while a suspicious line it will not cut is live (always
+  restored — on reconnect if need be), declines to cut a quiet line that was already sounding when a
+  watch armed (alerted instead; its later deepening stays the policy's, not the detector's), never
+  argues with the engineer's hands (a band released or a master pulled on the desk ends the policy's
+  engagement), re-forces the RTA ballistics when the display looks frozen (and aborts if it stays
+  frozen) and answers a stationary-but-suspicious line in a ring-out with a 3 dB back-off probe that
+  yields the moment the detector files a real detection.
 
 There is no weighted confidence sum and no absolute level gate (`confidence` is a monotone display
 number ≥ 0.7 on emitted lines). A detection becomes

@@ -117,6 +117,9 @@ _PANIC_REASON = "panic: outputs muted by the operator's emergency stop"
 STAGES: tuple[str, ...] = ("PREFLIGHT", "SNAPSHOT", "ARM", "RAISE", "HOLD", "NOTCH", "VERIFY", "PROBE", "BACKOFF", "DONE", "ABORT")
 _FROZEN_FLAGS = frozenset({"PEAK_HOLD_SUSPECTED", "FROZEN_LINES"})
 _MAX_POLICY_LOG = 400
+_HELD_ENDED_DROP_DB = 6.0     # default of cfs_policy.tier_b.ended_drop_db (held line lost: ended only if its band fell this far)
+_OVERRIDE_POLL_S = 1.0        # ring_out parked on a policy engagement: read the master back this often (hands-off check)
+_GEQ_RELEASE_DB = 0.2         # a pushed GEQ band value this much SHALLOWER than ours: somebody released the band by hand
 
 _RESTORE_RETRY_S = 0.5
 _RESTORE_DEADLINE_S = 10.0
@@ -434,8 +437,9 @@ class ReportStore:
                 lines.append("")
             ign = pol.get("ignore") or []
             if ign:
-                lines.append("- Ignore-listed (a cut went through the line like programme through an EQ; the band stays where it is until "
-                             "released by hand or by a later session): " + ", ".join(f"{_fmt(i.get('freq_hz'), 'g', ' Hz')} (band {i.get('band')}, {i.get('why')})" for i in ign))
+                lines.append("- Ignore-listed for policy cuts (a cut went through the line like programme through an EQ, or the engineer released "
+                             "the band; the band stays where it is until moved by hand or by a later session): "
+                             + ", ".join((f"{_fmt(i.get('freq_hz'), 'g', ' Hz')} " if i.get("freq_hz") is not None else "") + f"(band {i.get('band')}, {i.get('why')})" for i in ign))
             aa = pol.get("at_arm_suppressed") or []
             if aa:
                 lines.append(f"- At-arm lines NOT cut in watch (alerted): " + ", ".join(f"{_fmt(a.get('freq_hz'), 'g', ' Hz')} {_fmt(a.get('level_db'), '.0f', ' dBFS')} "
@@ -454,6 +458,9 @@ class ReportStore:
             bo = pol.get("backoff_probes") or []
             if bo:
                 lines.append("- Back-off probes: " + ", ".join(f"{_fmt(b.get('freq_hz'), 'g', ' Hz')} drop {_fmt(b.get('drop_db'), '.1f', ' dB')} → {b.get('verdict')}" for b in bo))
+            errs = pol.get("errors") or {}
+            if errs:
+                lines.append("- Policy step errors (first one logged with its traceback, the rest counted): " + ", ".join(f"{k} ×{v}" for k, v in sorted(errs.items())))
             for w in pol.get("warnings") or []:
                 lines.append(f"- {w}")
         stages = r.get("stages") or []
@@ -491,8 +498,11 @@ class _TierB:
     last_cut_mono: float | None = None
     verdicts: list[str] = field(default_factory=list)
     held_since_ts: float | None = None
+    held_level_db: float | None = None   # the line's level when 'held' was filed (track lost later: ended vs. masked, see _policy_tier_b)
+    master_db_at_cut: float | None = None
     state: str = "new"             # new | queued | pending (verdict awaited) | held | done
-    outcome: str | None = None     # confirmed | false_cut | ended | ambiguous | max_depth | no_verdict | no_write | musical | not_base | aborted
+    outcome: str | None = None     # confirmed | false_cut | ended | lost | ambiguous | max_depth | no_verdict | no_write | musical | not_base |
+                                   # superseded | operator | session_end | aborted
     started_mono: float = 0.0
 
     def brief(self) -> dict[str, Any]:
@@ -535,8 +545,11 @@ class _Policy:
     frozen_since_mono: float | None = None
     ballistics_reforced: dict[str, Any] | None = None
     backoff_done: dict[int, Any] = field(default_factory=dict)                    # id(cand) -> cand already probed
+    backoff_retried: dict[int, Any] = field(default_factory=dict)                 # id(cand) -> cand whose interrupted probe was re-queued once
     backoff_log: list[dict[str, Any]] = field(default_factory=list)
     warned: set[str] = field(default_factory=set)
+    step_errors: dict[str, int] = field(default_factory=dict)                     # policy step -> unexpected exceptions (first one logged+warned)
+    override_poll_mono: float = -math.inf
 
 
 class _DeskGeqWriter:
@@ -682,6 +695,9 @@ class CfsManager:
         self._lock = asyncio.Lock()
         self._bad_frame_logged = False
         self._notch_inflight: asyncio.Future | None = None  # set while a GEQ write is between propose and commit
+        # a strip colour a finished session could not give back (desk unreachable at the time): written the moment the
+        # connection returns, or adopted as the colour to restore by the next session on that strip
+        self._color_owed: tuple[Target, Any, str] | None = None
         self._unsub_conn = events.subscribe(self._on_connection_event, types={"connection.state"})
         self._unsub_panic = events.subscribe(self._on_panic_event, types={"desk.panic.begin"})
         self._unsub_policy = events.subscribe(self._on_policy_event, types={"policy.show_mode"})
@@ -1052,17 +1068,23 @@ class CfsManager:
 
     async def _lf_edge(self, pf: Preflight) -> LfEdge:
         """Read ``preamp/hpon`` + ``preamp/hpf`` of the included mics (one scoped ``/node`` sweep of their
-        ``/ch/NN/preamp`` sections) and derive the session's LF edge (:func:`~x32mcp.cfs_policy.lf_edge_from_hpfs`)."""
-        mics = [m for m in pf.included_mics if 1 <= int(m.ch) <= 32]
-        if not mics:
+        ``/ch/NN/preamp`` sections) and derive the session's LF edge (:func:`~x32mcp.cfs_policy.lf_edge_from_hpfs`).
+        Advisory: an included source without a channel high-pass filter (aux / USB inputs, ch > 32) or whose preamp
+        could not be read counts as 'no HPF' (the permissive ``no_hpf_hz`` 100 Hz); nothing here refuses arming."""
+        all_mics = list(pf.included_mics)
+        if not all_mics:
             return lf_edge_from_hpfs([], self._pcfg.lf_edge)
+        mics = [m for m in all_mics if 1 <= int(m.ch) <= 32]
         paths = [f"/ch/{int(m.ch):02d}/preamp" for m in mics]
         sections: dict[str, dict[str, Any]] = {}
-        try:
-            state = await self._desk.dump(sections=paths)
-            sections = dict(state.sections)
-        except (DeskError, X32ConnectionError, OSError, ValueError) as e:
-            log.warning("reading the open mics' HPF settings failed (%s): LF edge falls back to the no-HPF default", e)
+        if paths:
+            try:
+                state = await self._desk.dump(sections=paths)
+                sections = dict(state.sections)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:   # advisory read: whatever goes wrong, fall back to the no-HPF default rather than refuse to arm
+                log.warning("reading the open mics' HPF settings failed (%s): LF edge falls back to the no-HPF default", e)
         hpfs: list[MicHpf] = []
         for m, path in zip(mics, paths):
             sec = sections.get(path) or {}
@@ -1070,6 +1092,9 @@ class CfsManager:
             hz = sec.get("preamp/hpf")
             hpfs.append(MicHpf(int(m.ch), bool(on) if on is not None else None,
                                float(hz) if isinstance(hz, (int, float)) and not isinstance(hz, bool) else None))
+        for m in all_mics:
+            if not 1 <= int(m.ch) <= 32:
+                hpfs.append(MicHpf(int(m.ch), False, None))   # aux / USB return feeding the bus: no HPF on that input at all
         return lf_edge_from_hpfs(hpfs, self._pcfg.lf_edge)
 
     def _lf_edge_dict(self, ses: _Session) -> dict[str, Any]:
@@ -1190,6 +1215,12 @@ class CfsManager:
             except Exception:
                 log.exception("restore task failed")
         await self._disarm()
+        # engagements still open when the frames stopped get their closing row (the report otherwise ends on a verdict row)
+        pol = ses.policy
+        if pol is not None:
+            for tb in list(pol.tier_b.values()):
+                if tb.state != "done":
+                    self._tier_b_finish(ses, pol, tb, "aborted" if ses.abort_reason else "session_end", ses.last_ts)
         # A session must never leave the bus strip in the alert colour (the consumer that drives it is stopped now).
         await self._restore_strip_color(ses)
         # Hand the engineer's RTA back the way we found it (source, ballistics, gain). Best effort, never raises.
@@ -1416,6 +1447,7 @@ class CfsManager:
             "at_arm_suppressed": list(pol.at_arm_log),
             "flags_seen": [{"flag": f, "first_seen_s": t} for f, t in pol.flags_seen.items()],
             "ballistics_reforced": pol.ballistics_reforced, "backoff_probes": list(pol.backoff_log),
+            "errors": dict(pol.step_errors),
         }
 
     # -- arming: strip colour ----------------------------------------------------------------------
@@ -1432,6 +1464,16 @@ class CfsManager:
         if colours and pol.cfg.alerts.color not in colours:
             ses.warnings.append(f"cfs_policy.alerts.color {pol.cfg.alerts.color!r} is not a colour of this desk ({', '.join(colours)}): "
                                 "scribble-strip alerts are off for this session")
+            return
+        owed = self._color_owed
+        if owed is not None and owed[0].key == ses.target.key:
+            # an earlier session left this strip in the alert colour and could not write it back: what the strip shows now is
+            # OUR colour, not the engineer's -- restore the owed one (first alerts pass, colour state marked unknown)
+            self._color_owed = None
+            pol.color_orig = owed[1]
+            pol.color_dirty = True
+            log.info("CFS² %s: %s's strip colour is owed %s by session %s: adopting it as the colour to restore", ses.session_id,
+                     ses.target.label, owed[1], owed[2])
             return
         path = f"{ses.target.osc_prefix}/config"
         tok: Any = None
@@ -1506,9 +1548,38 @@ class CfsManager:
             log.info("CFS² %s: %s strip colour restored to %s", ses.session_id, ses.target.label, pol.color_orig)
             return
         pol.color_restored = False
-        msg = f"could not restore {ses.target.label}'s strip colour to {pol.color_orig}: it may still show the alert colour {pol.cfg.alerts.color}"
+        self._color_owed = (ses.target, pol.color_orig, ses.session_id)
+        msg = (f"could not restore {ses.target.label}'s strip colour to {pol.color_orig}: it may still show the alert colour {pol.cfg.alerts.color} "
+               "(it is written again as soon as the desk answers -- on reconnect or when the next session arms on this strip)")
         ses.warnings.append(msg)
         log.error("CFS² %s: %s", ses.session_id, msg)
+
+    async def _pay_color_owed(self) -> None:
+        """The desk is reachable again: give a strip the colour a finished session still owes it."""
+        owed = self._color_owed
+        if owed is None:
+            return
+        target, color, sid = owed
+        live = self._ses
+        if live is not None and live.target.key == target.key:
+            return                                         # a new session owns that strip now (it adopted the owed colour at arm)
+        try:
+            await self._desk.label(target, color=color)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            log.warning("CFS² %s: late restore of %s's strip colour to %s failed: %s (still owed)", sid, target.label, color, e)
+            return
+        if self._color_owed is owed:
+            self._color_owed = None
+        last = self._last
+        if last is not None and last.session_id == sid and last.policy is not None:
+            last.policy.color_is_alert = False
+            last.policy.color_restored = True
+            if last.report is not None and isinstance(last.report.get("policy"), dict):
+                last.report["policy"].setdefault("strip_color", {})["restored"] = "late"
+        self._events.publish("cfs.alert", session_id=sid, bus=bus_label(target), on=False, color=color, candidates=[], restored=True, late=True)
+        log.info("CFS² %s: %s strip colour restored to %s after the desk came back", sid, target.label, color)
 
     # -- per frame ---------------------------------------------------------------------------------
 
@@ -1530,18 +1601,41 @@ class CfsManager:
             del pol.at_arm_suppressed[key]
         for key in [k for k, v in pol.backoff_done.items() if live.get(k) is not v]:
             del pol.backoff_done[key]
+        for key in [k for k, v in pol.backoff_retried.items() if live.get(k) is not v]:
+            del pol.backoff_retried[key]
+        # each step is isolated: a desk error or a bug in one rule must neither stop feed() nor silence the steps after it
+        # (the alerts run last and give the strip its colour back); an unexpected exception is logged with its traceback and
+        # reported ONCE per step, then only counted (20 frames/s would otherwise flood the log)
+        await self._policy_step(ses, pol, "flags", lambda: self._policy_flags(ses, pol, det, ts, t_rel, now))
+        await self._policy_step(ses, pol, "programme", lambda: self._policy_programme(ses, pol, det, ts, t_rel))
+        if pol.cfg.tier_b.enabled:
+            await self._policy_step(ses, pol, "tier_b", lambda: self._policy_tier_b(ses, pol, det, ts, now))
+        if ses.mode is CfsMode.RINGOUT and pol.cfg.backoff_probe.enabled:
+            await self._policy_step(ses, pol, "backoff", lambda: self._policy_backoff_scan(ses, pol, det))
+        await self._policy_step(ses, pol, "alerts", lambda: self._policy_alerts(ses, pol, det, ts, now))
+
+    async def _policy_step(self, ses: _Session, pol: _Policy, name: str, fn: Callable[[], Any]) -> None:
         try:
-            await self._policy_flags(ses, pol, det, ts, t_rel, now)
-            self._policy_programme(ses, pol, det, ts, t_rel)
-            if pol.cfg.tier_b.enabled:
-                await self._policy_tier_b(ses, pol, det, ts, now)
-            if ses.mode is CfsMode.RINGOUT and pol.cfg.backoff_probe.enabled:
-                self._policy_backoff_scan(ses, pol, det)
-            await self._policy_alerts(ses, pol, det, ts, now)
+            res = fn()
+            if asyncio.iscoroutine(res):
+                await res
         except asyncio.CancelledError:
             raise
         except (DeskError, PolicyError, X32ConnectionError, CfsError) as e:
-            log.warning("CFS² %s: policy step failed on a frame: %s", ses.session_id, e)
+            n = pol.step_errors.get(f"{name}:desk", 0) + 1
+            pol.step_errors[f"{name}:desk"] = n
+            if n == 1 or n % 100 == 0:
+                log.warning("CFS² %s: policy step %s failed on a frame (%d so far): %s", ses.session_id, name, n, e)
+        except Exception as e:
+            n = pol.step_errors.get(name, 0) + 1
+            pol.step_errors[name] = n
+            if n == 1:
+                log.exception("CFS² %s: policy step %s raised on a frame", ses.session_id, name)
+                self._policy_warn(ses, pol, f"step_error:{name}",
+                                  f"policy step '{name}' raised {type(e).__name__}: {e} -- that step is skipped on frames where it fails "
+                                  "(further occurrences are counted in policy.errors, not logged); the other policy steps and the detector run on")
+            elif n % 200 == 0:
+                log.error("CFS² %s: policy step %s has now raised on %d frames (last: %r)", ses.session_id, name, n, e)
 
     # -- item 6: analyser flags --------------------------------------------------------------------
 
@@ -1573,24 +1667,42 @@ class CfsManager:
         if pol.cfg.reforce_ballistics_on_freeze and pol.ballistics_reforced is None:
             if held_for < pol.cfg.frozen_reforce_s:
                 return                                     # a live line's skirt can repeat its code for a few frames; a display stays frozen
-            # the prefs were forced at arm, so a frozen display now means somebody changed them on the console: force them again once
-            pol.ballistics_reforced = {"t": round(t_rel, 2), "flags": sorted(frozen), "result": None}
-            res = await force_rta_ballistics(self._conn, self._d)
-            pol.ballistics_reforced["result"] = res
-            self._desk.invalidate("/-prefs/rta")
-            pol.frozen_since_mono = asyncio.get_running_loop().time()   # the re-forced display gets frozen_abort_s to come alive
-            self._policy_warn(ses, pol, "frozen",
-                              f"the RTA display looked frozen at t+{t_rel:.1f} s ({', '.join(sorted(frozen))}): decay / peak-hold were re-forced "
-                              f"(found decay={res.get('decay_before')!r}, peakhold={res.get('peakhold_before')!r})")
-            self._events.publish("cfs.policy", session_id=ses.session_id, bus=ses.bus, what="ballistics_reforced", t=round(t_rel, 2),
-                                 written=res.get("written"), failed=res.get("failed"))
+            # the prefs were forced at arm, so a frozen display now means somebody changed them on the console: force them again once.
+            # The re-force (two reads + two writes, up to ~2 s against a slow desk) runs in the background: the frame consumer --
+            # and with it detection -- must not go blind while it waits
+            pol.ballistics_reforced = {"t": round(t_rel, 2), "flags": sorted(frozen), "result": None, "pending": True}
+            task = asyncio.get_running_loop().create_task(self._reforce_ballistics(ses, pol, sorted(frozen), t_rel), name="cfs-reforce-ballistics")
+            self._bg.add(task)
+            task.add_done_callback(self._bg.discard)
             return
+        if pol.ballistics_reforced is not None and pol.ballistics_reforced.get("pending"):
+            return                                         # re-force in flight: the frozen clock restarts when it lands
         if held_for >= pol.cfg.frozen_abort_s:
             reason = (f"the RTA display is frozen ({', '.join(sorted(frozen))} for {held_for:.0f} s"
                       + (" after re-forcing decay / peak-hold" if pol.ballistics_reforced else "")
                       + "): the detector cannot see through a frozen display, so the session stops")
             log.warning("CFS² %s: %s", ses.session_id, reason)
             self._abort_from_callback(ses, reason)
+
+    async def _reforce_ballistics(self, ses: _Session, pol: _Policy, frozen: list[str], t_rel: float) -> None:
+        rec = pol.ballistics_reforced if pol.ballistics_reforced is not None else {}
+        res: dict[str, Any]
+        try:
+            res = await force_rta_ballistics(self._conn, self._d)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:   # force_rta_ballistics swallows its own read/write failures; anything else is still not fatal here
+            log.warning("CFS² %s: re-forcing the RTA ballistics failed: %s", ses.session_id, e)
+            res = {"decay_before": None, "peakhold_before": None, "written": [], "failed": ["decay", "peakhold"], "error": str(e)}
+        rec["result"] = res
+        rec["pending"] = False
+        self._desk.invalidate("/-prefs/rta")
+        pol.frozen_since_mono = asyncio.get_running_loop().time()   # the re-forced display gets frozen_abort_s to come alive
+        self._policy_warn(ses, pol, "frozen",
+                          f"the RTA display looked frozen at t+{t_rel:.1f} s ({', '.join(frozen)}): decay / peak-hold were re-forced "
+                          f"(found decay={res.get('decay_before')!r}, peakhold={res.get('peakhold_before')!r})")
+        self._events.publish("cfs.policy", session_id=ses.session_id, bus=ses.bus, what="ballistics_reforced", t=round(t_rel, 2),
+                             written=res.get("written"), failed=res.get("failed"))
 
     # -- item 2: the ring-out contract check -------------------------------------------------------
 
@@ -1645,18 +1757,24 @@ class CfsManager:
         pol = ses.policy
         if pol is None or "established_at_arm" not in det.reasons:
             return False
-        if at_arm_cut_allowed(det, min_prominence_db=pol.cfg.at_arm_watch_min_prominence_db):
+        c = self._candidate_for(ses, det.band)
+        if at_arm_cut_allowed(det, min_prominence_db=pol.cfg.at_arm_watch_min_prominence_db, cand=c):
             return False
         if pol.first_frame_ts is None:
             pol.first_frame_ts = ts
         rec = {"t": self._t_rel(pol, ts), "freq_hz": round(det.freq_hz, 1), "rta_band": det.band, "level_db": round(det.level_db, 1),
                "prominence_db": round(det.prominence_db, 1), "reasons": list(det.reasons)}
-        c = self._candidate_for(ses, det.band)
         first = c is None or id(c) not in pol.at_arm_suppressed
         if c is not None:
             pol.at_arm_suppressed[id(c)] = {"cand": c, **rec}
+            # the detector recorded this emission with AT-ARM as plateau-class evidence; the watch declined to act on it, so
+            # withdraw that name from the track's emission record: a later 'held' verdict on a POLICY cut of this line must
+            # not hand the detector a deepen right (tier A, 1.5 s cadence) on the observation we just declined -- deepening a
+            # held at-arm line is tier B's verdict-gated held_deepen_s cadence [DETECTOR §9 note_suppressed]
+            ses.det.note_suppressed(c, reason="at_arm")
         if first:
-            pol.at_arm_log.append(rec)
+            if len(pol.at_arm_log) < _MAX_POLICY_LOG:
+                pol.at_arm_log.append(rec)
             log.info("CFS² %s: line at %.0f Hz (%.1f dBFS, %.0f dB prominent) was sounding when the watch armed: NOT cut "
                      "(neither LOUD nor >= %g dB prominent) — alerting", ses.session_id, det.freq_hz, det.level_db, det.prominence_db,
                      pol.cfg.at_arm_watch_min_prominence_db)
@@ -1676,16 +1794,26 @@ class CfsManager:
 
     def _tier_b_ignored(self, pol: _Policy, c: Candidate, geq_band: int) -> bool:
         for i in pol.ignore:
-            if i.get("band") == geq_band or abs(int(i.get("rta_band", -99)) - int(c.band)) <= 1:
+            rb = i.get("rta_band")
+            if i.get("band") == geq_band or (rb is not None and abs(int(rb) - int(c.band)) <= 1):
                 return True
         return False
 
     def _tier_b_ignore(self, ses: _Session, pol: _Policy, tb: _TierB, ts: float | None, why: str) -> None:
-        entry = {"t": self._t_rel(pol, ts), "freq_hz": round(tb.freq_hz, 1), "rta_band": tb.rta_band, "band": tb.geq_band,
-                 "depth_db": tb.depth_db, "why": why}
-        pol.ignore.append(entry)
-        log.info("CFS² %s: %.0f Hz ignore-listed for policy cuts (%s); GEQ band %s stays at %s dB until released by hand or a later session",
-                 ses.session_id, tb.freq_hz, why, tb.geq_band, tb.depth_db)
+        self._policy_ignore_band(ses, pol, ts, why, band=tb.geq_band, rta_band=tb.rta_band, freq_hz=tb.freq_hz, depth_db=tb.depth_db)
+
+    def _policy_ignore_band(self, ses: _Session, pol: _Policy, ts: float | None, why: str, *, band: int | None, rta_band: int | None,
+                            freq_hz: float | None, depth_db: float | None) -> None:
+        """Put a GEQ band (and the RTA band +-1 of the line on it, when known) on the session's ignore list: no further POLICY
+        cut lands there (detector cuts on their own evidence are unaffected). One entry per GEQ band."""
+        if band is not None and any(i.get("band") == band for i in pol.ignore):
+            return
+        entry = {"t": self._t_rel(pol, ts), "freq_hz": None if freq_hz is None else round(float(freq_hz), 1), "rta_band": rta_band,
+                 "band": band, "depth_db": depth_db, "why": why}
+        if len(pol.ignore) < _MAX_POLICY_LOG:
+            pol.ignore.append(entry)
+        log.info("CFS² %s: %s ignore-listed for policy cuts (%s); GEQ band %s stays at %s dB until released by hand or a later session",
+                 ses.session_id, f"{float(freq_hz):.0f} Hz" if freq_hz is not None else f"GEQ band {band}", why, band, depth_db)
         self._events.publish("cfs.policy", session_id=ses.session_id, bus=ses.bus, what="ignore_listed", **entry)
 
     def _tier_b_finish(self, ses: _Session, pol: _Policy, tb: _TierB, outcome: str, ts: float | None) -> None:
@@ -1701,9 +1829,14 @@ class CfsManager:
             "confirmed": "none: the cut removed the line (regrowth is the detector's business)",
             "false_cut": "ignore-listed: the line ended by itself; the cut stays (never written shallower)",
             "ended": "ignore-listed: the line ended by itself after holding; the cut stays",
+            "lost": "none: the track was lost while its band still read at the held level (masked, not ended): NOT ignore-listed; "
+                    "the re-acquired line can be engaged again",
             "ambiguous": "none: report only", "max_depth": "none: band at the deepest allowed cut / budget spent",
             "no_write": "none: the write did not happen", "no_verdict": "none: no verdict arrived", "musical": "none: the line turned musical",
             "not_base": "none: the line no longer qualifies", "gone": "none: the line is gone", "aborted": "none: session aborting",
+            "superseded": "none: another cut on this line is being judged (its verdict rules)",
+            "operator": "ignore-listed: the engineer released the band by hand -- never argued with",
+            "session_end": "none: the session finished with the engagement open",
         }.get(outcome, "none")
         self._tier_b_log(ses, pol, tb, ts, action="end", verdict=tb.verdicts[-1] if tb.verdicts else None, next_action=text)
 
@@ -1720,12 +1853,37 @@ class CfsManager:
         note_emission -> note_cut). The verdict the detector files afterwards drives the follow-up (``_policy_tier_b``)."""
         c = tb.cand
         ts = ses.last_ts if ses.last_ts is not None else self._clock()
+        if tb.state == "done":
+            return None                                    # finished while the action was queued (operator release, abort, ...)
         if ses.abort_reason is not None:
             self._tier_b_finish(ses, pol, tb, "aborted", ts)
             return None
         live = isinstance(c, Candidate) and any(x is c for x in ses.det.candidates) and c.first_ts == tb.first_ts and not c.false_cut
         if not live and reason != "backoff_probe":
             self._tier_b_finish(ses, pol, tb, "gone", ts)
+            return None
+        if live and c.misses and reason != "backoff_probe":
+            # (ring_out: queued while present, coasting by the time the action runs) never write into a gap: a fresh engagement is
+            # dropped (the line may qualify again), a follow-up goes back to waiting for the line to show
+            if reason == "tier_b":
+                self._tier_b_finish(ses, pol, tb, "gone", ts)
+            else:
+                tb.state = "held" if reason == "tier_b_held" else "pending"
+            return None
+        if live and c.cut_verdict == "pending":
+            # a cut on (or within a bell of) this line is being judged right now -- the detector's own, landed while this
+            # action was queued, or a neighbour's: never stack a second write on an unjudged one. A fresh engagement yields to
+            # that verdict altogether; a follow-up waits for it and acts on what it says
+            if reason == "tier_b":
+                self._tier_b_finish(ses, pol, tb, "superseded", ts)
+            else:
+                tb.state = "pending"
+                tb.last_cut_mono = asyncio.get_running_loop().time()
+                self._tier_b_log(ses, pol, tb, ts, action=reason, verdict="pending", next_action="wait: another cut on this line is being judged")
+            return None
+        band_now = tb.geq_band if tb.geq_band is not None else ses.nc.band_for_freq(tb.freq_hz)
+        if self._tier_b_band_ignored(pol, band_now):
+            self._tier_b_finish(ses, pol, tb, "operator", ts)   # the band was released by hand (or ignore-listed) since queueing: leave it
             return None
         if live:
             det_obj = Detection(
@@ -1736,16 +1894,20 @@ class CfsManager:
         else:   # a back-off probe killed the line: cut where it stood (pre-emptive, like the detector's PROBE class)
             det_obj = Detection(ts=ts, band=tb.rta_band, freq_hz=tb.freq_hz, level_db=float(tb.level_db if tb.level_db is not None else -128.0),
                                 prominence_db=0.0, slope_db_per_s=0.0, frames=0, confidence=0.0, reasons=(reason,), klass="POLICY")
+        # the notch's policy tag names the rule that ENGAGED the line for its first cut (tier_b | at_arm | backoff_probe) and the
+        # follow-up rule for the deeper steps (tier_b_held | tier_b_insufficient); the tier_b log rows carry both (action + reason)
+        tag = tb.reason if reason == "tier_b" else reason
         if ses.mode is CfsMode.RINGOUT:
-            await self._stage(ses, "HOLD", freq_hz=round(det_obj.freq_hz, 1), rta_band=det_obj.band, tier="B", policy=reason)
-        n = await self._notch(ses, det_obj, tier="B", policy=reason, cand=c if live else None)
+            await self._stage(ses, "HOLD", freq_hz=round(det_obj.freq_hz, 1), rta_band=det_obj.band, tier="B", policy=tag)
+        n = await self._notch(ses, det_obj, tier="B", policy=tag, cand=c if live else None)
         if n is None:
             at_max = tb.geq_band is not None and ses.nc.gains.get(tb.geq_band, 0.0) <= self._cfg.notch_max_db + 1e-9
             self._tier_b_log(ses, pol, tb, ts, action=reason, verdict=None, next_action="no write")
             self._tier_b_finish(ses, pol, tb, "max_depth" if (at_max or ses.nc.spent) else "no_write", ts)
             return None
-        if ses.first_feedback_master_db is None:
-            ses.first_feedback_master_db = ses.master_db
+        tb.master_db_at_cut = ses.master_db
+        if reason == "backoff_probe" and ses.first_feedback_master_db is None:
+            ses.first_feedback_master_db = ses.master_db      # the probe itself showed the line regenerative; other policy cuts wait for their verdict
         tb.cuts += 1
         tb.geq_band = n.band
         tb.depth_db = n.depth_db
@@ -1756,8 +1918,26 @@ class CfsManager:
         self._tier_b_log(ses, pol, tb, ts, action=reason, verdict=None, next_action="await the detector's verdict")
         if ses.mode is CfsMode.RINGOUT:
             await self._stage(ses, "NOTCH", freq_hz=round(det_obj.freq_hz, 1), rta_band=det_obj.band, band=n.band, depth_db=n.depth_db,
-                              tier="B", policy=reason)
+                              tier="B", policy=tag)
         return n
+
+    @staticmethod
+    def _tier_b_band_ignored(pol: _Policy, geq_band: int) -> bool:
+        return any(i.get("band") == geq_band for i in pol.ignore)
+
+    def _held_line_ended(self, ses: _Session, tb: _TierB) -> bool:
+        """A 'held' engagement's track was dropped by the detector (coast_frames without the line). Track death alone does
+        not say the line ENDED: a loud passage swamping the analyser masks a standing line just the same, and masking is
+        routine with programme playing. Look at the band: reading ``tier_b.ended_drop_db`` or more UNDER the held level = the
+        note ended -> ignore-list; at or ABOVE that = masked (or lost to the tracker; also the answer when there is nothing to
+        compare) -> do not ignore-list, so the line can be engaged again once re-acquired (its band already carries the cut;
+        the next step is verdict-gated again)."""
+        lvl = self._band_level(ses, tb.rta_band)
+        ref = tb.held_level_db if tb.held_level_db is not None else tb.level_db
+        if lvl is None or ref is None:
+            return False                                   # cannot tell: the error that keeps protecting the band is 'not ended'
+        drop_db = float(ses.policy.cfg.tier_b.ended_drop_db) if ses.policy is not None else _HELD_ENDED_DROP_DB
+        return float(lvl) <= float(ref) - drop_db
 
     async def _policy_tier_b(self, ses: _Session, pol: _Policy, det: FeedbackDetector, ts: float, now: float) -> None:
         cfg = pol.cfg.tier_b
@@ -1775,7 +1955,10 @@ class CfsManager:
             if c is not tb.cand or (c is not None and c.first_ts != tb.first_ts):
                 c = None                                   # the track is gone, or was re-born under the engagement: another line
             if tb.state == "done":
-                if c is None or tb.outcome == "no_write":  # a failed write may be retried after the cooldown like the detector retries its own
+                # forget a finished engagement once its track is gone -- or right away when nothing was written (a failed write is
+                # retried after the cooldown like the detector retries its own; a line that was coasting / superseded when its cut
+                # came to run may qualify again later). Any other outcome stays on record while the track lives (no re-engagement)
+                if c is None or tb.outcome in ("no_write", "gone", "superseded"):
                     del pol.tier_b[key]
                 continue
             if ses.abort_reason is not None:
@@ -1786,9 +1969,19 @@ class CfsManager:
                     self._tier_b_finish(ses, pol, tb, "gone", ts)
                 continue
             if c is None:
-                # gone without a pending verdict (the detector files its verdict while the track still coasts): after a
-                # 'held' that is a note that ended -> ignore-list; otherwise nothing more to do
-                self._tier_b_finish(ses, pol, tb, "ended" if tb.state == "held" else "gone", ts)
+                # the track is gone without a pending verdict (the detector files its verdicts while the track still coasts).
+                # After 'held' that is EITHER the note ending (the band fell back to its bed: ignore-list, a howl does not
+                # switch itself off) OR the line being masked / lost by the tracker while still standing (the band still
+                # reads at the held level: NOT ignore-listed -- the re-acquired line may be engaged again, verdict-gated)
+                if tb.state == "held":
+                    ended = self._held_line_ended(ses, tb)
+                    if not ended:
+                        log.info("CFS² %s: tier B: track of the held line at %.0f Hz lost while its band still reads %s dBFS (held at %s): "
+                                 "masked, not ended -- not ignore-listed", ses.session_id, tb.freq_hz, _db1(self._band_level(ses, tb.rta_band)),
+                                 _db1(tb.held_level_db))
+                    self._tier_b_finish(ses, pol, tb, "ended" if ended else "lost", ts)
+                else:
+                    self._tier_b_finish(ses, pol, tb, "gone", ts)
                 continue
             verdict = c.cut_verdict
             if c.false_cut or verdict == "false_cut" or c.klass == "FALSE_CUT":
@@ -1803,6 +1996,8 @@ class CfsManager:
                         self._tier_b_finish(ses, pol, tb, "no_verdict", ts)
                     continue
                 tb.verdicts.append(str(verdict))
+                if verdict in ("confirmed", "held", "insufficient") and ses.first_feedback_master_db is None and tb.master_db_at_cut is not None:
+                    ses.first_feedback_master_db = tb.master_db_at_cut   # 'gain before feedback' counts a policy cut only once its verdict says feedback-like
                 if verdict == "confirmed":
                     self._tier_b_log(ses, pol, tb, ts, action="verdict", verdict=verdict, next_action="none (confirmed)")
                     self._tier_b_finish(ses, pol, tb, "confirmed", ts)
@@ -1811,6 +2006,9 @@ class CfsManager:
                     self._tier_b_finish(ses, pol, tb, "ambiguous", ts)
                 elif verdict == "insufficient":
                     # drop short of the bell: the excess exceeds the cut or the bell missed the line -> one deeper step now (as VERIFY does)
+                    if c.misses:
+                        tb.verdicts.pop()                  # the line is not on this frame (coasting): deepen when it shows again, not into a gap
+                        continue
                     self._tier_b_log(ses, pol, tb, ts, action="verdict", verdict=verdict, next_action="deepen now")
                     await self._tier_b_dispatch(ses, pol, tb, "tier_b_insufficient")
                 elif verdict == "held":
@@ -1818,6 +2016,7 @@ class CfsManager:
                     # than the cut. Never decided on drop == bell alone: keep alerting and give it held_deepen_s
                     tb.state = "held"
                     tb.held_since_ts = ts
+                    tb.held_level_db = float(c.level_db)
                     self._tier_b_log(ses, pol, tb, ts, action="verdict", verdict=verdict,
                                      next_action=f"alert; deepen at +{cfg.held_deepen_s:g} s if still a held family-less BASE line")
                 else:
@@ -1836,7 +2035,10 @@ class CfsManager:
                 if c.klass == "MUSICAL":
                     self._tier_b_finish(ses, pol, tb, "musical", ts)      # acquired a family / moves with the mix: leave it
                     continue
-                base_held = c.klass == "MODERATE" and not c.stationary and not c.common_mode and "no_family" in c.reasons
+                # still a held family-less BASE line: MODERATE -- or, for a line engaged as an at-arm line the watch declined to cut,
+                # STRONG on that at-arm evidence alone (tier_b_eligible admitted it as such; the detector will not deepen it: §5)
+                klass_ok = c.klass == "MODERATE" or (c.klass == "STRONG" and (tb.reason == "at_arm" or key in pol.at_arm_suppressed))
+                base_held = klass_ok and not c.stationary and not c.common_mode and "no_family" in c.reasons
                 if not base_held:
                     if waited >= cfg.held_deepen_s + 2.0:
                         self._tier_b_finish(ses, pol, tb, "not_base", ts)
@@ -1844,6 +2046,8 @@ class CfsManager:
                 if tb.geq_band is not None and ses.nc.gains.get(tb.geq_band, 0.0) <= dcfg.notch_max_db + 1e-9:
                     self._tier_b_finish(ses, pol, tb, "max_depth", ts)
                     continue
+                if c.misses:
+                    continue                               # coasting this frame: never deepen into a gap (masked or ending -- next frames tell)
                 await self._tier_b_dispatch(ses, pol, tb, "tier_b_held")
         # 2. at most one new engagement per frame, none within cooldown_s of the previous, never while aborting
         if ses.abort_reason is not None:
@@ -1902,12 +2106,19 @@ class CfsManager:
         kind, obj, reason = act
         pol = ses.policy
         assert pol is not None
-        if kind == "tier_b":
-            await self._tier_b_cut(ses, pol, obj, reason)
-        elif kind == "backoff":
-            await self._backoff_probe(ses, pol, obj)
-        else:
-            log.warning("unknown policy action %r", kind)
+        try:
+            if kind == "tier_b":
+                await self._tier_b_cut(ses, pol, obj, reason)
+            elif kind == "backoff":
+                await self._backoff_probe(ses, pol, obj)
+            else:
+                log.warning("unknown policy action %r", kind)
+        except (DeskError, PolicyError, X32ConnectionError, CfsError) as e:
+            # _notch / _write_master handle their own write failures; anything that still escapes must not leave an engagement
+            # 'queued' for good (the RAISE loop would stay parked on it) nor take the ring-out task down
+            log.warning("CFS² %s: policy action %s/%s failed: %s", ses.session_id, kind, reason, e)
+            if kind == "tier_b" and isinstance(obj, _TierB):
+                self._tier_b_finish(ses, pol, obj, "no_write", ses.last_ts)
 
     # -- item 6: back-off probe (ring_out) ---------------------------------------------------------
 
@@ -1926,20 +2137,28 @@ class CfsManager:
                      ses.session_id, c.freq_hz, c.prominence_db)
             break
 
+    @staticmethod
+    def _policy_yield(ses: _Session) -> bool:
+        """The ring-out task must leave a policy wait NOW: an abort began, or the detector filed a Detection (``ses.pending``)
+        whose HOLD -> NOTCH only this task can run -- a tier-A cut is never parked behind a policy probe's frame-paced waits."""
+        return ses.abort_reason is not None or bool(ses.pending)
+
     async def _collect_band_levels(self, ses: _Session, band: int, seconds: float, *, settle_s: float = 0.0) -> list[float]:
+        """Band level of every frame for ``seconds`` (after ``settle_s``); returns early -- possibly empty -- on an abort or a
+        pending Detection (``_policy_yield``)."""
         loop = asyncio.get_running_loop()
         t0 = loop.time() + settle_s
         t_end = loop.time() + seconds
         out: list[float] = []
-        while ses.abort_reason is None:
+        while not self._policy_yield(ses):
             remaining = t_end - loop.time()
             if remaining <= 0:
                 break
             ses.frame_event.clear()
             try:
-                await asyncio.wait_for(ses.frame_event.wait(), timeout=remaining)
+                await asyncio.wait_for(ses.frame_event.wait(), timeout=min(remaining, 0.25))
             except asyncio.TimeoutError:
-                break
+                continue
             if loop.time() < t0:
                 continue
             lvl = self._band_level(ses, band)
@@ -1947,45 +2166,70 @@ class CfsManager:
                 out.append(float(lvl))
         return out
 
-    async def _policy_wait(self, ses: _Session, seconds: float) -> None:
-        """Sleep ``seconds`` in the ring-out task while staying responsive to an abort (frame-paced)."""
+    async def _policy_wait(self, ses: _Session, seconds: float) -> bool:
+        """Sleep ``seconds`` in the ring-out task while staying responsive (frame-paced) to an abort and to a pending
+        Detection. True when the whole wait elapsed, False when it was cut short (``_policy_yield``)."""
         loop = asyncio.get_running_loop()
         t_end = loop.time() + max(0.0, seconds)
-        while ses.abort_reason is None:
+        while not self._policy_yield(ses):
             remaining = t_end - loop.time()
             if remaining <= 0:
-                return
+                return True
             ses.frame_event.clear()
             try:
                 await asyncio.wait_for(ses.frame_event.wait(), timeout=min(remaining, 0.25))
             except asyncio.TimeoutError:
                 pass
+        return False
 
     async def _backoff_probe(self, ses: _Session, pol: _Policy, c: Candidate) -> None:
         """Lower the master ``drop_db`` for one dwell and watch the STATIONARY line: a source in the room drops dB for dB (left
         alone, level restored); a howl whose plateau a compressor holds falls by far more or dies (1/(1-g)) -> cut where it stood
         (reason backoff_probe) and the level restored [DETECTOR §3 PROBE, §11 N1]. Both master moves are told to the detector
         (``note_gain_step``) and kept a probe window clear of the run's own +1 dB steps, so neither move lands in the pre/post
-        window the detector judges another step on (a restore jump inside the next step's window reads as an over-response)."""
+        window the detector judges another step on (a restore jump inside the next step's window reads as an over-response).
+
+        The probe runs on the ring-out task, the only task that may run HOLD -> NOTCH for a Detection the consumer files
+        meanwhile (``ses.pending``). So every wait in it yields to a pending Detection (``_policy_yield``): before the dip the
+        probe is simply deferred (re-queued by the scan); during the dip it is abandoned with the master LEFT at the lowered
+        level (raising a bus on which a ring was just detected, only to notch it 100 ms later, is the wrong order -- the run
+        raises again from there in its own steps) and re-queued once; after the restore the closing wait just ends early."""
         cfg = pol.cfg.backoff_probe
+        key = id(c)
         if ses.abort_reason is not None or ses.operator_override or ses.connection_lost:
             return
         if not any(x is c for x in ses.det.candidates) or c.misses:
             return
         loop = asyncio.get_running_loop()
         window_s = float(ses.det.cfg.probe_window_s) + 0.2
+        band, freq = int(c.band), float(c.freq_hz)
+        ts0 = ses.last_ts if ses.last_ts is not None else self._clock()
+
+        def requeue(counted: bool) -> bool:
+            """Let the scan queue this line's probe again: always when nothing was done yet, once after an abandoned dip."""
+            if counted:
+                if pol.backoff_retried.get(key) is c:
+                    return False
+                pol.backoff_retried[key] = c
+            if pol.backoff_done.get(key) is c:
+                del pol.backoff_done[key]
+            return True
+
         if ses.last_raise_mono is not None:
-            await self._policy_wait(ses, window_s - (loop.time() - ses.last_raise_mono))   # let the last +1 dB step be judged first
+            # let the last +1 dB step be judged first
+            if not await self._policy_wait(ses, window_s - (loop.time() - ses.last_raise_mono)):
+                if ses.abort_reason is None and ses.pending:
+                    requeue(counted=False)
+                    log.info("CFS² %s: back-off probe at %.0f Hz deferred: a detection is pending", ses.session_id, freq)
+                return
         if ses.abort_reason is not None or not any(x is c for x in ses.det.candidates) or c.misses:
             return
-        band, freq = int(c.band), float(c.freq_hz)
         pre = [float(h[2]) for h in list(c.hist)[-8:]]
         before = median(pre) if pre else float(c.level_db)
         start = ses.master_db
-        ts0 = ses.last_ts if ses.last_ts is not None else self._clock()
         if math.isinf(start) or start - cfg.drop_db < FADER_FLOOR_DB:
-            pol.backoff_log.append({"t": self._t_rel(pol, ts0), "freq_hz": round(freq, 1), "rta_band": band,
-                                    "verdict": f"not run: master at {format_db(start)} dB cannot come down {cfg.drop_db:g} dB"})
+            self._backoff_record(ses, pol, {"t": self._t_rel(pol, ts0), "freq_hz": round(freq, 1), "rta_band": band,
+                                            "verdict": f"not run: master at {format_db(start)} dB cannot come down {cfg.drop_db:g} dB"})
             return
         target = start - cfg.drop_db
         await self._stage(ses, "PROBE", freq_hz=round(freq, 1), rta_band=band, from_db=_db1(start), to_db=_db1(target))
@@ -1993,13 +2237,25 @@ class CfsManager:
             after = await self._write_master(ses, target, force=True)      # lowering: emergency lane, never clamped
         except (DeskError, PolicyError, X32ConnectionError) as e:
             log.warning("CFS² %s: back-off probe write refused: %s", ses.session_id, e)
-            pol.backoff_log.append({"t": self._t_rel(pol, ts0), "freq_hz": round(freq, 1), "rta_band": band, "verdict": f"not run: {e}"})
+            self._backoff_record(ses, pol, {"t": self._t_rel(pol, ts0), "freq_hz": round(freq, 1), "rta_band": band, "verdict": f"not run: {e}"})
             return
         ses.det.note_gain_step(after - start, ses.last_ts if ses.last_ts is not None else self._clock())
         ses.master_db = after
         ses.last_raise_mono = loop.time()
         wait_s = max(ses.dwell_ms / 1000.0, window_s)
         levels = await self._collect_band_levels(ses, band, wait_s, settle_s=cfg.settle_s)
+        if ses.abort_reason is None and ses.pending:
+            # a Detection arrived during the dip: its HOLD -> NOTCH comes first. The probe is abandoned unjudged, the master stays
+            # at the probe level (the run continues from there), and the line is probed once more later if it is still advised
+            again = requeue(counted=True)
+            entry = {"t": self._t_rel(pol, ts0), "freq_hz": round(freq, 1), "rta_band": band, "before_db": round(before, 1), "after_db": None,
+                     "drop_db": None, "died": None, "verdict": "interrupted", "master_from_db": _db1(start), "master_probe_db": _db1(after),
+                     "master_restored_db": None, "retry": again}
+            self._backoff_record(ses, pol, entry)
+            await self._stage(ses, "PROBE", freq_hz=round(freq, 1), rta_band=band, verdict="interrupted", retry=again)
+            log.info("CFS² %s: back-off probe at %.0f Hz interrupted by a detection: master left at %s dB%s", ses.session_id, freq,
+                     format_db(after), " (the probe will be re-queued once)" if again else "")
+            return
         still = any(x is c for x in ses.det.candidates) and not c.misses
         post = median(levels[len(levels) // 2:]) if levels else None
         drop = (before - post) if post is not None else math.inf
@@ -2017,19 +2273,24 @@ class CfsManager:
                 ses.det.note_gain_step(restored - ses.master_db, ses.last_ts if ses.last_ts is not None else self._clock())
                 ses.master_db = restored
                 ses.last_raise_mono = loop.time()
-                await self._policy_wait(ses, wait_s)     # and let the restore be judged before the next +1 dB step goes in
         entry = {"t": self._t_rel(pol, ts0), "freq_hz": round(freq, 1), "rta_band": band, "before_db": round(before, 1),
                  "after_db": None if post is None else round(post, 1), "drop_db": None if post is None else round(drop, 1), "died": died,
                  "verdict": verdict, "master_from_db": _db1(start), "master_probe_db": _db1(after), "master_restored_db": _db1(restored)}
-        pol.backoff_log.append(entry)
-        self._events.publish("cfs.policy", session_id=ses.session_id, bus=ses.bus, what="backoff_probe", **entry)
+        self._backoff_record(ses, pol, entry)
         await self._stage(ses, "PROBE", freq_hz=round(freq, 1), rta_band=band, verdict=verdict, drop_db=entry["drop_db"], died=died)
         log.info("CFS² %s: back-off probe at %.0f Hz: %s (drop %s dB for %g dB)", ses.session_id, freq, verdict, entry["drop_db"], cfg.drop_db)
         if regenerative and ses.abort_reason is None:
-            tb = _TierB(key=id(c), cand=c, first_ts=c.first_ts, freq_hz=freq, rta_band=band, level_db=before, reason="backoff_probe",
+            tb = _TierB(key=key, cand=c, first_ts=c.first_ts, freq_hz=freq, rta_band=band, level_db=before, reason="backoff_probe",
                         started_mono=loop.time())
-            pol.tier_b[id(c)] = tb
+            pol.tier_b[key] = tb
             await self._tier_b_cut(ses, pol, tb, "backoff_probe")
+        if restored is not None and ses.abort_reason is None:
+            await self._policy_wait(ses, wait_s)             # let the restore be judged before the next +1 dB step (ends early on a detection)
+
+    def _backoff_record(self, ses: _Session, pol: _Policy, entry: dict[str, Any]) -> None:
+        if len(pol.backoff_log) < _MAX_POLICY_LOG:
+            pol.backoff_log.append(entry)
+        self._events.publish("cfs.policy", session_id=ses.session_id, bus=ses.bus, what="backoff_probe", **entry)
 
     # -- item 4: alerts ----------------------------------------------------------------------------
 
@@ -2149,17 +2410,7 @@ class CfsManager:
         if target <= ses.start_master_db + 1e-9:
             reason = f"master already at the target ({format_db(ses.start_master_db)} dB)"
         while reason is None and ses.abort_reason is None:
-            act = self._pop_policy_action(ses)
-            if act is not None:
-                # a policy write (tier-B cut / deepen, back-off probe) runs here, between raises, like HOLD -> NOTCH:
-                # every master and GEQ write of a ring-out stays in this one task
-                await self._run_policy_action(ses, act)
-                if ses.abort_reason is not None:
-                    break
-                if ses.nc.spent and not self._policy_busy(ses):
-                    reason = "notch budget spent"
-                    break
-                continue
+            # 1. the detector's own verdicts first: a pending Detection's HOLD -> NOTCH is never queued behind policy work
             det = self._pop_pending(ses)
             if det is not None:
                 await self._stage(ses, "HOLD", freq_hz=round(det.freq_hz, 1), rta_band=det.band, confidence=round(det.confidence, 3))
@@ -2170,9 +2421,31 @@ class CfsManager:
                     ses.abort_reason = (f"ring at {det.freq_hz:.0f} Hz not tamed: GEQ band cannot cut deeper than "
                                         f"{cfg.notch_max_db:+.0f} dB or the notch budget is spent")
                     break
-                if ses.nc.spent:
+                if ses.nc.spent and not self._policy_busy(ses):
                     reason = "notch budget spent"
                     break
+                continue
+            # 2. a policy write (tier-B cut / deepen, back-off probe) runs here, between raises, like HOLD -> NOTCH: every master
+            #    and GEQ write of a ring-out stays in this one task (the probe's waits yield to a Detection filed meanwhile)
+            act = self._pop_policy_action(ses)
+            if act is not None:
+                await self._run_policy_action(ses, act)
+                if ses.abort_reason is not None:
+                    break
+                if ses.nc.spent and not self._policy_busy(ses):
+                    reason = "notch budget spent"
+                    break
+                continue
+            # 3. a policy cut awaits its verdict (or a held line its deepen): neither put another dB into a bus on which a suspected
+            #    howl is standing nor call the run finished under it -- bounded by tier_b.verdict_timeout_s / the held chain. The
+            #    RAISE loop's hands-off check keeps running meanwhile (one fader read per _OVERRIDE_POLL_S)
+            if self._policy_busy(ses):
+                now_m = asyncio.get_running_loop().time()
+                if ses.policy is not None and now_m - ses.policy.override_poll_mono >= _OVERRIDE_POLL_S:
+                    ses.policy.override_poll_mono = now_m
+                    if await self._operator_moved_master(ses):
+                        break
+                await self._dwell(ses, 0.25)
                 continue
             if ses.master_db >= target - 1e-9:
                 reason = "target reached"
@@ -2180,11 +2453,6 @@ class CfsManager:
             if ses.nc.spent:
                 reason = "notch budget spent"
                 break
-            if self._policy_busy(ses):
-                # a policy cut awaits its verdict (or a held line its deepen): do not put another dB into a bus on which a
-                # suspected howl is standing -- bounded by tier_b.verdict_timeout_s / held_deepen_s
-                await self._dwell(ses, 0.25)
-                continue
             if not await self._frames_alive(ses):
                 break
             if await self._operator_moved_master(ses):
@@ -2425,6 +2693,33 @@ class CfsManager:
             log.info("CFS² %s: GEQ band %d moved on the desk %+.1f -> %+.1f dB; adopting it", ses.session_id, band, before, gain_db)
             self._events.publish("cfs.geq_external", session_id=ses.session_id, bus=ses.bus, band=band,
                                  was_db=round(before, 2), now_db=round(gain_db, 2))
+        if gain_db >= before + _GEQ_RELEASE_DB:
+            self._on_geq_release(ses, band, before, gain_db)
+
+    def _on_geq_release(self, ses: _Session, band: int, before: float, now_db: float) -> None:
+        """Somebody made a GEQ band of ours SHALLOWER by hand (our own writes only ever deepen, so this is never an echo of
+        one): the policy never argues with a human. An open engagement on that band ends ('operator') and the band is
+        ignore-listed for POLICY cuts for the rest of the session; the detector may still cut it on fresh evidence of its own
+        (a ring that regrows there is a ring). A deeper hand cut is simply adopted (``observe``)."""
+        pol = ses.policy
+        if pol is None:
+            return
+        ts = ses.last_ts
+        hit: _TierB | None = None
+        for tb in pol.tier_b.values():
+            if tb.geq_band == band and tb.state != "done":
+                hit = tb
+                self._tier_b_log(ses, pol, tb, ts, action="operator", verdict=tb.verdicts[-1] if tb.verdicts else None,
+                                 next_action=f"none: band released by hand ({before:+.1f} -> {now_db:+.1f} dB)", depth_db=round(now_db, 2))
+                self._tier_b_finish(ses, pol, tb, "operator", ts)
+        if self._tier_b_band_ignored(pol, band):
+            return
+        touched = band in ses.nc.touched_bands or hit is not None
+        if not touched:
+            return                                         # a band we never cut: nothing of ours was undone
+        self._policy_ignore_band(ses, pol, ts, f"released by hand on the desk ({before:+.1f} -> {now_db:+.1f} dB): left to the engineer",
+                                 band=band, rta_band=hit.rta_band if hit is not None else None,
+                                 freq_hz=hit.freq_hz if hit is not None else None, depth_db=round(now_db, 2))
 
     async def _read_master(self, ses: _Session) -> float | None:
         """Fresh read of the bus master (dB, -inf for -oo); None when the desk does not answer."""
@@ -2501,7 +2796,12 @@ class CfsManager:
         return False
 
     def _on_connection_event(self, ev: Event) -> None:
-        if ev.data.get("state") != ConnectionState.DEGRADED.value:
+        state = ev.data.get("state")
+        if state == ConnectionState.CONNECTED.value and self._color_owed is not None:
+            task = asyncio.get_running_loop().create_task(self._pay_color_owed(), name="cfs-color-owed")
+            self._bg.add(task)
+            task.add_done_callback(self._bg.discard)
+        if state != ConnectionState.DEGRADED.value:
             return
         ses = self._ses
         if ses is None or ses.connection_lost:

@@ -336,6 +336,58 @@ async def test_colour_the_engineer_sets_mid_session_is_the_one_restored(make_rig
     assert rig.fake.value(COLOR) == "BL"
 
 
+async def test_strip_colour_that_could_not_be_restored_is_paid_back_on_reconnect_or_adopted_by_the_next_session(make_rig, monkeypatch):
+    """The desk does not take the colour restore at stop (all three attempts fail): the report says so, the manager remembers
+    the owed colour and writes it the moment the connection reports 'connected' again; if instead a new session arms on that
+    strip first, it adopts the owed colour as the one to restore (it would otherwise read our RDi as the engineer's colour)."""
+    from x32mcp.desk import DeskError
+
+    rig = await make_rig(policy={"alerts": {"clear_s": 0.3}})
+    # (1) failed restore -> paid on reconnect
+    await _armed(rig)
+    await asyncio.sleep(0.6)
+    rig.rta.inject_note(2000.0, -34.0, rise_frames=1)
+    await wait_until(lambda: rig.events_of("alert"), timeout=2.0, what="strip alert write")
+    await rig.settle()
+    assert rig.fake.value(COLOR) == "RDi"
+    real_label = rig.desk.label
+
+    async def dead_label(*a, **k):
+        raise DeskError("NOT_CONNECTED", "test: desk unreachable")
+    monkeypatch.setattr(rig.desk, "label", dead_label)
+    rep = (await rig.cfs.stop())["report"]
+    rig.rta.stop_note(2000.0)
+    assert rep["policy"]["strip_color"]["restored"] is False and any("could not restore" in w for w in rep["preflight"]["warnings"])
+    await rig.settle()
+    assert rig.fake.value(COLOR) == "RDi" and rig.cfs._color_owed is not None
+    monkeypatch.setattr(rig.desk, "label", real_label)
+    rig.events.publish("connection.state", state="connected", host="x", port=1, console="X32-FAKE", error=None)
+    await wait_until(lambda: any(e.get("late") for e in rig.events_of("alert")), timeout=3.0, what="late colour restore on reconnect")
+    await rig.settle()
+    assert rig.fake.value(COLOR) == "GN" and rig.cfs._color_owed is None
+    assert rig.cfs._last.report["policy"]["strip_color"]["restored"] == "late"
+    # (2) failed restore -> the next session on the strip adopts the owed colour and puts it back on its first alerts pass
+    await asyncio.sleep(0.8)
+    await _armed(rig)
+    await asyncio.sleep(0.6)
+    rig.rta.inject_note(2000.0, -34.0, rise_frames=1)
+    await wait_until(lambda: rig.cfs.state.alert and rig.cfs._ses.policy.color_is_alert, timeout=2.0, what="strip alert")
+    monkeypatch.setattr(rig.desk, "label", dead_label)
+    await rig.cfs.stop()
+    rig.rta.stop_note(2000.0)
+    monkeypatch.setattr(rig.desk, "label", real_label)
+    await rig.settle()
+    assert rig.fake.value(COLOR) == "RDi" and rig.cfs._color_owed is not None
+    await asyncio.sleep(0.8)
+    res = await _armed(rig)
+    ses = rig.cfs._ses
+    assert ses.policy.color_orig == "GN" and rig.cfs._color_owed is None, (ses.policy.color_orig, res)
+    await wait_until(lambda: rig.fake.value(COLOR) == "GN", timeout=3.0, what="owed colour written by the new session")
+    rep = (await rig.cfs.stop())["report"]
+    await rig.settle()
+    assert rig.fake.value(COLOR) == "GN" and rep["policy"]["strip_color"]["original"] == "GN"
+
+
 # ---------------------------------------------------------------------------------------------- item 5: AT-ARM in watch
 
 async def test_a_quiet_at_arm_line_is_alerted_not_cut_in_watch(make_rig):

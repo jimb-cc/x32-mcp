@@ -15,7 +15,13 @@ Scenario C (the policy layer, docs/CFS_POLICY.md; a second session on a QUIET fa
 steady family-less line arriving within one frame at -18 dBFS -- a howl slamming into a quiet limiter plateau looks exactly like this
 and the detector publishes it as MODERATE without cutting it. Tier B cuts it ONCE (-3 dB, tagged tier "B"), the detector files 'held',
 the policy alerts (bus scribble strip -> RDi) and deepens at held_deepen_s intervals to -6 / -9, then stops; when the note ends the strip
-colour is restored. The policy log (report["policy"]["tier_b"]) is printed."""
+colour is restored. The policy log (report["policy"]["tier_b"]) is printed.
+Scenario D (same quiet desk): the held line is MASKED by a loud passage for 0.6 s (the detector drops its track) -- the engagement must
+end 'lost', NOT ignore-listed, and the re-acquired line is engaged again (-6); then the engineer RELEASES the band by hand on the desk:
+the engagement ends 'operator', the band is ignore-listed for policy cuts and never re-cut; strip restored at stop.
+Scenario E (ring_out, a room whose bed and a 33 dB-prominent room-source line follow the master): the STATIONARY line triggers the
+back-off probe; a 25 dB/s ring takes off 0.3 s into the probe's dip -> the probe yields (verdict 'interrupted', master left at the
+probe level, re-queued once) and the ring is cut within a frame or two of its detection; the run completes."""
 from __future__ import annotations
 
 import asyncio
@@ -49,6 +55,40 @@ from x32mcp.policy import Policy  # noqa: E402
 from x32mcp.provision import apply_setup, plan_setup  # noqa: E402
 
 CONN_OPTS = dict(timeout_s=0.25, retries=1, heartbeat_s=0.5, watchdog_s=1.0, backoff_s=(0.1, 0.2))
+GEQ_PAR_1K = "/fx/5/par/18"      # GEQ2 in FX5, side A, band 18 = 1 kHz (what setup_ringout_eqs provisions for bus 1)
+
+
+class RoomSourceRta(SyntheticRta):
+    """A synthetic analyser behind an open mic in a room driven by the PA: the bed and the injected notes (SOURCES IN THE ROOM)
+    follow the bus master dB for dB; injected rings do not (they stand for a loop taking off on its own)."""
+
+    def __init__(self, *a, master=None, **kw) -> None:
+        super().__init__(*a, **kw)
+        self._master = master
+        self._ref = None
+        self._base0 = self._base
+        self._offset = 0.0
+
+    def tick(self):
+        m = self._master() if self._master else None
+        if isinstance(m, (int, float)):
+            if self._ref is None:
+                self._ref = float(m)
+            self._offset = float(m) - self._ref
+            self._base = tuple(b + self._offset for b in self._base0)
+        return super().tick()
+
+    def _note_level(self, n) -> float:
+        return super()._note_level(n) + self._offset
+
+
+async def _until(pred, timeout: float, step: float = 0.02) -> bool:
+    t_end = time.monotonic() + timeout
+    while time.monotonic() < t_end:
+        if pred():
+            return True
+        await asyncio.sleep(step)
+    return bool(pred())
 
 
 async def main() -> None:
@@ -177,10 +217,120 @@ async def main() -> None:
     print("== markdown Policy section:")
     md = ReportStore.markdown(rep)
     print(md[md.index("## Policy"):].split("## Stages")[0].rstrip())
+
+    # ------------------------------------------------------------------------------------------------------------------
+    print("\n== D: the held line is MASKED by a loud passage (track dropped), then the engineer RELEASES the band by hand")
+    fake.rta.stop_note(1000.0)
+    fake.set_value(GEQ_PAR_1K, 0.0)                      # start from a flat band again
+    desk.invalidate()
+    await asyncio.sleep(1.0)
+    plog.clear()
+    t0 = time.monotonic()
+    res = await cfs.feedback_watch(1)
+    ses = cfs._ses
+    while cfs.frames.frames_received < 10:
+        await asyncio.sleep(0.02)
+    await asyncio.sleep(0.8)
+    print(f"  {_t()} inject: steady family-less line at 1000 Hz, -18 dBFS")
+    fake.rta.inject_note(1000.0, -18.0, rise_frames=1)
+    await _until(lambda: any(tb.state == "held" for tb in ses.policy.tier_b.values()), 6.0)
+    await asyncio.sleep(0.4)
+    print(f"  {_t()} 'held' after the -3; a loud passage now swamps the analyser (+35 dB on every band) for 0.6 s")
+    base0 = fake.rta._base
+    fake.rta._base = tuple(b + 35.0 for b in base0)
+    await asyncio.sleep(0.6)
+    fake.rta._base = base0
+    ok = await _until(lambda: float(fake.value(GEQ_PAR_1K)) <= -5.9, 6.0)
+    await conn.get("/-stat/selidx")
+    ends = [e["next_action"] for e in ses.policy.tier_b_log if e["action"] == "end"]
+    print(f"  {_t()} after the passage: ignore list {ses.policy.ignore} | first engagement ended: {ends[:1]} | band now {float(fake.value(GEQ_PAR_1K)):+.1f} dB "
+          f"({'re-engaged and deepened' if ok else 'NOT deepened'})")
+    await _until(lambda: any(tb.state == "held" and tb.depth_db is not None and tb.depth_db <= -5.9 for tb in ses.policy.tier_b.values()), 4.0)
+    print(f"  {_t()} the engineer flattens GEQ band 18 on the desk (front-panel move, pushed over /xremote)")
+    fake.set_value(GEQ_PAR_1K, 0.0)
+    await asyncio.sleep(4.5)                             # > held_deepen_s + a verdict: nothing may re-cut the released band
+    await conn.get("/-stat/selidx")
+    writes = [g for (_b, band, g) in ses.writer.writes if band == 18]
+    print(f"  {_t()} band now {float(fake.value(GEQ_PAR_1K)):+.1f} dB | session GEQ writes on band 18: {writes} | ignore: "
+          f"{[(i['band'], i['why']) for i in ses.policy.ignore]} | open engagements: {[tb.brief()['outcome'] for tb in ses.policy.tier_b.values()]}")
+    fake.rta.stop_note(1000.0)
+    out = await cfs.stop()
+    rep = out["report"]
+    await conn.get("/-stat/selidx")
+    print("== policy log (events):")
+    print("\n".join(plog))
+    print("== D result: strip now", fake.value("/bus/01/config/color"), "| writes on band 18", writes, "| verdict rows:",
+          [(e["action"], e["verdict"], e["depth_db"]) for e in rep["policy"]["tier_b"] if e["action"] in ("verdict", "end", "operator")])
+    assert not any("ended by itself" in i["why"] for i in rep["policy"]["ignore"]), "a MASKED held line was ignore-listed as ended"
+    assert writes[:2] == [-3.0, -6.0] and all(w <= -3.0 for w in writes) and max(writes[2:], default=-99) <= -6.0, writes
+    assert float(fake.value(GEQ_PAR_1K)) == 0.0, "the policy re-cut a band the engineer released"
+    assert fake.value("/bus/01/config/color") == "GN"
     await cfs.close()
     await desk.close()
     await conn.close()
     await fake.stop()
+
+    # ------------------------------------------------------------------------------------------------------------------
+    print("\n== E: ring_out with a room source that follows the master (back-off probe) and a ring taking off mid-probe")
+    src = RoomSourceRta(seed=5, band_hz=rta_band_hz(desc), level_100hz_db=-55.0, level_10khz_db=-65.0, noise_db=2.0, wobble_db=0.5, master=None)
+    fake = FakeDesk(desc, host="127.0.0.1", port=0, name="X32-FAKE", rta=src)
+    await fake.start()
+    events = EventBus()
+    conn = X32Connection(desc, events, **CONN_OPTS)
+    await conn.connect(fake.host, fake.port)
+    policy = Policy(desc, events)
+    desk = Desk(desc, conn, policy, events, SnapshotStore(tmp / "snapshots3"))
+    reports = ReportStore(tmp / "reports3")
+    cfs = CfsManager(desk, policy, events, reports, snapshots=None, cfs_policy=CfsPolicyConfig.from_dict(desc.cfs_policy))
+    t0 = time.monotonic()
+    elog: list[tuple[str, float, dict]] = []
+    for kind, typ in (("notch", "cfs.notch"), ("stage", "cfs.stage"), ("policy", "cfs.policy")):
+        events.subscribe(lambda ev, kind=kind: elog.append((kind, time.monotonic(), dict(ev.data))), types={typ})
+    plan = await plan_setup(desk, [1])
+    await apply_setup(desk, plan)
+    for ch in (1, 2):
+        fake.set_value(f"/ch/{ch:02d}/mix/01/level", -20.0)
+    fake.set_value("/bus/01/mix/fader", -30.0)
+    fake.set_value("/bus/01/config/color", "GN")
+    desk.invalidate()
+    src._master = lambda: fake.value("/bus/01/mix/fader")   # coupled from HERE: the levels above are given at this master setting
+    src.inject_note(1000.0, -27.0, rise_frames=1)        # ~33 dB prominent room source: follows the steps 1 dB/dB -> STATIONARY backoff_advised
+    for _ in range(10):
+        src.tick()
+    run = asyncio.create_task(cfs.ring_out(1, target_gain_db=-22.0, step_db=1.0, dwell_ms=700))
+    got_probe = await _until(lambda: any(k == "stage" and e.get("stage") == "PROBE" for k, _t2, e in elog), 30.0)
+    t_probe = time.monotonic()
+    print(f"  {_t()} back-off PROBE stage {'reached' if got_probe else 'NOT reached'}; injecting a 25 dB/s ring at 2500 Hz in 0.3 s")
+    await asyncio.sleep(0.3)
+    ses = cfs._ses
+    if ses is None:
+        rep = await asyncio.wait_for(run, timeout=60.0)
+        raise SystemExit(f"E: the ring-out finished without a back-off probe: {[(s['stage'], s.get('reason')) for s in rep['stages'][-4:]]}")
+    n_det0 = len(ses.detections)
+    src.inject_ring(2500.0, 25.0, start_db=-50.0, cap_db=-6.0)
+    await _until(lambda: len(ses.detections) > n_det0, 8.0, step=0.005)
+    t_detect = time.monotonic()
+    level_at_detect = ses.detections[-1]["level_db"] if len(ses.detections) > n_det0 else None
+    await _until(lambda: any(k == "notch" and e.get("band") == 22 for k, _t2, e in elog), 15.0, step=0.005)
+    t_cut = next((t for k, t, e in elog if k == "notch" and e.get("band") == 22), None)
+    rep = await asyncio.wait_for(run, timeout=60.0)
+    latency = (t_cut - t_detect) if t_cut is not None else None
+    probes = rep["policy"]["backoff_probes"]
+    print(f"  ring detected at {level_at_detect} dBFS {t_detect - t_probe:.2f} s into the probe; detection -> cut latency "
+          f"{'%.2f s' % latency if latency is not None else 'NO CUT'}")
+    for pr in probes:
+        print("   probe:", {k: pr.get(k) for k in ("t", "freq_hz", "verdict", "drop_db", "master_from_db", "master_probe_db", "master_restored_db", "retry")})
+    print(f"  stages: {[s['stage'] + ('/' + str(s.get('verdict')) if s.get('verdict') else '') for s in rep['stages'] if s['stage'] in ('PROBE', 'HOLD', 'NOTCH', 'VERIFY', 'DONE', 'ABORT')]}")
+    print(f"  final {rep['final_stage']} {rep.get('abort_reason') or ''} | master {rep['start_master_db']} -> {rep['end_master_db']} (max {rep['max_master_db']}) | "
+          f"notches {[(n['band'], n['depth_db'], n.get('tiers')) for n in rep['notches']]}")
+    assert latency is not None and latency <= 0.5, f"tier-A cut delayed {latency} s behind the back-off probe"
+    assert probes and probes[0]["verdict"] == "interrupted" and probes[0]["master_restored_db"] is None
+    assert rep["final_stage"] in ("DONE", "ABORT")
+    await cfs.close()
+    await desk.close()
+    await conn.close()
+    await fake.stop()
+    print("\nALL SCENARIOS OK")
 
 
 if __name__ == "__main__":

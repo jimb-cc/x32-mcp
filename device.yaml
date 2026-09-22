@@ -1042,6 +1042,7 @@ cfs_policy:
     verdict_timeout_s: 4.0
     ringout_probe_wait_dwells: 2.0          # ring_out: a line the probe has not judged (steps_seen < 2) waits unless loud-ish AND MODERATE this long
     ringout_hold_raise: true                # ring_out: the master is not raised while a tier-B engagement is unresolved
+    ended_drop_db: 6.0                      # a held line whose track was lost ENDED (ignore-list) only if its band fell this far; else masked
   # Alerts that reach the desk: cfs.candidate on/off events for MODERATE / held / stationary(backoff_advised) / at-arm lines, and the
   # bus scribble strip turned `color` while any is live (restored clear_s after the last one, always at stop / abort / panic)
   alerts:

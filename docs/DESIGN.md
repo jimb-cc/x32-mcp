@@ -677,9 +677,13 @@ with backoff `abort_backoff_db`); stop when budget spent or target reached; then
 retries every 500 ms until acked or 10 s) → ABORT.
 The **policy layer** (docs/CFS_POLICY.md; `cfs_policy.py` for the `cfs_policy:` knobs and pure rules, `CfsManager._policy_frame`
 after every `feed()`): LF edge from the mics' HPFs, the `programme_present` contract check, the tier-B one-shot cut on MODERATE
-lines with the verdict-driven follow-up (policy writes in ring_out are queued to the ring-out task; stage `PROBE` = the back-off
-probe on a `backoff_advised` STATIONARY line), candidate alerts (`cfs.candidate` on/off + the bus scribble strip, restored in
-`_finish` on every exit path), the AT-ARM rule in watch, flag actions (re-force ballistics / abort on a frozen display).
+lines with the verdict-driven follow-up (policy writes in ring_out are queued to the ring-out task, which always serves the
+detector's pending Detections first; stage `PROBE` = the back-off probe on a `backoff_advised` STATIONARY line, whose waits yield to
+a pending Detection), candidate alerts (`cfs.candidate` on/off + the bus scribble strip, restored in `_finish` on every exit path,
+re-sent on reconnect if the desk did not take it), the AT-ARM rule in watch (`det.note_suppressed`), the engineer's-hands-win rules
+(a GEQ band released by hand ends the engagement and is ignore-listed for policy cuts; the parked RAISE loop keeps polling the
+master), flag actions (re-force ballistics in the background / abort on a frozen display); each per-frame step is isolated
+(`_policy_step`).
 
 ## 16. `patches.py`
 

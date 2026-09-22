@@ -63,6 +63,8 @@ class TierBConfig:
     ringout_probe_wait_dwells: float = 2.0  # ring_out: a line still awaiting probe judgement (steps_seen < probe_min_hits) is cut by
                                   #   tier B only if loud-ish AND MODERATE for >= this many dwells (the probe is the better instrument)
     ringout_hold_raise: bool = True  # ring_out: do not raise the master while a tier-B engagement is unresolved
+    ended_drop_db: float = 6.0    # a 'held' line whose track the detector dropped has ENDED (-> ignore-list) only if its band now
+                                  #   reads at least this far under the held level; otherwise it was masked / lost (not ignore-listed)
 
 
 @dataclass(frozen=True)
@@ -115,6 +117,7 @@ class CfsPolicyConfig:
              "tier_b times must be >= 0")
         need(self.tier_b.verdict_timeout_s > 0, "tier_b.verdict_timeout_s must be > 0")
         need(self.tier_b.ringout_probe_wait_dwells >= 0, "tier_b.ringout_probe_wait_dwells must be >= 0")
+        need(self.tier_b.ended_drop_db > 0, "tier_b.ended_drop_db must be > 0")
         need(isinstance(self.alerts.color, str) and self.alerts.color.strip() != "", "alerts.color must be a colour token")
         need(self.alerts.clear_s >= 0 and self.alerts.min_write_interval_s >= 0 and self.alerts.hold_s >= 0, "alerts times must be >= 0")
         need(self.at_arm_watch_min_prominence_db >= 0, "at_arm_watch_min_prominence_db must be >= 0")
@@ -214,8 +217,9 @@ class LfEdge:
 
 def lf_edge_from_hpfs(mics: Sequence[MicHpf], cfg: LfEdgeConfig) -> LfEdge:
     """edge_i = ``hpf_factor`` × hpf when the mic's HPF is on, else ``no_hpf_hz``; session edge = max(``floor_hz``,
-    min(edge_i)). No readable mic -> None (the detector keeps its mode default). A mic whose preamp could not be read
-    counts as 'HPF off' (the permissive reading: it can only lower the edge towards ``no_hpf_hz``)."""
+    min(edge_i)). No included mic -> None (the detector keeps its mode default). A mic whose preamp could not be read,
+    or an input without a channel HPF (aux / USB, ch > 32), counts as 'HPF off' (the permissive reading: it can only
+    lower the edge towards ``no_hpf_hz``)."""
     per: list[dict[str, Any]] = []
     best: tuple[float, str] | None = None
     for m in mics:
@@ -224,7 +228,12 @@ def lf_edge_from_hpfs(mics: Sequence[MicHpf], cfg: LfEdgeConfig) -> LfEdge:
             why = f"ch {m.ch} HPF {float(m.hpf_hz):.0f} Hz"
         else:
             edge = float(cfg.no_hpf_hz)
-            why = f"ch {m.ch} HPF off ({cfg.no_hpf_hz:g} Hz default)" if m.hpf_on is not None else f"ch {m.ch} HPF unread ({cfg.no_hpf_hz:g} Hz default)"
+            if int(m.ch) > 32:
+                why = f"input {m.ch} has no HPF (aux/USB; {cfg.no_hpf_hz:g} Hz default)"
+            elif m.hpf_on is not None:
+                why = f"ch {m.ch} HPF off ({cfg.no_hpf_hz:g} Hz default)"
+            else:
+                why = f"ch {m.ch} HPF unread ({cfg.no_hpf_hz:g} Hz default)"
         per.append({"ch": m.ch, "hpf_on": m.hpf_on, "hpf_hz": None if m.hpf_hz is None else round(float(m.hpf_hz), 1), "edge_hz": round(edge, 1)})
         if best is None or edge < best[0]:
             best = (edge, why)
@@ -285,18 +294,32 @@ def tier_b_eligible(
     return True, ""
 
 
-def at_arm_cut_allowed(det: Any, *, min_prominence_db: float) -> bool:
+_OWN_EVIDENCE = ("rise", "fastrise", "probe", "growth")        # changes the line made on its own (Detection reason prefixes)
+_PLATEAU_EVIDENCE = frozenset({"fastrise", "loud", "probe"})    # Candidate.emit_evidence names that earn a detector-side deepen
+
+
+def at_arm_cut_allowed(det: Any, *, min_prominence_db: float, cand: Any = None) -> bool:
     """Item 5 (watch): a Detection carrying ``established_at_arm`` is cut only when it is tier A -- LOUD, or at least
     ``min_prominence_db`` prominent (the M7 60 dB howl) -- or when the detector also holds evidence the line made on its
     own since (RISE / FAST-RISE / PROBE: then the cut does not rest on the passive at-arm observation). A -36 dBFS whine,
-    an organ note at -30 and an established quiet howl look the same at arm [DETECTOR §7.4]: those are alerted, not cut."""
+    an organ note at -30 and an established quiet howl look the same at arm [DETECTOR §7.4]: those are alerted, not cut.
+
+    A ``deepen_held`` / ``deepen_insufficient`` re-emission is the detector exercising a deepen right it earned from
+    PLATEAU-CLASS evidence; it passes only when that evidence (``cand.emit_evidence``, the live Candidate the Detection is
+    about) is FAST-RISE / LOUD / PROBE -- not the at-arm observation the watch declined (its deepening is the policy's
+    ``held_deepen_s`` cadence, docs/CFS_POLICY.md §3/§5). Without ``cand`` a deepen re-emission is trusted."""
     reasons = tuple(getattr(det, "reasons", ()) or ())
     if "established_at_arm" not in reasons:
         return True
     if "loud" in reasons:
         return True
-    if any(r.startswith(("rise", "fastrise", "probe", "growth", "deepen_")) for r in reasons):
+    if any(r.startswith(_OWN_EVIDENCE) for r in reasons):
         return True
+    if any(r.startswith("deepen_") for r in reasons):
+        if cand is None:
+            return True
+        if _PLATEAU_EVIDENCE & set(getattr(cand, "emit_evidence", ()) or ()):
+            return True
     return float(getattr(det, "prominence_db", 0.0)) >= float(min_prominence_db)
 
 
