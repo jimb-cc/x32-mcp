@@ -805,3 +805,48 @@ def test_g8_programme_present_flag(cfg, band_hz):
             sp.tone(v, b + off, -30.0 + rel)
         det.feed(v, t)
     assert det.programme_present() and "PROGRAMME_PRESENT" in det.flags
+
+
+def test_kill_check_quiet_compressor_held_howl_is_deepened_on_excess_not_level(cfg, band_hz):
+    """Kill-check K4 in miniature: a family-less line shoots ~100 dB/s from the -70 bed to a -25 dBFS plateau (a howl caught by a
+    channel compressor: FAST-RISE evidence, but 5 dB UNDER the loud-ish line), is cut -3 at t=2.0, drops exactly 3 dB and holds.
+    e >= cut: the loop is still alive. Its excess over the band's baseline is ~45 dB >= held_deepen_excess_db, so the 'held'
+    verdict carries a deepen right although the line is quiet; with held_deepen_excess_db raised out of reach it does not (the
+    pre-kill-check behaviour that let K4 survive)."""
+    hz = 2500.0
+    band = 10.0 * math.log2(hz / 19.53)
+
+    def level(t):
+        if t < 1.0:
+            return None
+        lv = min(-25.0, -70.0 + 100.0 * (t - 1.0))
+        if t >= 2.0:
+            lv -= 3.0
+        return lv
+
+    def run(c):
+        sp = Spectrum(91, bed_db=-70.0, noise_db=0.5)
+        frames = _established_line_frames(sp, band, level, 110)
+        det = FeedbackDetector(c, band_hz)
+        dets = []
+        for i, f in enumerate(frames):
+            t = i * FRAME_S
+            if abs(t - 2.0) < 1e-9:
+                det.note_cut(hz, -3.0, t)
+            for d in det.feed(f, t):
+                dets.append((t, d))
+        return det, dets
+
+    det, dets = run(cfg)
+    first = [(t, d) for t, d in dets if t < 2.0]
+    assert first and any(r.startswith("fastrise") for r in first[0][1].reasons), [d.reasons for _, d in first]
+    assert det.loudish_threshold_db > -25.0 + 1.0, "the plateau must sit under the loud-ish line for this test to mean anything"
+    held = [x for x in det.cut_log if x["verdict"] == "held"]
+    assert held and held[0]["deepen"] is True, det.cut_log
+    assert [d for t, d in dets if t >= 2.0 + cfg.cut_verify_s and "deepen_held" in d.reasons], "quiet held plateau-class line with big excess is deepened"
+    # same line, excess criterion out of reach -> the old behaviour: held, no deepen right, no re-emission
+    import dataclasses as _dc
+    det2, dets2 = run(_dc.replace(cfg, held_deepen_excess_db=200.0))
+    held2 = [x for x in det2.cut_log if x["verdict"] == "held"]
+    assert held2 and held2[0]["deepen"] is False
+    assert not [d for t, d in dets2 if t >= 2.0 and "deepen_held" in d.reasons]

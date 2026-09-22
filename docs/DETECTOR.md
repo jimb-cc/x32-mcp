@@ -214,10 +214,7 @@ watch: emit STRONG.   ring_out: emit STRONG and pre-emptive PROBE (Detection.kla
   cut; upstream, a limiter's output through the GEQ drops by the cut too; a compressor of ratio r reads 3r/(r−1) dB [L §1.4]) —
   passively identical; **false_cut** — the line ENDS by itself after the response window (a loop that survived a cut does not switch
   itself off; a note does) → klass FALSE_CUT, never re-emitted (cfs ignore-lists / releases), re-admitted if it later grows `rise_db`
-  above that level; **ambiguous** otherwise (e.g. a slow ring-down: AV07's marginal ring). **Deepening on held / insufficient**: one
-  re-emission per verdict (so −3 → −6 → −9, each step verified again, reason `deepen_held` / `deepen_insufficient`) iff the line was
-  emitted on PLATEAU-CLASS evidence — FAST-RISE, LOUD, PROBE or AT-ARM — and was loud-ish (≥ the LOUD-ISH line of §3 FAST-RISE) when
-  emitted. Physics: a howl that HOLDS after a 3 dB cut has e > 3 dB, which on any loop up to τ ≈ 70 ms means it grew ≥ 43 dB/s
+  above that level; **ambiguous** otherwise (e.g. a slow ring-down: AV07's marginal ring). **Deepening on held / insufficient**: one re-emission per verdict (so −3 → −6 → −9, each step verified again, reason `deepen_held` / `deepen_insufficient`) iff the line was emitted on PLATEAU-CLASS evidence — FAST-RISE, LOUD, PROBE or AT-ARM — and EITHER was loud-ish (≥ the LOUD-ISH line of §3) when emitted OR had risen ≥ `held_deepen_excess_db` **20 dB** above its band's own baseline (a howl held by a *channel* compressor sits 20–30 dB under the loud-ish line — the independent kill-check scenario K4, e 6.5 dB at −22 dBFS, is exactly this — but it climbed tens of dB out of the bed to get there, which the soft family-less attack the level gate protects against, AV02, does by far less). Physics: a howl that HOLDS after a 3 dB cut has e > 3 dB, which on any loop up to τ ≈ 70 ms means it grew ≥ 43 dB/s
   (FAST-RISE territory: ≥ 40 dB/s resolved frame by frame) or had already plateaued when judged (LOUD / AT-ARM / PROBE); a ring cut on a
   slower RISE alone had e < 3 dB and a 3 dB cut takes it under threshold (it decays, possibly slowly: 'insufficient'/'ambiguous', never
   'held'), so for rise-only and for quiet lines "held" resolves to "a note went through the EQ": cut once, verdict exposed
@@ -463,6 +460,32 @@ Cell as in §1. `winner` = wt/disc-predicates on the same scenes (watch_tag). `M
 * display gain offset (§7.10): **0** — 
 * anything else: **0**
 
+### 6.4k Kill check — the K series (independent reviewer's `review/kill-check`), seeds 1-3, CLOSED loop, strict SURVIVED scoring
+
+A howl held at its plateau by a limiter / clip / compressor with excess e ≥ the cut depth c answers a cut with exactly −c dB at the
+tap and sits flat — observationally identical to programme through the same EQ — so a policy that files "dropped ≈ bell, flat" as
+programme leaves the room howling. The reviewer added six such scenarios to the MAIN registry (rings on GEQ centres so the depth
+needed is exact) and a `survived` verdict to the harness: a ring still regenerating (e_eff > 0, no tolerance) at the last frame that
+was detected or cut FAILS the run. `survived` is now the closed-loop pass criterion everywhere in this document (`alive`, e_eff >
+0.25 dB, is kept as a reported lenient variant only).
+
+| scenario (depth needed) | ev | TP | FP | cuts | survived | lat min/med/max ms | verdict |
+|---|---|---|---|---|---|---|---|
+| K1 limiter-held howl e 4, 2.5 kHz (−6) | 3 | 3 | 0 | 6 | 0 | 151/152/198 | PASS 3/3 |
+| K2 limiter-held howl e 7, 1.25 kHz (−9) | 3 | 3 | 0 | 9 | 0 | 98/101/250 | PASS 3/3 |
+| K3 established limiter plateau e 5, 5 kHz (−6) | 3 | 3 | 0 | 6 | 0 | 199/200/202 | PASS 3/3 |
+| K4 compressor plateau e 6.5 at −22 dBFS (−9) | 3 | 3 | 0 | 9 | 0 | 197/200/249 | PASS 3/3 (before `held_deepen_excess_db`: one −3, `held`, no deepen right below the loud-ish line → survived 3/3) |
+| K5 M7 channel shove into limiter e 5.5 (−6) | 3 | 3 | 0 | 6 | 0 | 48/100/200 | PASS 3/3 |
+| K6 limiter-held howl e 3.5 at a GEQ midpoint (−6 or both flanks) | 3 | 3 | 0 | 6 | 0 | 49/148/148 | PASS 3/3 |
+
+Identical in ring_out mode. Hold-out seeds 4-9: K1-K6 0 FP; K4 detected 5/6 (seed 7: the ring's centroid wanders off a bed feature
+at birth, the track is re-born without its fast-rise history and is published MODERATE with 36 dB excess — a tier-B cut in cfs). The
+shipped detector also kills all six (its persistence re-emission deepens blindly) at the price of 42 programme cuts on these scenes.
+With the K series in the main registry (67 scenarios) and strict scoring: watch closed 0 FP / 0 HARM / survived 2, ring_out closed
+0 FP / survived 2 — both survivors are M2 seed 2, where the ring_out master keeps stepping +1 dB to the scene's end and both modes
+re-cross threshold by +0.05 / +0.07 dB on the final step, 0.5 s before the last frame at −45 / −40 dBFS (seeds 1 and 3 cross a
+little earlier and are re-cut at 15.6–15.7 s). No detector can see 0.05 dB of excess develop in 0.5 s; it is recorded, not tuned to.
+
 ### 6.4a Verifier breakers AV01-AV13 (seeds 1-3): open loop, and closed loop for the feedback scenes
 
 Cell as in §1; closed = TP/miss/FP, cuts, rings ALIVE at the end (must be 0). `MODERATE ms` as in §4.
@@ -663,7 +686,15 @@ release / p95 / cut verdicts in the report (this round), `_calibrate_floor` remo
   detected ring left alive); `tests/integration/test_cfs.py` — 20 CFS session tests (mode + `note_gain_step` + `note_cut` wiring;
   `_calibrate_floor` test removed with the method).
 
-## 11. Verifier findings (fix round) and known limitations
+## 11. Verifier findings (fix round), the kill check, and known limitations
+
+**Kill check (after the fix round).** The independent reviewer's K series and strict `survived` verdict (§6.4k) found one real gap: a
+compressor-held howl well below the loud-ish line (K4) was cut once, filed `held` and — having no deepen right — survived. The
+deepen right now also covers plateau-class lines that rose ≥ `held_deepen_excess_db` over their baseline; K1–K6 all die; the price is
+that a wrongly cut family-less programme swell that ALSO rose ≥ 20 dB over its band's baseline and then holds can be walked to −9 dB
+on `held` verdicts (one band, verified per step, released as `false_cut` when the note ends) — §6.4b's closed-loop table already
+showed the continuing-swell classes reaching −9 via regrowth; this adds the held-after-swell case. Nine of 68 hostile scenes reach −9.
+
 
 Two independent reviews of commit 8094eed (metrics re-measurement with 13 new breakers AV01–AV13; line-by-line code review). Every
 published number reproduced exactly. Disposition:
