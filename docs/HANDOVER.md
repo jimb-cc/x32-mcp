@@ -269,7 +269,9 @@ A full review against `a408a2a` is in [`docs/REVIEW_REPORT.md`](REVIEW_REPORT.md
   shipped detector scores 12/61 with 948 false positives on it. The redesigned discriminator (`review/detector`, design in
   docs/DETECTOR.md) scores 0 false positives on the corpus, hold-out seeds and every analyser variant, catches 115/117 rings with the
   LF window declared, and takes 179 rather than 500-950 hits on 68 scenarios written to defeat it; `review/detector-cfs` wires its
-  hooks (tier-B one-shot, alerts on the scribble strip, LF edge from the channel HPFs) into cfs.py.
+  hooks (tier-B one-shot, alerts on the scribble strip, LF edge from the channel HPFs) into cfs.py. An independent kill check
+  (limiter/compressor-held howls) passes 6/6 after one fix; the pre-registered acceptance gate rejects old and new alike, the new
+  one on latency only with 0 false positives — REVIEW_REPORT §1.6 explains why that is the physical floor for a passive detector.
 - **The "calibration broke existing_cuts" bug** (§4) was `_notch()` committing before the GEQ write plus the test's own stop
   cancelling the write inside a `/fx/N` cache-miss round trip — deterministic on this Windows box. Fixed on
   `review/cfs-write-safety` (two-phase notch). The commit message of 56c34a7 about `_open_session` running on the pending
