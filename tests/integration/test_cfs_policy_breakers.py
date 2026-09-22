@@ -302,7 +302,8 @@ async def test_e_tier_b_never_writes_a_band_shallower_than_the_operators_own_cut
     rig.rta.inject_note(1000.0, -18.0, rise_frames=1)
     await wait_until(lambda: _band_writes(rig, GEQ_BAND_1K) == [-3.0], timeout=3.0, what="the tier-B -3")
     rig.fake.set_value(PAR_1K, -9.0)                         # front-panel move, pushed over /xremote
-    await wait_until(lambda: ses.nc.gains.get(GEQ_BAND_1K, 0.0) <= -8.9, timeout=2.0, what="hand cut adopted")
+    await wait_until(lambda: ses.nc.gains.get(GEQ_BAND_1K, 0.0) <= -8.9 and ses.writer.gains.get(GEQ_BAND_1K, 0.0) <= -8.9,
+                     timeout=3.0, what="hand cut adopted by controller and writer")
     await asyncio.sleep(3.5)                                 # verdict + held_deepen_s + margin
     assert _band_writes(rig, GEQ_BAND_1K) == [-3.0], f"wrote over the operator's -9: {_band_writes(rig, GEQ_BAND_1K)}"
     await rig.settle()
@@ -315,6 +316,8 @@ async def test_e_tier_b_never_writes_a_band_shallower_than_the_operators_own_cut
     rig.fake.set_value(PAR_1K, -5.0)
     rig.desk.invalidate()
     await _armed(rig)
+    ses = rig.cfs._ses
+    assert ses.nc.gains.get(GEQ_BAND_1K) == pytest.approx(-5.0, abs=0.01)   # the session starts from the desk's value (as in (1))
     await asyncio.sleep(0.6)
     rig.rta.inject_note(1000.0, -18.0, rise_frames=1)
     await wait_until(lambda: rig.notches() and _band_writes(rig, GEQ_BAND_1K), timeout=3.0, what="tier-B on an off-grid band")

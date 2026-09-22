@@ -511,7 +511,8 @@ async def test_a_frozen_display_reforces_the_ballistics_then_aborts(make_rig):
     rig.fake.set_value("/-prefs/rta/peakhold", 3)           # somebody touched the prefs on the console ...
     await rig.rta.stop()                                     # ... and the display freezes (identical frames from now on)
     ses = rig.cfs._ses
-    await wait_until(lambda: ses.policy.ballistics_reforced is not None, timeout=3.0, what="ballistics re-forced on PEAK_HOLD_SUSPECTED")
+    await wait_until(lambda: ses.policy.ballistics_reforced is not None and not ses.policy.ballistics_reforced.get("pending"),
+                     timeout=4.0, what="ballistics re-forced on PEAK_HOLD_SUSPECTED (background task finished)")
     await rig.settle()
     assert int(rig.fake.get("/-prefs/rta/peakhold")) == 0 and float(rig.fake.get("/-prefs/rta/decay")) == 0.0
     assert any(e.get("what") == "ballistics_reforced" for e in rig.events_of("policy"))
