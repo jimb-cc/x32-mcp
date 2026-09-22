@@ -429,10 +429,11 @@ async def test_programme_during_a_ring_out_is_reported_and_the_run_continues(mak
 
 
 async def test_watch_armed_in_silence_refreshes_the_level_reference_when_programme_starts(make_rig):
-    rig = await make_rig(policy={"programme_check_s": 1.0})
+    rig = await make_rig(policy={"programme_check_s": 2.0})
     await _armed(rig)
     ses = rig.cfs._ses
-    await wait_until(lambda: ses.policy.armed_in_silence is True, timeout=3.0, what="armed-in-silence decided")
+    await wait_until(lambda: ses.policy.armed_in_silence is True, timeout=4.0, what="armed-in-silence decided")
+    await asyncio.sleep(0.3)                                  # past the detector's 2 s arm reference window
     p95_silent = ses.det.arm_p95_db
     stop = asyncio.Event()
     strummer = asyncio.create_task(_strum(rig.rta, stop))

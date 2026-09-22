@@ -726,3 +726,21 @@ async def test_set_rta_source_forces_analyser_ballistics(d):
     res = await set_rta_source(good, d, Target("bus", 1))
     assert [a for a, _ in good.sets] == ["/-prefs/rta/source", "/-prefs/rta/pos"]
     assert not (res.autogain_cleared or res.detector_set_peak or res.decay_set_min or res.peakhold_cleared or res.gain_set)
+
+
+def test_synthetic_note_rise_frames():
+    """inject_note(rise_frames=1) lands within one frame (a howl slamming into a limiter, a switched-on tone); the default keeps
+    the 5-frame 30 dB onset ramp of a held instrument note."""
+    from x32mcp.meters import SyntheticRta
+    fast = SyntheticRta(seed=1, noise_db=0.0, wobble_db=0.0, level_100hz_db=-80.0, level_10khz_db=-80.0)
+    slow = SyntheticRta(seed=1, noise_db=0.0, wobble_db=0.0, level_100hz_db=-80.0, level_10khz_db=-80.0)
+    b = fast.inject_note(1000.0, -20.0, rise_frames=1)
+    slow.inject_note(1000.0, -20.0)
+    f0, s0 = fast.tick().values[b], slow.tick().values[b]      # age 0: both at the bottom of the ramp (-50 + bed)
+    f1, s1 = fast.tick().values[b], slow.tick().values[b]      # age 1: the fast note has arrived, the slow one is 24 dB short
+    assert f0 < -45 and s0 < -45
+    assert f1 == pytest.approx(-20.0, abs=0.05) and s1 == pytest.approx(-44.0, abs=0.05)
+    for _ in range(4):
+        s_last = slow.tick().values[b]
+    assert s_last == pytest.approx(-20.0, abs=0.05)
+    assert fast.notes[0]["rise_frames"] == 1 and slow.notes[0]["rise_frames"] == SyntheticRta.NOTE_RISE_FRAMES

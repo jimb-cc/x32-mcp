@@ -234,8 +234,16 @@ Feedback watch (human-driven)
   notch appears (dashboard marker; X32-Edit shows −3 dB on the GEQ band at that frequency).
   Keep the level: the notch deepens to −6, −9 and no further.
 - [ ] Sing a sustained note at the ring frequency, then hold it → **no** notch (plateau = no growth).
-- [ ] `feedback_watch_stop()` → report saved; `get_ringout_report(id)` lists the notches; the
-  Markdown rendering reads sensibly.
+- [ ] Policy layer (docs/CFS_POLICY.md): the arm summary names the feedback window's low edge and
+  the HPF it came from ("feedback window from 84 Hz (ch 3 HPF 120 Hz)"). Whistle a steady quiet note
+  into the mic (below −20 dBFS on the RTA): **no** cut, the bus's scribble strip turns red on the
+  console within a second and `cfs_status` lists the line under `candidates`; stop → the strip goes
+  back to its colour ~2 s later. Whistle loud and steady (≥ −20 dBFS) for > 1 s: one −3 dB cut tagged
+  tier `B` in the report's Policy table; stop whistling → the report ignore-lists that band
+  (`false_cut`) and never touches it again. A quiet steady tone already sounding when you arm
+  (projector, a held keyboard note) → alerted, not cut ("At-arm lines NOT cut" in the report).
+- [ ] `feedback_watch_stop()` → report saved; the strip colour is back; `get_ringout_report(id)`
+  lists the notches (Tier column) and the Policy section; the Markdown rendering reads sensibly.
 
 Automatic ring-out
 
@@ -284,4 +292,7 @@ Wrap-up
 - [ ] Decide whether to keep the ring-out GEQs in the studio scene (`save_scene`) or
   `restore_snapshot("m7-start")`.
 - [ ] Note the real detect-to-cut latency, false positives/negatives, and any RTA source
-  verification mismatches → thresholds in `device.yaml` (`detector`, `ringout`) or research.
+  verification mismatches → thresholds in `device.yaml` (`detector`, `ringout`, `cfs_policy`) or research.
+  From the reports' Policy sections: every tier-B step with its verdict (were the −6/−9 deepenings
+  on held lines rings or notes?), `detector.release_db_per_s` at decay 0.25, `programme_present`
+  timing during the ring-outs, any "display looked frozen" warning.

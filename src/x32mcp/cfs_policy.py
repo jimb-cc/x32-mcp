@@ -97,8 +97,9 @@ class CfsPolicyConfig:
     tier_b: TierBConfig = field(default_factory=TierBConfig)
     alerts: AlertsConfig = field(default_factory=AlertsConfig)
     at_arm_watch_min_prominence_db: float = 30.0   # item 5: an AT-ARM line in watch is cut only if LOUD or at least this prominent
-    reforce_ballistics_on_freeze: bool = True      # item 6: PEAK_HOLD_SUSPECTED / FROZEN_LINES -> write decay 0 / peakhold OFF once more
-    frozen_abort_s: float = 5.0                    # ... and abort the session if the display still looks frozen after this long
+    reforce_ballistics_on_freeze: bool = True      # item 6: PEAK_HOLD_SUSPECTED / FROZEN_LINES -> write decay 0 / peakhold OFF once more ...
+    frozen_reforce_s: float = 1.0                  # ... once the flag has stood this long (a live line's skirts can repeat a code briefly) ...
+    frozen_abort_s: float = 5.0                    # ... and abort the session if the display still looks frozen this long after
     backoff_probe: BackoffProbeConfig = field(default_factory=BackoffProbeConfig)
 
     def __post_init__(self) -> None:
@@ -117,7 +118,7 @@ class CfsPolicyConfig:
         need(isinstance(self.alerts.color, str) and self.alerts.color.strip() != "", "alerts.color must be a colour token")
         need(self.alerts.clear_s >= 0 and self.alerts.min_write_interval_s >= 0 and self.alerts.hold_s >= 0, "alerts times must be >= 0")
         need(self.at_arm_watch_min_prominence_db >= 0, "at_arm_watch_min_prominence_db must be >= 0")
-        need(self.frozen_abort_s > 0, "frozen_abort_s must be > 0")
+        need(self.frozen_abort_s > 0 and self.frozen_reforce_s >= 0, "frozen_abort_s must be > 0 and frozen_reforce_s >= 0")
         need(self.backoff_probe.drop_db > 0 and self.backoff_probe.min_response_db > self.backoff_probe.drop_db,
              "backoff_probe.min_response_db must exceed backoff_probe.drop_db (a 1 dB/dB source drops by exactly the back-off)")
         need(self.backoff_probe.settle_s >= 0, "backoff_probe.settle_s must be >= 0")

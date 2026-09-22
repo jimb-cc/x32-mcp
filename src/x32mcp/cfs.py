@@ -99,7 +99,7 @@ from .cfs_policy import (CfsPolicyConfig, LfEdge, MicHpf, alert_worthy, at_arm_c
                          tier_b_eligible)
 from .connection import ConnectionError as X32ConnectionError, ConnectionState, NotConnected
 from .desk import Desk, DeskError, priority_writes
-from .detector import Candidate, Detection, DetectorConfig, FeedbackDetector, Notch, NotchController, NotchPlan
+from .detector import Candidate, Detection, DetectorConfig, FeedbackDetector, Notch, NotchController
 from .events import Event, EventBus
 from .meters import (FrameSource, LiveMeters, MeterFrame, RtaSourceError, RtaSourceResult, force_rta_ballistics, rta_band_hz,
                      set_rta_source, restore_rta_prefs)
@@ -510,7 +510,6 @@ class _Policy:
     first_frame_ts: float | None = None
     programme_present: bool = False
     programme_first_seen_s: float | None = None
-    prev_pp: bool = False
     armed_in_silence: bool | None = None
     arm_ref_refreshed_s: float | None = None
     emit_moderate_forced_off: bool = False
@@ -519,8 +518,8 @@ class _Policy:
     tier_b_last_engage_mono: float | None = None
     actions: list[tuple[str, Any, str]] = field(default_factory=list)   # ring_out queue: (kind, obj, reason)
     ignore: list[dict[str, Any]] = field(default_factory=list)
-    moderate_since: dict[int, float] = field(default_factory=dict)
-    at_arm_suppressed: dict[int, dict[str, Any]] = field(default_factory=dict)
+    moderate_since: dict[int, tuple[Any, float]] = field(default_factory=dict)      # id(cand) -> (cand, ts MODERATE since)
+    at_arm_suppressed: dict[int, dict[str, Any]] = field(default_factory=dict)     # id(cand) -> {"cand": cand, ...record}
     at_arm_log: list[dict[str, Any]] = field(default_factory=list)
     alerts_live: dict[int, dict[str, Any]] = field(default_factory=dict)
     alerts_log: list[dict[str, Any]] = field(default_factory=list)
@@ -535,7 +534,7 @@ class _Policy:
     flags_log: list[dict[str, Any]] = field(default_factory=list)
     frozen_since_mono: float | None = None
     ballistics_reforced: dict[str, Any] | None = None
-    backoff_done: set[int] = field(default_factory=set)
+    backoff_done: dict[int, Any] = field(default_factory=dict)                    # id(cand) -> cand already probed
     backoff_log: list[dict[str, Any]] = field(default_factory=list)
     warned: set[str] = field(default_factory=set)
 
@@ -1522,6 +1521,14 @@ class CfsManager:
         now = asyncio.get_running_loop().time()
         t_rel = ts - pol.first_frame_ts
         det = ses.det
+        # per-track bookkeeping is keyed by id(Candidate) and validated by identity: a dropped track's id can be reused
+        live = {id(c): c for c in det.candidates}
+        for key in [k for k, v in pol.moderate_since.items() if live.get(k) is not v[0]]:
+            del pol.moderate_since[key]
+        for key in [k for k, v in pol.at_arm_suppressed.items() if live.get(k) is not v.get("cand")]:
+            del pol.at_arm_suppressed[key]
+        for key in [k for k, v in pol.backoff_done.items() if live.get(k) is not v]:
+            del pol.backoff_done[key]
         try:
             await self._policy_flags(ses, pol, det, ts, t_rel, now)
             self._policy_programme(ses, pol, det, ts, t_rel)
@@ -1561,7 +1568,10 @@ class CfsManager:
             pol.frozen_since_mono = now
         if ses.abort_reason is not None:
             return
+        held_for = now - pol.frozen_since_mono
         if pol.cfg.reforce_ballistics_on_freeze and pol.ballistics_reforced is None:
+            if held_for < pol.cfg.frozen_reforce_s:
+                return                                     # a live line's skirt can repeat its code for a few frames; a display stays frozen
             # the prefs were forced at arm, so a frozen display now means somebody changed them on the console: force them again once
             pol.ballistics_reforced = {"t": round(t_rel, 2), "flags": sorted(frozen), "result": None}
             res = await force_rta_ballistics(self._conn, self._d)
@@ -1574,7 +1584,6 @@ class CfsManager:
             self._events.publish("cfs.policy", session_id=ses.session_id, bus=ses.bus, what="ballistics_reforced", t=round(t_rel, 2),
                                  written=res.get("written"), failed=res.get("failed"))
             return
-        held_for = now - pol.frozen_since_mono
         if held_for >= pol.cfg.frozen_abort_s:
             reason = (f"the RTA display is frozen ({', '.join(sorted(frozen))} for {held_for:.0f} s"
                       + (" after re-forcing decay / peak-hold" if pol.ballistics_reforced else "")
@@ -1585,10 +1594,13 @@ class CfsManager:
     # -- item 2: the ring-out contract check -------------------------------------------------------
 
     def _policy_programme(self, ses: _Session, pol: _Policy, det: FeedbackDetector, ts: float, t_rel: float) -> None:
+        """G8: the ring-out's 'stage is quiet' contract, evaluated on every frame (the detector judges its own 2 s window): the
+        session latches the first detection -- during the first ``programme_check_s`` (before and during the first steps) or at
+        any later rising edge -- warns (ring_out) and, in a watch armed in silence, re-opens the detector's level reference."""
         cfg = pol.cfg
         pp = bool(det.programme_present())
-        rising = pp and not pol.prev_pp
-        if pp and not pol.programme_present and (t_rel <= cfg.programme_check_s + 1e-9 or rising):
+        first = pp and not pol.programme_present
+        if first:
             pol.programme_present = True
             pol.programme_first_seen_s = round(t_rel, 2)
             self._events.publish("cfs.programme_present", session_id=ses.session_id, bus=ses.bus, mode=ses.mode.value, t=round(t_rel, 2))
@@ -1603,17 +1615,17 @@ class CfsManager:
                     log.warning("CFS² %s: detector.ringout_emit_moderate forced OFF (programme present)", ses.session_id)
             else:
                 log.info("CFS² %s: programme present on %s (t+%.1f s)", ses.session_id, ses.target.label, t_rel)
+            if (ses.mode is CfsMode.WATCH and cfg.refresh_arm_reference_on_programme and pol.arm_ref_refreshed_s is None
+                    and t_rel > float(det.cfg.arm_baseline_s)):
+                # the detector took its level reference (LOUD / loud-ish legs) over the first arm_baseline_s, before this programme
+                # was there: re-open it so the show is not judged against a silent-room snapshot [DETECTOR §9]
+                det.refresh_arm_reference()
+                pol.arm_ref_refreshed_s = round(t_rel, 2)
+                log.info("CFS² %s: programme started after the arm reference window (t+%.1f s): detector level reference re-opened",
+                         ses.session_id, t_rel)
+                self._events.publish("cfs.policy", session_id=ses.session_id, bus=ses.bus, what="arm_reference_refreshed", t=round(t_rel, 2))
         if pol.armed_in_silence is None and t_rel >= cfg.programme_check_s:
             pol.armed_in_silence = not pol.programme_present
-        if (ses.mode is CfsMode.WATCH and cfg.refresh_arm_reference_on_programme and pol.armed_in_silence and rising
-                and pol.arm_ref_refreshed_s is None):
-            # armed in a quiet room and the show has now started: the detector's 2 s level reference (LOUD / loud-ish legs) must
-            # not stay a silent-room snapshot [DETECTOR §9]
-            det.refresh_arm_reference()
-            pol.arm_ref_refreshed_s = round(t_rel, 2)
-            log.info("CFS² %s: programme started after arming in silence (t+%.1f s): detector level reference re-opened", ses.session_id, t_rel)
-            self._events.publish("cfs.policy", session_id=ses.session_id, bus=ses.bus, what="arm_reference_refreshed", t=round(t_rel, 2))
-        pol.prev_pp = pp
 
     # -- item 5: AT-ARM in watch -------------------------------------------------------------------
 
@@ -1641,7 +1653,7 @@ class CfsManager:
         c = self._candidate_for(ses, det.band)
         first = c is None or id(c) not in pol.at_arm_suppressed
         if c is not None:
-            pol.at_arm_suppressed[id(c)] = rec
+            pol.at_arm_suppressed[id(c)] = {"cand": c, **rec}
         if first:
             pol.at_arm_log.append(rec)
             log.info("CFS² %s: line at %.0f Hz (%.1f dBFS, %.0f dB prominent) was sounding when the watch armed: NOT cut "
@@ -1753,20 +1765,16 @@ class CfsManager:
         live = {id(c): c for c in cands}
         for key, c in live.items():   # how long each line has been MODERATE without a break (ring_out probe-wait rule)
             if c.klass == "MODERATE" and not c.misses:
-                pol.moderate_since.setdefault(key, ts)
+                pol.moderate_since.setdefault(key, (c, ts))
             else:
                 pol.moderate_since.pop(key, None)
-        for key in [k for k in pol.moderate_since if k not in live]:
-            del pol.moderate_since[key]
-        for key in [k for k in pol.at_arm_suppressed if k not in live]:
-            del pol.at_arm_suppressed[key]
         # 1. advance the open engagements on the verdicts the detector filed
         for key, tb in list(pol.tier_b.items()):
             c = live.get(key)
-            if c is not None and c.first_ts != tb.first_ts:
-                c = None                                   # the track was re-born under the engagement: another line
+            if c is not tb.cand or (c is not None and c.first_ts != tb.first_ts):
+                c = None                                   # the track is gone, or was re-born under the engagement: another line
             if tb.state == "done":
-                if c is None:
+                if c is None or tb.outcome == "no_write":  # a failed write may be retried after the cooldown like the detector retries its own
                     del pol.tier_b[key]
                 continue
             if ses.abort_reason is not None:
@@ -1816,6 +1824,11 @@ class CfsManager:
                     self._tier_b_finish(ses, pol, tb, str(verdict), ts)
                 continue
             if tb.state == "held":
+                if verdict == "pending":
+                    continue                               # a newer cut within reach of the bell (a neighbour's) is being judged: wait for it
+                if verdict is not None and verdict != "held":
+                    tb.state = "pending"                   # ... and it re-judged this line: act on that verdict (next frame)
+                    continue
                 waited = ts - (tb.held_since_ts if tb.held_since_ts is not None else ts)
                 if waited < cfg.held_deepen_s:
                     continue
@@ -1840,8 +1853,9 @@ class CfsManager:
         for key, c in live.items():
             if key in pol.tier_b:
                 continue
+            since = pol.moderate_since.get(key)
             ok, _why = tier_b_eligible(c, cfg=cfg, loudish_db=det.loudish_threshold_db, mode=det.mode, probe_min_hits=dcfg.probe_min_hits,
-                                       moderate_for_s=ts - pol.moderate_since.get(key, ts), dwell_s=dwell_s,
+                                       moderate_for_s=(ts - since[1]) if since is not None else 0.0, dwell_s=dwell_s,
                                        at_arm_suppressed=key in pol.at_arm_suppressed, frame_period_s=dcfg.frame_period_s)
             if not ok:
                 continue
@@ -1878,6 +1892,9 @@ class CfsManager:
             return True
         if not pol.cfg.tier_b.ringout_hold_raise:
             return False
+        lf = ses.last_frame_mono
+        if lf is None or asyncio.get_running_loop().time() - lf > _FRAME_STALL_S:
+            return False                                   # no frames: the engagements cannot progress; let _frames_alive see the stall
         return any(tb.state in ("queued", "pending", "held") for tb in pol.tier_b.values())
 
     async def _run_policy_action(self, ses: _Session, act: tuple[str, Any, str]) -> None:
@@ -1899,9 +1916,9 @@ class CfsManager:
         for c in det.candidates:
             if c.misses or c.klass != "STATIONARY" or "backoff_advised" not in c.reasons:
                 continue
-            if id(c) in pol.backoff_done or id(c) in pol.tier_b:
+            if pol.backoff_done.get(id(c)) is c or id(c) in pol.tier_b:
                 continue
-            pol.backoff_done.add(id(c))
+            pol.backoff_done[id(c)] = c
             pol.actions.append(("backoff", c, "backoff_probe"))
             ses.wake.set()
             log.info("CFS² %s: %.0f Hz follows the gain steps 1 dB/dB but is %.0f dB prominent and family-less: back-off probe queued",

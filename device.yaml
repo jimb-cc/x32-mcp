@@ -1053,6 +1053,7 @@ cfs_policy:
     hold_s: 0.5
   at_arm_watch_min_prominence_db: 30.0      # watch: an established-at-arm line is cut only if LOUD or >= this prominent (else alert / tier B)
   reforce_ballistics_on_freeze: true        # PEAK_HOLD_SUSPECTED / FROZEN_LINES mid-session: write decay 0 / peakhold OFF once more ...
+  frozen_reforce_s: 1.0                     # ... once the flag has stood this long ...
   frozen_abort_s: 5.0                       # ... and abort if the display still looks frozen this long after (it cannot be rung out)
   # ring_out: a STATIONARY line >= 30 dB prominent ('backoff_advised') gets one back-off probe: master -drop_db for a dwell; a fall
   # of more than min_response_db (regenerative 1/(1-g)) or the line dying = feedback -> cut (reason backoff_probe); ~drop_db = a

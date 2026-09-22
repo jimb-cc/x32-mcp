@@ -38,9 +38,10 @@ first `programme_check_s` (before and during the first RAISE steps) or on any la
 'stage is quiet' contract does not hold, so MODERATE lines are not cut, only probe-confirmed / loud / rising lines (and loud-ish lines
 by tier B)"* — and forces `detector.ringout_emit_moderate` OFF if a descriptor had switched it on (it is off by default; the layer
 asserts rather than relies: `dataclasses.replace` on the live detector's cfg, reported as `emit_moderate_forced_off`). The run is never
-aborted for it. In `feedback_watch`, a session that saw no programme during the check window is "armed in silence"; on the first
-rising edge afterwards `det.refresh_arm_reference()` re-opens the detector's 2 s level reference so LOUD / loud-ish are not judged
-against a silent-room snapshot (DETECTOR §9/§11), once, reported as `arm_reference_refreshed_s`.
+aborted for it. In `feedback_watch`, when that first detection comes after the detector's own `arm_baseline_s` 2 s reference window
+(the session armed in silence and the show started later) `det.refresh_arm_reference()` re-opens the 2 s level reference so LOUD /
+loud-ish are not judged against a silent-room snapshot (DETECTOR §9/§11), once, reported as `arm_reference_refreshed_s`;
+`armed_in_silence` in the report says whether programme was seen within `programme_check_s`.
 
 ## 3. Tier B — the one-shot policy cut and its verdict-driven follow-up (G7; `cfs_policy.tier_b`, ON in both modes)
 
@@ -78,6 +79,7 @@ Then the verdict the detector files for that line drives the engagement (`_polic
 * `insufficient` (drop short of the bell: the excess exceeds the cut, or the bell missed the line) → one deeper step immediately
   (`policy: tier_b_insufficient`, what ring_out's VERIFY does), then re-evaluate on the next verdict.
 * `ambiguous` → nothing further, reported. No verdict within `verdict_timeout_s` 4 s → the engagement is given up (`no_verdict`).
+  A policy write that did not happen (rate limit, timeout: `no_write`) is retried after `cooldown_s` like the detector retries its own.
 
 In ring_out the writes the layer decides on are queued to the ring-out task (`_run_policy_action`: HOLD → NOTCH stages tagged
 `tier: "B"`), so every master and GEQ write of a run stays in one task, and with `ringout_hold_raise` the master is not raised while an
@@ -126,12 +128,13 @@ probe-before-AT-ARM behaviour is untouched.
 ## 6. Analyser flags (`reforce_ballistics_on_freeze`, `frozen_abort_s` 5, `cfs_policy.backoff_probe`)
 
 * `PEAK_HOLD_SUSPECTED` / `FROZEN_LINES` mid-session: the prefs were forced at arm, so a frozen display means somebody changed them on
-  the console. The layer re-forces the ballistics once (`meters.force_rta_ballistics`: `decay` 0.0 and `peakhold` 0, unconditional
-  writes with the previous values read for the report), logs, reports (`policy.ballistics_reforced`, a warning, `cfs.policy
-  {what: "ballistics_reforced"}`) and gives the display `frozen_abort_s` to come alive; if the flag then persists that long the
-  session is aborted ("the RTA display is frozen (…): the detector cannot see through a frozen display") — a ring-out backs off and
-  finishes ABORT, a watch stops. Measured: the FakeDesk repeating its last analyser frame → PEAK_HOLD_SUSPECTED at +0.5 s → re-forced →
-  abort 1.5 s later (test override).
+  the console. Once the flag has stood `frozen_reforce_s` 1 s (a live line's skirt band can repeat its int16 code for a few frames; a
+  frozen display stays frozen) the layer re-forces the ballistics once (`meters.force_rta_ballistics`: `decay` 0.0 and `peakhold` 0,
+  unconditional writes with the previous values read for the report), logs, reports (`policy.ballistics_reforced`, a warning,
+  `cfs.policy {what: "ballistics_reforced"}`) and gives the display `frozen_abort_s` to come alive; if the flag then persists that
+  long the session is aborted ("the RTA display is frozen (…): the detector cannot see through a frozen display") — a ring-out backs
+  off and finishes ABORT, a watch stops. Measured: the FakeDesk repeating its last analyser frame → PEAK_HOLD_SUSPECTED at +0.5 s →
+  re-forced 1 s later → abort `frozen_abort_s` after that (1.5 s in the test).
 * `SLOW_RELEASE` → report warning with `det.release_db_per_s`; `HOT_SPECTRUM` → report warning (arm p95); every flag's first
   appearance is in `policy.flags_seen` with its time and a `cfs.policy {what: "flag"}` event.
 * `backoff_advised` on a STATIONARY candidate in ring_out (≥ 30 dB prominent family-less line that follows the +1 dB steps 1 dB/dB:
@@ -173,7 +176,7 @@ copy (`policy.alerts_entries`, `policy.config_entries`); the saved JSON keeps th
 | `alerts.events` / `scribble_strip` / `color` | true / true / RDi | §4 |
 | `alerts.clear_s` / `min_write_interval_s` / `hold_s` | 2.0 / 1.0 / 0.5 | §4 timing |
 | `at_arm_watch_min_prominence_db` | 30 | §5 |
-| `reforce_ballistics_on_freeze` / `frozen_abort_s` | true / 5.0 | §6 |
+| `reforce_ballistics_on_freeze` / `frozen_reforce_s` / `frozen_abort_s` | true / 1.0 / 5.0 | §6 |
 | `backoff_probe.enabled` / `drop_db` / `min_response_db` / `settle_s` | true / 3.0 / 4.5 / 0.3 | §6 |
 
 Unknown keys are an error (a typo in a safety policy is not silently ignored); the block itself is optional (absent = defaults).
