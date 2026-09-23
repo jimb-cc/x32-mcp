@@ -6,7 +6,7 @@ not verifiable from the repo or first principles; every one of them is a field o
 (or a keyword of the relevant source) so a scenario or a skeptic can sweep it.
 
 Frame = one ``/meters/15`` RTA frame, 50 ms (device.yaml ``rta.frame_period_s``). Levels are RTA dB re full
-scale: −128 = floor, 0.0 = clip (meters.md §4.2). Band i centre = 20·2^(i/10) Hz (x32mcp.meters; measured 2026-09-23).
+scale: −128 = floor, 0.0 = clip (meters.md §4.2). Band i centre = 10000·2^((i−90)/10) Hz: the corpus grid (see RTA_BAND_HZ below).
 """
 
 from __future__ import annotations
@@ -15,7 +15,22 @@ import math
 from dataclasses import dataclass, replace
 from typing import Any
 
-from x32mcp.meters import RTA_BAND_HZ, rta_band_centre  # noqa: F401  (re-exported)
+# THE CORPUS KEEPS ITS OWN GRID until the corpus revision. The desk's bins are at 20*2^(i/10) (measured 2026-09-23;
+# x32mcp.meters.RTA_BAND_HZ, device.yaml); the corpus was built and baselined on the DOC table 10000*2^((i-90)/10), a third
+# of a band lower. Its scenes mix frequencies anchored to the bins (band_centre_hz: a ring "on the 64/65 edge") with
+# frequencies anchored to the world (notes in Hz, rings at 2500 Hz, GEQ centres): moving the bins alone moves the first
+# kind against the second by 41 cents and changes what the scenarios test (X17's ring, written 24 cents under the B2 the
+# guitar keeps playing, lands 10 cents above it). The simulator is a self-consistent world whatever its grid -- the
+# harness hands the detector this same band_hz -- so the grid moves together with the measured analyser model, the
+# re-anchored scenarios and new baselines in ONE revision (docs/REVIEW_RESPONSE_2026-09-24.md, item 2).
+RTA_BAND_HZ: tuple[float, ...] = tuple(10000.0 * 2.0 ** ((i - 90) / 10.0) for i in range(100))
+
+
+def rta_band_centre(i: int) -> float:
+    """Centre (Hz) of band ``i`` on the CORPUS grid (see above; the product's is x32mcp.meters.rta_band_centre)."""
+    return RTA_BAND_HZ[i]
+
+
 
 # -- time base / value range --------------------------------------------------------------------
 FRAME_S: float = 0.05                 # /meters/15 frame period (device.yaml rta.frame_period_s)
