@@ -6,7 +6,7 @@ not verifiable from the repo or first principles; every one of them is a field o
 (or a keyword of the relevant source) so a scenario or a skeptic can sweep it.
 
 Frame = one ``/meters/15`` RTA frame, 50 ms (device.yaml ``rta.frame_period_s``). Levels are RTA dB re full
-scale: −128 = floor, 0.0 = clip (meters.md §4.2). Band i centre = 10000·2^((i−90)/10) Hz (x32mcp.meters).
+scale: −128 = floor, 0.0 = clip (meters.md §4.2). Band i centre = 20·2^(i/10) Hz (x32mcp.meters; measured 2026-09-23).
 """
 
 from __future__ import annotations

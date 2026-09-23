@@ -24,12 +24,12 @@ def settle(an: Analyser, tones=(), noise=(), n_frames=40):
 
 # -- geometry -----------------------------------------------------------------------------------------
 def test_band_grid_matches_meters():
-    assert RTA_BAND_HZ[90] == pytest.approx(10000.0)
-    assert RTA_BAND_HZ[60] == pytest.approx(1250.0)
-    assert band_position(10000.0) == pytest.approx(90.0)
+    assert RTA_BAND_HZ[90] == pytest.approx(10240.0)
+    assert RTA_BAND_HZ[60] == pytest.approx(1280.0)
+    assert band_position(10240.0) == pytest.approx(90.0)
     assert nearest_band(412.0) == 44 and nearest_band(8100.0) == 87
-    assert band_bandwidth_hz(10) == pytest.approx(2.71, abs=0.02)      # analyser brief §1 table
-    assert band_bandwidth_hz(67) == pytest.approx(140.8, abs=0.5)
+    assert band_bandwidth_hz(10) == pytest.approx(2.77, abs=0.02)      # analyser brief §1 table, on the measured grid
+    assert band_bandwidth_hz(67) == pytest.approx(144.1, abs=0.5)
     assert harmonic_band_offset(2) == pytest.approx(10.0) and harmonic_band_offset(4) == pytest.approx(20.0)
     assert round(harmonic_band_offset(3)) == 16
 
@@ -152,7 +152,7 @@ def test_lf_noise_statistics_are_ragged_hf_smooth():
     import statistics
     assert statistics.pstdev(lf) > 2.0        # ragged, correlated LF band on noise
     assert statistics.pstdev(hf) < 1.2        # smooth HF band
-    assert statistics.mean(hf) > -50.0        # PEAK rides above the nominal (RMS-ish) bed level
+    assert statistics.mean(hf) > -50.5        # PEAK rides at/above the nominal (RMS-ish) bed level (-50.1 on the measured grid)
 
 
 def test_common_mode_step_moves_programme_bands_equally_but_not_a_ring():

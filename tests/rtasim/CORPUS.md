@@ -113,6 +113,9 @@ Things that made the detector's life unrealistically **easy** (E) or **hard**/ha
 
 ---
 
+*(Hz values quoted in the scenario table were computed on the pre-2026-09-23 grid `10000·2^((i−90)/10)`; band indices are
+authoritative and the corpus is grid-relative — on the measured grid `20·2^(i/10)` every quoted frequency is 2.4 % higher.)*
+
 ## 3. Scenario table (67 scenarios; ground truth from the rendered trace, seeds 1–3; "0 ev" = nothing may be detected)
 
 Columns: name | dur s | content | ground truth (on = t_onset, vis = t_prom range over seeds, pk = peak prominence) | budget ms |

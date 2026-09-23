@@ -235,12 +235,12 @@ def test_lin_to_db_and_groups():
 
 def test_rta_band_formula_and_descriptor(d):
     assert len(RTA_BAND_HZ) == RTA_BANDS == 100
-    assert rta_band_centre(90) == 10000.0
-    assert rta_band_centre(0) == pytest.approx(19.53, abs=0.01)
-    assert rta_band_centre(99) == pytest.approx(18660.7, abs=0.1)
-    assert rta_band_centre(40) == pytest.approx(312.5, abs=0.01)  # the DOC's "313"
+    assert rta_band_centre(90) == 10240.0
+    assert rta_band_centre(0) == pytest.approx(20.0, abs=0.01)
+    assert rta_band_centre(99) == pytest.approx(19108.5, abs=0.1)
+    assert rta_band_centre(40) == pytest.approx(320.0, abs=0.01)  # the DOC's "313" is a label; the bin is measured at 320
     hz = rta_band_hz(d)
-    assert len(hz) == 100 and hz[90] == 10000.0
+    assert len(hz) == 100 and hz[90] == 10240.0
     assert all(a == pytest.approx(b, abs=0.01) for a, b in zip(hz, RTA_BAND_HZ))
     assert all(hz[i] < hz[i + 1] for i in range(99))
     assert band_for_hz(10000) == 90
@@ -370,8 +370,9 @@ def test_synthetic_base_spectrum_and_determinism():
     m100 = sum(f.values[b100] for f in fa) / 60  # 3 s: wobble averages out over whole periods
     m10k = sum(f.values[b10k] for f in fa) / 60
     assert m100 == pytest.approx(a.base_level_db(b100), abs=1.0)
-    assert m10k == pytest.approx(-55.0, abs=1.0)
-    assert a.base_level_db(b10k) == -55.0
+    base10k = -25.0 - 15.0 * math.log10(RTA_BAND_HZ[b10k] / 100.0)          # -55.15 on the measured grid (band 90 = 10240 Hz)
+    assert m10k == pytest.approx(base10k, abs=1.0)
+    assert a.base_level_db(b10k) == pytest.approx(base10k, abs=1e-9)
     b1k = band_for_hz(1000)  # nearest centre is 1015.32 Hz
     assert a.base_level_db(b1k) == pytest.approx(-25.0 - 15.0 * math.log10(RTA_BAND_HZ[b1k] / 100.0), abs=1e-9)  # -15 dB/decade
     # noise +-3 dB and wobble +-2 dB: never more than ~5.5 dB from the base
@@ -440,8 +441,8 @@ def test_attenuate_makes_ring_decay():
     for _ in range(20):
         s.tick()
     assert s.ring_level(2400.0) == pytest.approx(-30.0)
-    bands = s.set_geq_gain(2500.0, -3.0)  # GEQ cut: 2500 Hz band covers RTA bands 69..71
-    assert bands == (69, 70, 71) and s.cuts == {69: 3.0, 70: 3.0, 71: 3.0}
+    bands = s.set_geq_gain(2500.0, -3.0)  # GEQ cut: 2500 Hz +-1/6 oct = 2227..2806 Hz covers RTA bands 68..71 on the measured grid
+    assert bands == (68, 69, 70, 71) and s.cuts == {68: 3.0, 69: 3.0, 70: 3.0, 71: 3.0}
     before = s.tick().values[band]
     for _ in range(9):
         s.tick()
