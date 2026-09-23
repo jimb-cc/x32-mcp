@@ -301,6 +301,9 @@ async def test_e_tier_b_never_writes_a_band_shallower_than_the_operators_own_cut
     await asyncio.sleep(0.6)
     rig.rta.inject_note(1000.0, -18.0, rise_frames=1)
     await wait_until(lambda: _band_writes(rig, GEQ_BAND_1K) == [-3.0], timeout=3.0, what="the tier-B -3")
+    # the writer records the -3 when it SENDS it; on real sockets the datagram is still in flight, and a hand cut set now
+    # would be overwritten by our own -3 arriving after it. Wait until the desk has it (review request 2026-09-23 item 6).
+    await wait_until(lambda: float(rig.fake.value(PAR_1K)) == pytest.approx(-3.0, abs=0.01), timeout=2.0, what="the -3 applied on the desk")
     rig.fake.set_value(PAR_1K, -9.0)                         # front-panel move, pushed over /xremote
     await wait_until(lambda: ses.nc.gains.get(GEQ_BAND_1K, 0.0) <= -8.9 and ses.writer.gains.get(GEQ_BAND_1K, 0.0) <= -8.9,
                      timeout=3.0, what="hand cut adopted by controller and writer")

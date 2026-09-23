@@ -328,6 +328,9 @@ async def test_colour_the_engineer_sets_mid_session_is_the_one_restored(make_rig
     await asyncio.sleep(0.6)
     rig.rta.inject_note(2000.0, -34.0, rise_frames=1)
     await wait_until(lambda: rig.events_of("alert"), timeout=2.0, what="strip alert write")
+    # the alert event is published when the RDi write is SENT; wait until the desk carries it, or the engineer's BL set
+    # here is overwritten by our own datagram still in flight (review request 2026-09-23 item 6)
+    await wait_until(lambda: rig.fake.value(COLOR) == "RDi", timeout=2.0, what="the RDi alert colour applied on the desk")
     rig.fake.set_value(COLOR, "BL")                          # a front-panel change pushed over /xremote
     await asyncio.sleep(0.2)
     rig.rta.stop_note(2000.0)
