@@ -7,7 +7,8 @@ first 10 frames after the peak) and the time to reach the floor. The oscillator'
 whatever the console has (set them first: e.g. sine, 2 kHz, -40 dB, Main L+R); the RTA source too (get_rta(target)).
 
 Writes exactly two addresses, outside the policy layer (raw connection, like measure_settle.py): the RTA decay pref and
-the oscillator on/off. Both are restored at the end (decay to ``--restore-decay`` seconds, oscillator OFF).
+the oscillator on/off. Both are restored at the end (decay to what the desk had before the run, or to ``--restore-decay``
+seconds when given; oscillator OFF). It used to restore a fixed 1.0 s, which silently set the next script's analyser.
 
     .venv/Scripts/python scripts/measure_rta_release.py 192.168.1.139 --decays 0.25,1,4,16 --out release.jsonl
 """
@@ -36,7 +37,7 @@ async def main() -> int:
     ap.add_argument("--decays", default="0.25,1,4,16", help="seconds, comma-separated")
     ap.add_argument("--on", type=float, default=4.0, help="seconds the tone is on per step")
     ap.add_argument("--off", type=float, default=8.0, help="seconds logged after gating off (16 s decay gets +6)")
-    ap.add_argument("--restore-decay", type=float, default=1.0)
+    ap.add_argument("--restore-decay", type=float, default=None, help="seconds; default: the value found before the run")
     ap.add_argument("--out", default="rta_release.jsonl")
     a = ap.parse_args()
 
@@ -54,7 +55,7 @@ async def main() -> int:
 
     def on_frame(fr) -> None:
         if fr.is_rta:
-            frames.append({"ts": round(fr.ts, 4), "decay_s": marker["decay_s"], "osc": marker["osc"], "db": [round(v, 1) for v in fr.values]})
+            frames.append({"ts": round(fr.ts, 4), "decay_s": marker["decay_s"], "osc": marker["osc"], "db": [round(v, 3) for v in fr.values]})
 
     lm = LiveMeters(conn, RTA_METER_TYPE)
     lm.subscribe(on_frame)
@@ -106,7 +107,7 @@ async def main() -> int:
                   f"{results[-1]['fall_db_per_s']} dB/s, floor after {t_floor} s; fall: {results[-1]['first_frames_after_off']}", file=sys.stderr)
     finally:
         await conn.set(OSC_ON, 0)
-        await conn.set(DECAY, to_raw(a.restore_decay))
+        await conn.set(DECAY, decay_before if a.restore_decay is None else to_raw(a.restore_decay))
         await asyncio.sleep(0.3)
         print(f"restored: osc OFF, decay -> {to_value(await conn.get(DECAY))} s", file=sys.stderr)
         await lm.stop()
