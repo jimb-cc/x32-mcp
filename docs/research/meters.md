@@ -578,6 +578,8 @@ Method as on 2026-09-22 plus `scripts/log_rta_frames.py` (every `/meters/15` fra
    (−52 → −47 → −45 → −43) and had not reached full level after 4 s at 16 — it is an averaging time constant, not a
    release-only setting. Forcing 0.25 at arm is therefore the one RTA-pref write that changes what the detector sees;
    at Jim's previous setting of 1 even HF lines "grew" for three frames.
+   (The sweep ran with the GEQ 2k slider at −12 still inserted on Main, hence the tone band's peak of −41.3 rather than
+   −37.7; slopes are unaffected.)
 4. **Rise time of a gated tone, frame by frame** (plateau −37.7; increments in dB/frame):
    | tone | frames to −3 dB / −1 dB of plateau | increments | settle rule ⌈1.5k/(Δf·T)−½⌉, k = 1 |
    |---|---|---|---|
