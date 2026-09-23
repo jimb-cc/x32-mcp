@@ -361,8 +361,9 @@ adopted late (never written shallower).
    7.87 kHz on an 8.00 kHz tone: 11.7 dB vs RBJ 11.4) — no warping at that offset. And the GEQ side of §2.2 is now measured:
    the Dual Graphic EQ realises only ≈ 0.43× (−6 → 2.6 dB) to 0.35× (−12 → 4.1 dB) of its slider depth at an isolated band,
    broad and shallow (±0.09 oct within 0.5 dB). The PEQ advantage is therefore not the 30 % of the programme-cost integral but a
-   factor ~2.5 in delivered attenuation per written dB: a PEQ −3 kills what a GEQ −9 kills.** The RTA band-centre offset
-   (meters.md 2026-09-23 item 5, ≈ +0.05 oct) still feeds `offset_unc_oct` until a finer sweep.
+   factor ~2.5 in delivered attenuation per written dB: a PEQ −3 kills what a GEQ −9 kills.** The RTA band-centre offset is
+   resolved (meters.md 2026-09-23 item 8): the bins are `20·2^(i/10)`, a constant +0.034 oct above the table in the code —
+   a systematic error, not an uncertainty, removed by `review/rta-band-grid`; `offset_unc_oct` is then the centroid's own ±0.03.
 2. Whether the bus EQ is upstream of the post-EQ RTA tap (stat 146+N−1, meters.md:427; the channel overlay text at :439 supports it;
    HANDOVER.md:165-169 measured only PRE vs POST *insert*) — gates the default flip (D6). **Confirmed for Main LR 2026-09-22** (the
    post-EQ tap moved with the main EQ); the bus case needs a tone fed into a channel routed to the bus, since the oscillator cannot

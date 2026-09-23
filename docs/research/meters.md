@@ -321,6 +321,8 @@ Also stated in [issue #8]: "/meters/15 (RTA output) is the one case where the X3
 ```
 Formula (inferred — reproduces every table entry to its printed rounding; VERIFIED by the verifier with a script over all 100 entries: the only non-exact case is band 40 = 312.5 Hz, which rounds half-up to the table's "313"): **1/10-octave spacing anchored at 10 kHz = band 90**:
 `f(i) = 10000 * 2 ** ((i - 90) / 10)  Hz  ≈ 19.53 * 2 ** (i/10)`, i = 0…99.
+**MEASURED 2026-09-23 (Verification log item 8): the desk's analysis bins are at `20 * 2 ** (i/10)` — a constant +0.034 oct above
+this table, which is therefore the display labelling, not the bin centres. Use 20·2^(i/10) for band → Hz.**
 Checks: i=0 → 19.5 (table "20"); i=5 → 27.6 ("28"); i=10 → 39.06 ("39"); i=20 → 78.1 ("78"); i=40 → 312.5 ("313"); i=45 → 441.9 ("442"); i=55 → 883.9 ("884"); i=63 → 1538.9 ("1.54K"); i=90 → 10000; i=91 → 10717.7 ("10.72K"); i=99 → 18660.7 ("18.66K"). It is *not* `20*2^(i/10)` (that gives 40 at i=10 and 20.48 kHz at i=100) and not ISO 1/3-octave. Use the verbatim table for labels and the formula for interpolation.
 
 ### 4.3 `/meters/16` (gate/comp gains + automix) — int16 pairs
@@ -614,3 +616,23 @@ Method as on 2026-09-22 plus `scripts/log_rta_frames.py` (every `/meters/15` fra
    therefore ~1.3/2.6/3.9 dB of real attenuation, which is why it took "−9" to die. Dual TruEQ (the band-interaction-
    corrected type) was not measured. The insert-on-Main + oscillator combination read total silence once, but the tone was
    off at the time: no conclusion about the injection point relative to the insert.
+
+8. **Semitone sweep 42 Hz – 9.5 kHz, 95 tones (`scripts/measure_rta_bands.py`; data `rta_bands_semitone_sweep_2026-09-23*.jsonl.gz`;
+   det PEAK, decay 0.25, Main post-EQ, oscillator −40 dB):**
+   * **The analysis bins are at `f(i) = 20 · 2^(i/10)` Hz, not at the DOC's printed table.** The table on DOC p.19 (item 4.2 above)
+     is reproduced exactly by `10000·2^((i−90)/10)` (band 0 = 19.53 → "20", band 90 = 10.00K), but the desk's bins sit a
+     constant **+0.034 oct** (a third of a band) above it: with the +1/−1 neighbour ratio as the estimator, the symmetry point
+     is at +0.032 oct from the table's centres and at −0.002 oct from `20·2^(i/10)` (60 tones ≥ 300 Hz); a tone 0.012 oct
+     *below* a table centre splits evenly between that band and the one below; 2000.0 Hz reads 5.7 dB louder in "band 66"
+     (table 1894.6, bins 1940.1) than in "band 67" (2030.6 / 2079.4). Band 0 = 20.0 Hz, 60 = 1280, 90 = 10240, 99 = 19109.
+     The DOC table is best read as display labels. Everything that turns a band index into Hz (device.yaml `rta.band_hz`,
+     `meters.rta_band_centre`, the corpus, the detector's centroid, PEQ placement) is a third of a band low until corrected.
+   * **Flat**: every on-centre tone reads −37.6 ± 0.2 dB from 42 Hz to 9.5 kHz (oscillator −40 dB).
+   * **Skirts (on-centre tones, relative dB at −2 / −1 / +1 / +2 bands)**: ≥ 320 Hz **−55…−59 / −30…−34 / −30…−34 / −52…−57** —
+     symmetric, the `skirt_order` 5 end of the corpus sweep and steeper at ±2; 160–320 Hz −53…−56 / −26…−32 / −29…−35 / −55;
+     80–160 Hz −39…−41 / −18…−24 / −19…−35 / −39…−58 (asymmetric, the upper skirt steeper); 40–80 Hz **−25 / −12…−15 / −11…−23 / −24…−41**.
+     The bank is uniform above ~200 Hz and progressively wider and lop-sided below it; a frequency-dependent skirt order
+     (≈ 5 above 200 Hz, ≈ 3 at 100 Hz, ≈ 2 at 50 Hz) is the model the simulator needs.
+   * **Attack under PEAK, decay 0.25** (from the first frame within 20 dB of the plateau): ≥ 200 Hz 3 frames to −3 dB and 6–7 to
+     −1 dB (a fast 8–13 dB first step then a slow last decibel); 80–200 Hz 5–6 / 8–10; 42–67 Hz 5–7 / 9–10 with 1–3 dB/frame
+     increments — the RMS figures of item 4 are 1–2 frames faster at HF. Either way the settle rule's k = 1 bound holds.

@@ -322,3 +322,7 @@ under `docs/research/data/`. Findings, all first-time measurements:
 
 Still to measure: a finer centre sweep (pink noise or a channel-fed tone), Dual TruEQ's depth, the bus-EQ tap order with a
 channel-fed tone, 40 Hz rise time, whether the oscillator into Main sits before or after the insert send.
+
+* **Semitone sweep (95 tones, `scripts/measure_rta_bands.py`)**: the RTA bins are `20·2^(i/10)` Hz — a third of a band above
+  the DOC's printed table that `device.yaml`/`meters.py` reproduce (fix on `review/rta-band-grid`, PR); response flat ±0.2 dB
+  42 Hz–9.5 kHz; skirts symmetric and steep (≈ order 5) above 200 Hz, widening to ≈ 2 at 50 Hz; PEAK attack 3 frames to −3 dB at HF.

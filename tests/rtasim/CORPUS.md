@@ -338,9 +338,11 @@ alternation on split lines (S10, X9, X23).
    τ_a = 0.5/Δf is too fast at LF; the release is 20/decay dB/s (80 at 0.25, 20 at 1, 5 at 4, 1.2 at 16), not 60/decay —
    TAIL is 3× longer than modelled — and `decay` slows the attack as well (a 2 kHz tone: 1 frame at 0.25, 3–4 at 1); skirts are at the `skirt_order` 5 end (±1 band ≈ −40 dB, ±2 −82, ±3 −100 under PEAK); the
    floor is −97 under RMS and −128 under PEAK, levels equal; gain, autogain and peak-hold never reach the stream, so the
-   `peak_hold_s` and `gain_offset_db` sweeps model a screen effect the detector can never see; and the band centres sit
-   ~0.05 oct (half a band) above the nominal formula. Defaults are kept for baseline continuity; a corpus revision should
-   adopt attack_k 1.0, skirt_order 5, decay 0.25 → 66 dB/s and the centre offset.)*
+   `peak_hold_s` and `gain_offset_db` sweeps model a screen effect the detector can never see; the band centres are
+   `20·2^(i/10)`, a constant +0.034 oct above the DOC table the code uses (fixed in `review/rta-band-grid`); and the
+   skirts are uniform (order ≈ 5) above ~200 Hz but widen to order ≈ 3 at 100 Hz and ≈ 2 at 50 Hz. Defaults are kept for
+   baseline continuity; a corpus revision should adopt attack_k 1.0, a frequency-dependent skirt order, decay 0.25 → 80 dB/s
+   and the corrected grid.)*
    Per-band power one-pole (τ_a = 0.5/Δf), Butterworth-2N skirts, dB-linear
    release, guessed peak-hold/decay/gain semantics. A real X32 may smear an LF tone over ±2–4 bands (FFT), have window-shaped
    rises and different skirts. Any design that normalises growth by *this* τ_a(i) curve, matches *this* N=3 skirt template (P11), or
