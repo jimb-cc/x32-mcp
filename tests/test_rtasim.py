@@ -503,7 +503,9 @@ def test_k8_is_a_policy_layer_case_and_dies_with_tier_b_under_both_actuators():
     """K8: the howl hops 200 cents after the first cut and ARRIVES at its plateau within one frame (the simulator's hop is an
     instantaneous retune). Nothing was seen to grow, so the detector classes the new line MODERATE and leaves it to the policy
     layer by design -- the same class as the fast-howl-to-a-quiet-plateau breakers. The detector alone therefore never kills it;
-    with the policy layer's tier B (stand-in: rtasim.policy) it is dead at the end under both actuators."""
+    with the policy layer's tier B (stand-in: rtasim.policy) it is dead at the end under both actuators, on six seeds -- including
+    PEQ seed 5, on which the deepen meant for the old line files a bystander 'held' on the hopped one (without the bystander
+    rule in cfs_policy.tier_b_eligible that line is barred from tier B for good and howls at -13 dBFS to the end of the scene)."""
     from rtasim.harness import run_one
     from x32mcp.descriptor import Descriptor
     from x32mcp.detector import DetectorConfig, FeedbackDetector
@@ -513,11 +515,12 @@ def test_k8_is_a_policy_layer_case_and_dies_with_tier_b_under_both_actuators():
     alone = run_one(fac, name, 1, closed_loop=True, notch_cfg=cfg)
     assert alone.survived == [0] and len(alone.notches) == 1 and alone.policy_log == []
     for actuator in ("geq", "peq"):
-        for seed in (1, 2, 3):
+        for seed in (1, 2, 3, 4, 5, 6):
             rr = run_one(fac, name, seed, closed_loop=True, notch_cfg=cfg, actuator=actuator, policy="tier_b")
             assert rr.survived == [], (actuator, seed, rr.notches, rr.policy_log)
             assert rr.policy_log and rr.policy_log[0]["rule"] == "tier_b", (actuator, seed)
-            assert 0.55 <= rr.policy_log[0]["ts"] - 4.6 <= 0.8, (actuator, seed, rr.policy_log)     # min_age_s after the hop
+            assert 0.55 <= rr.policy_log[0]["ts"] - 4.6 <= 1.8, (actuator, seed, rr.policy_log)     # min_age_s after the hop; later only
+                                                                                                    # behind a bystander verdict
             assert sum(1 for d in rr.detections if d.verdict == "FP") == 0
     with pytest.raises(ValueError):
         run_one(fac, name, 1, closed_loop=True, notch_cfg=cfg, policy="tier_c")
