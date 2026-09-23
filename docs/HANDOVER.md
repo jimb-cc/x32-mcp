@@ -301,3 +301,24 @@ Measured on X32RACK-Jim (full detail: docs/research/meters.md, Verification log 
 
 Next desk session (10 min each): the tone sweep 1900…2100 Hz for the band-centre offset; the +18 gain comparison from the Rack's
 Meters → RTA page; a tone into a *channel* routed to a bus for the bus tap-order check; the PEQ at 8 kHz for warping.
+
+### 4d (ii). Second session, 2026-09-23 (~35 min) — full detail in docs/research/meters.md, Verification log
+
+New tools: `scripts/log_rta_frames.py` (every `/meters/15` frame to JSONL, 20/s) and `scripts/analyse_rta_rise.py`; raw logs
+under `docs/research/data/`. Findings, all first-time measurements:
+
+* Of the RTA prefs only `det` (floor −97 RMS / −128 PEAK) and `decay` (66 dB/s release at 0.25) reach the stream; gain,
+  auto-gain and peak-hold do not. `PEAK_HOLD_SUSPECTED` can never fire from the stream; the arm-time pinning is cosmetic.
+* Gated-tone rise times match the settle rule with k = 1.0 frame for frame: 78 Hz five frames (13, 5, 6, 2, 1.5 dB/frame —
+  the M7 mechanism), 156 Hz three, ≥ 947 Hz one. Release = 20/decay dB/s (80 at 0.25, 20 at 1, 5 at 4, 1.2 at 16), 3× slower
+  than the corpus models, and `decay` slows the attack too (2 kHz: 1 frame at 0.25, 3–4 frames at 1, seconds at 16) — the
+  arm-time forcing to 0.25 is the one pref write that changes what the detector sees (`scripts/measure_rta_release.py`).
+* Band centres ≈ nominal × 2^0.05 (five-point semitone sweep at 2 kHz, agreed by 8 kHz): the "band → Hz" formula is half a
+  band low. Provisional until a finer sweep; affects centroid interpolation and PEQ placement.
+* Main LR PEQ at 8 kHz = RBJ (11.7 dB for −12 Q 6.1 at 0.024 oct off; prototype 11.4).
+* **The Dual Graphic EQ realises ~⅓ of its slider depth** (−6 → 2.6 dB, −12 → 4.1 dB at 2 kHz, broad). M7's −3/−6/−9 were
+  1.3/2.6/3.9 dB real. Strongest argument yet for the PEQ actuator; the corpus's closed-loop GEQ kill margins are ~2.5×
+  optimistic (CORPUS.md §7.8).
+
+Still to measure: a finer centre sweep (pink noise or a channel-fed tone), Dual TruEQ's depth, the bus-EQ tap order with a
+channel-fed tone, 40 Hz rise time, whether the oscillator into Main sits before or after the insert send.

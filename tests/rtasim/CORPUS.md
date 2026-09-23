@@ -333,9 +333,14 @@ alternation on split lines (S10, X9, X23).
 
 ## 7. Residual weaknesses of the corpus (designers must not be allowed to exploit these)
 
-1. **The analyser is a model, not a measurement.** *(Partly measured 2026-09-22, docs/research/meters.md: a 2 kHz tone reads
-   ≈ −40 dB at ±1 band and hits the −97 floor at ±2 — the `skirt_order` 5 end of the sweep, not the N = 3 default, which is kept
-   only for baseline continuity; and the band centres look ~0.05 oct above the nominal formula, unconfirmed pending a sweep.)*
+1. **The analyser is a model, not a measurement.** *(Measured 2026-09-22/23, docs/research/meters.md Verification log: rise
+   times match the settle rule with k = 1.0 frame for frame (78 Hz: 5 frames, 156 Hz: 3, ≥ 947 Hz: 1) — the simulator's own
+   τ_a = 0.5/Δf is too fast at LF; the release is 20/decay dB/s (80 at 0.25, 20 at 1, 5 at 4, 1.2 at 16), not 60/decay —
+   TAIL is 3× longer than modelled — and `decay` slows the attack as well (a 2 kHz tone: 1 frame at 0.25, 3–4 at 1); skirts are at the `skirt_order` 5 end (±1 band ≈ −40 dB, ±2 −82, ±3 −100 under PEAK); the
+   floor is −97 under RMS and −128 under PEAK, levels equal; gain, autogain and peak-hold never reach the stream, so the
+   `peak_hold_s` and `gain_offset_db` sweeps model a screen effect the detector can never see; and the band centres sit
+   ~0.05 oct (half a band) above the nominal formula. Defaults are kept for baseline continuity; a corpus revision should
+   adopt attack_k 1.0, skirt_order 5, decay 0.25 → 66 dB/s and the centre offset.)*
    Per-band power one-pole (τ_a = 0.5/Δf), Butterworth-2N skirts, dB-linear
    release, guessed peak-hold/decay/gain semantics. A real X32 may smear an LF tone over ±2–4 bands (FFT), have window-shaped
    rises and different skirts. Any design that normalises growth by *this* τ_a(i) curve, matches *this* N=3 skirt template (P11), or
@@ -362,7 +367,11 @@ alternation on split lines (S10, X9, X23).
    score TP/DUP, and TP timing starts at t_onset (negative latencies happen when the detector fires on programme sharing the band).
    EARLY credit (2 s) rewards cutting programme-excited ringing in feedback_watch scenes (S12, X17, X22): report EARLY separately
    and re-run with `EARLY_CREDIT_S = 0` before claiming watch-mode latencies. HARM/TAIL/DUP cuts cost nothing but budget.
-8. **Closed loop is idealised**: RBJ bells of guessed Q on a PRE insert, one-frame actuation, no bus dynamics, VERIFY/deepen/release
+8. **Closed loop is idealised** — and, measured 2026-09-23, the GEQ model is wrong in *depth*: the desk's Dual Graphic EQ
+   realises ≈ 0.43× a −6 slider and ≈ 0.35× a −12 slider at an isolated band (2.6 / 4.1 dB at 2 kHz, ±0.09 oct within 0.5 dB),
+   whereas the renderer applies the nominal depth with an RBJ Q 3 bell. Every closed-loop kill margin in this document is
+   therefore optimistic for the GEQ actuator by ~2.5×; the bus PEQ (RBJ, full depth, measured at 2 and 8 kHz) is not affected.
+   The K series survives this: a −9 GEQ cut (≈3.5 dB real) kills only e ≤ 3.5. RBJ bells of guessed Q on a PRE insert, one-frame actuation, no bus dynamics, VERIFY/deepen/release
    logic of cfs.py not exercised, scenarios end at their duration (the next mode after a cut appears only in M2/X23), no operator
    fighting the system. A notch policy cannot be validated here, only a detector — except for the one policy property
    the K series checks: whether the loop is actually dead when the scenario ends (`survived`, §1).

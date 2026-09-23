@@ -304,7 +304,7 @@ Also stated in [issue #8]: "/meters/15 (RTA output) is the one case where the X3
 - Formula: `dB = int16 / 256.0` → resolution 1/256 dB = 0.0039 dB; range −128.0 (0x8000 = −32768, the floor / "no signal") … 0.0 (0x0000 = clipping). Positive values do not occur (range is [0x8000, 0x0000]).
 - Worked examples (verified): bytes `00 80 00 c0` → shorts −32768, −16384 → −128.0 dB, −64.0 dB. Bytes `40 e0 ff ff` → shorts −8128, −1 → −31.75 dB, −0.0039 dB. Short −6144 (0xE800) → −24.0 dB.
 - Linear (for drawing on the same scale as other meters): `lin = 10 ** (dB/20)`.
-- PARTLY MEASURED (2026-09-22, Verification log): with `/-prefs/rta/gain` 0 and `autogain` OFF the stream reads true dBFS (a −40 dB oscillator on Main read −40.2 in its band). Whether a non-zero `gain` (the desk had sat at +18) offsets the stream is still UNCONFIRMED — the comparison needs the Rack's Meters → RTA page, which X32-Edit does not expose. Best inference unchanged: the console's own RTA screen is what this stream feeds, so `gain` probably *does* shift it; the server pins it to 0 at arm (`rta.gain_db`).
+- MEASURED (2026-09-22/23, Verification log): the stream is the raw analysis. `gain` 0 vs 18, `autogain` ON, `peakhold` 2 — no change at all; the −40 dB oscillator reads −40.2/−39 in its band regardless. Only `det` (floor −97 RMS / −128 PEAK, levels otherwise equal) and `decay` (release ≈ 66 dB/s at 0.25) reach `/meters/15`. The server's pinning of gain/autogain/peak-hold at arm is harmless housekeeping for the engineer's screen, nothing more.
 
 **Band centre frequencies — SOURCE [DOC 4.09] p.19, verbatim table (Hz), 100 entries, index 0 … 99 row-major:**
 ```
@@ -554,3 +554,61 @@ gain 0, decay 0.25, peak-hold OFF, POST); Main LR EQ band 4 set by hand; reading
    given ~7.4 for the Q 10 case). `peq_q_scale_min/max` can be 1.0; the post-EQ RTA tap sees the main EQ.
 6. Neighbour bands moved with the notch as the bell predicts (−79 → −93 at +0.12 oct for −12 dB), and the RTA's own floor is
    −97 (display), not −128.
+
+### 2026-09-23 — measured on X32RACK-Jim (FW 4.13), studio, console oscillator into Main L+R, ~35 minutes
+
+Method as on 2026-09-22 plus `scripts/log_rta_frames.py` (every `/meters/15` frame to JSONL with local receive time;
+20.0 frames/s, inter-frame jitter 48–52 ms) and `scripts/analyse_rta_rise.py`. Raw frames:
+`docs/research/data/rta_rise_gated_tones_2026-09-23.jsonl.gz`, `rta_peakhold_det_2026-09-23.jsonl.gz`.
+
+1. **`/-prefs/rta/gain` does NOT reach `/meters/15`**: 2 kHz tone at −40, bands 66/67 read −39.0/−44.7 at gain 0 and at gain
+   18 (pref read back 18). Neither does **`autogain`** (ON for 30 s: identical) nor **`peakhold`** (set to 2, tone gated off: the
+   band fell at the normal −3.5 dB/frame, no hold). Of the RTA prefs only `det` and `decay` change the stream (below). The
+   server's arm-time forcing of gain/autogain/peak-hold is therefore harmless but not load-bearing; `PEAK_HOLD_SUSPECTED`
+   cannot trigger from the stream.
+2. **`det` sets the floor and shows the true skirts**: levels identical within 0.7 dB (RMS −39.0/−44.7 → PEAK −39.1/−45.4:
+   no crest-factor offset), but the floor is **−97 under RMS and −128 under PEAK**, so the prominence ceiling of a −40 dB
+   tone is 57 dB (RMS) or 60+ dB (PEAK). Under PEAK the skirts of a 2 kHz tone: ±1 band −45/(see 4), ±2 −82/−87,
+   ±3 −108/−97, ±4 −122/−113; the desk's own noise in the tone's band with the tone off ≈ −105 dBFS.
+3. **Release law, scripted sweep (`scripts/measure_rta_release.py`, data `rta_release_decay_sweep_2026-09-23.jsonl.gz`):**
+   linear in dB at **≈ 20 / decay_s dB/s** — decay 0.25 → 4.0 dB/frame (80 dB/s, floor in 0.65 s); 1 → 0.98 dB/frame
+   (20 dB/s, 2.75 s); 4 → 0.25 dB/frame (5 dB/s); 16 → 0.06 dB/frame (1.2 dB/s). The corpus's law (60 / decay) is exactly
+   3× too fast. RMS and PEAK alike. At 0.25 VERIFY sees 6 dB in 2 frames; a killed ring's display still lingers ~0.65 s.
+   **`decay` also slows the ATTACK**: the same 2 kHz tone reaches its plateau in 1 frame at 0.25, in 3–4 frames at 1
+   (−52 → −47 → −45 → −43) and had not reached full level after 4 s at 16 — it is an averaging time constant, not a
+   release-only setting. Forcing 0.25 at arm is therefore the one RTA-pref write that changes what the detector sees;
+   at Jim's previous setting of 1 even HF lines "grew" for three frames.
+4. **Rise time of a gated tone, frame by frame** (plateau −37.7; increments in dB/frame):
+   | tone | frames to −3 dB / −1 dB of plateau | increments | settle rule ⌈1.5k/(Δf·T)−½⌉, k = 1 |
+   |---|---|---|---|
+   | 78 Hz | 4 / 5 | 13.1, 5.2, 6.4, 1.9, 1.5 (and 16.6, 7.0, 3.0, 3.1, 0.8) | 6 |
+   | 156 Hz | 2–3 / 3 | 18.1, 9.0, 2.5, 0.6 (and 9.8, 6.2, 1.2) | 3 |
+   | 947 Hz | 1 / 2 | 4.1, 0.9, 0.4 | 1 |
+   | 1.77 kHz, 7.6 kHz | 1 / 2 | 8.7, 2.1, 0.5 / 3.7, 2.1, 0.3 | 1 |
+   A steady 78 Hz tone renders as a 5-frame decelerating ramp at 100–260 dB/s — the M7 40/80 Hz "growth" mechanism, measured.
+   k = 1.0 is right (the simulator's own τ_a = 0.5/Δf would predict 3 frames at 78 Hz). 40 Hz did not appear in the log
+   (the oscillator's lowest step that evening reached the tap was 78 Hz); 400 Hz was skipped.
+5. **Band centres: five-point semitone sweep** (oscillator steps 1k78 / 1k88 / 2k00 / 2k11 / 2k24; readings dB):
+   | tone | band 64 | 65 | 66 | 67 | 68 | 69 | 70 |
+   |---|---|---|---|---|---|---|---|
+   | 1.78 kHz | −61.2 | **−37.7** | −74.6 | — | — | — | — |
+   | 1.88 kHz | — | −51.1 | **−37.7** | −78.7 | — | — | — |
+   | 2.00 kHz | — | −86.6 | **−39.0** | −44.7 | −82.0 | — | — |
+   | 2.11 kHz | — | — | −82.5 | **−37.7** | −55.2 | −84.4 | — |
+   | 2.24 kHz | — | — | — | −77.9 | **−37.6** | −62.7 | −91.1 |
+   | 8.00 kHz | 85: −84.6 | 86: **−37.6** | 87: −49.4 | 88: −83.3 | | | |
+   Nominal centres (`10000·2^((i−90)/10)`): 64 1649, 65 1768, 66 1895, 67 2031, 68 2176, 69 2333, 86 7579, 87 8123. A tone
+   0.03–0.06 oct *above* a nominal centre reads full in that band; the next band up (0.04–0.07 oct away) reads −13 to −25;
+   the band below (0.13–0.16 oct) reads −37 to −45. Best single-parameter fit: **real centres ≈ nominal × 2^0.05 (+3.5 %)**,
+   i.e. the formula is half a band low — 2.00 kHz sits between "66" (≈1962) and "67" (≈2103), hence −39/−44.7. Provisional:
+   a one-sided skirt would look similar; a finer sweep (the oscillator only steps in semitones) or a pink-noise
+   measurement settles it. The detector's centroid interpolation and every "band → Hz" label inherit the offset.
+6. **Main LR PEQ at 8 kHz**: band 5 PEQ 7.87 kHz Q 6.1 −12 on an 8.00 kHz tone (0.024 oct above the centre): **11.7 dB**
+   (RBJ prototype 11.4). No bilinear warping visible at this offset; with the 2 kHz readings the PEQ = RBJ, `q_scale` 1.0.
+7. **The Dual Graphic EQ (GEQ2, FX 5 side A, Main LR insert PRE, RTA post-EQ) realises about a third of its slider depth
+   at an isolated band**: 2k slider −6 → **2.6 dB** at 2.00 kHz; −12 → **4.1 dB** at 2.00 kHz, 3.8 at 1.88, 3.6 at 2.11 — a
+   broad, shallow dip (±0.09 oct within 0.5 dB of the centre). Nominal depths are what NotchController writes and what the
+   corpus's closed loop applies; the desk delivers ~0.35× at −12 and ~0.43× at −6. M7's −3/−6/−9 on the 5 kHz howl were
+   therefore ~1.3/2.6/3.9 dB of real attenuation, which is why it took "−9" to die. Dual TruEQ (the band-interaction-
+   corrected type) was not measured. The insert-on-Main + oscillator combination read total silence once, but the tone was
+   off at the time: no conclusion about the injection point relative to the insert.
