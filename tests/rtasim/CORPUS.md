@@ -205,6 +205,7 @@ Ground truth for all seeds: `reports/corpus-critic/ground_truth_all_seeds.json`.
 | K6_limiter_held_howl_e3p5_midpoint_1k8 | 14 | 1789 Hz = GEQ 1.6 k/2 k midpoint, e 3.5, limiter −12 | on 3.0; one slider −3 gives ~−2.2 → survives; −6 or both neighbours −3 kills | 300 | interpolated f / flanking pair under survival pressure |
 | K7_limiter_howl_hops_100c_after_first_cut_e3p5 | 14 | K1's loop, e 3.5, hops +100 c at t=4.6 (after the first cut) | on 3.0, one episode; GEQ slider still bites; a Q 6 PEQ notch gives 1.9/4.0 dB at −3/−6 | 300 | hop vs notch width, merge-or-second-notch |
 | K8_limiter_howl_hops_200c_after_first_cut_e4 | 14 | as K7, +200 c (the next GEQ centre), e 4 | on 3.0, one episode; both actuators need a second band (GEQ: or −9 on the old one) | 300 | second notch / band |
+| K8r_limiter_howl_hop_200c_regrows_e4 | 14 | K8 with a physical hop: the old mode loses its excess at 4.6 s, the new mode (200 c up) regrows from its seed at e/τ | on 3.0 and 4.6, two episodes; the detector re-detects the new mode on its own evidence; PEQ: second notch on it, both dead | 300 | hop with growth; K8's instant retune is tier-B material (`policy="tier_b"`) |
 
 ## 4. Simulator parameters, defaults, citations (`tests/rtasim/physics.py`, `analyser.py`, `sources.py`, `render.py`)
 
