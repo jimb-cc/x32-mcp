@@ -373,7 +373,7 @@ def test_synthetic_base_spectrum_and_determinism():
     base10k = -25.0 - 15.0 * math.log10(RTA_BAND_HZ[b10k] / 100.0)          # -55.15 on the measured grid (band 90 = 10240 Hz)
     assert m10k == pytest.approx(base10k, abs=1.0)
     assert a.base_level_db(b10k) == pytest.approx(base10k, abs=1e-9)
-    b1k = band_for_hz(1000)  # nearest centre is 1015.32 Hz
+    b1k = band_for_hz(1000)  # nearest centre: 970.06 Hz on the measured grid (1015.32 on the DOC table)
     assert a.base_level_db(b1k) == pytest.approx(-25.0 - 15.0 * math.log10(RTA_BAND_HZ[b1k] / 100.0), abs=1e-9)  # -15 dB/decade
     # noise +-3 dB and wobble +-2 dB: never more than ~5.5 dB from the base
     assert max(abs(f.values[b100] - a.base_level_db(b100)) for f in fa) < 5.5
