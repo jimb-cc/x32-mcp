@@ -96,9 +96,10 @@ def grid() -> None:
         print(f"   peak band == nearest centre under {name}: {ok}/{tot}")
     plat = [r["peak_db"] for r in rows if abs(10.0 * math.log2(r["hz"] / 20.0) - r["peak_band"]) < 0.12]
     print(f"on-centre tones (within 0.12 band of a 20*2^(i/10) centre): {len(plat)} tones, level {st.mean(plat):.2f} +- {st.pstdev(plat):.2f} dB")
-    fl = sum(1 for r in rows if r["hz"] >= 320.0 and r["rel_m2"] is not None and r["peak_db"] + r["rel_m2"] <= -96.5)
-    tot = sum(1 for r in rows if r["hz"] >= 320.0)
-    print(f"+-2-band skirts: in {fl}/{tot} tones >= 320 Hz the -2 band reads the -97 floor itself: the quoted '-55..-59' is the floor, not the skirt")
+    hi = [r for r in rows if r["hz"] >= 320.0]
+    lo2 = sum(1 for r in hi if r["settled"][r["peak_band"] - 2] <= -96.95)
+    up2 = sum(1 for r in hi if r["settled"][r["peak_band"] + 2] <= -96.95)
+    print(f"+-2-band skirts, tones >= 320 Hz: the -2 band reads the -97 floor itself in {lo2}/{len(hi)} tones, the +2 band in {up2}/{len(hi)}")
 
 
 # ------------------------------------------------------------------------------------------------ display law
@@ -223,8 +224,14 @@ def floor() -> None:
         print(f"   {name}: band 16 (60.6 Hz, the only band above both floors) mean {st.mean(v):.1f} sd {st.pstdev(v):.1f} dB")
     k = next(i for i in range(1, len(fr)) if fr[i]["db"][66] - fr[i - 1]["db"][66] > 15.0 and fr[i - 1]["db"][66] > -60.0)
     print(f"   at the switch A -> B (frame {k}): band 66 reads " + ", ".join(f"{fr[j]['db'][66]:.1f}" for j in range(k - 1, k + 10)))
+    a0 = next(i for i in range(1, 900) if fr[i]["db"][66] > -60.0 and fr[i - 1]["db"][66] < -90.0)
+    print(f"   the one attack in state A (frame {a0}), relative to its plateau: "
+          + ", ".join(f"{fr[j]['db'][66] + 39.1:+.1f}" for j in range(a0, a0 + 4))
+          + "  (a 54 ms pole cannot be closer than -0.7 dB on its second frame: state A attacks like a peak detector)")
     print("   captures taken right after the server or a script wrote det = PEAK (rise log, release sweep, semitone sweep) all "
-          "show the -97 floor: either that write does not take, or the floors are attributed the wrong way round.")
+          "show the -97 floor and the averaging attack: the PEAK write probably does not take.")
+    ts = [f["ts"] for f in fr]
+    print(f"   frame period by timestamp: {(ts[-1] - ts[0]) / (len(ts) - 1) * 1000:.1f} ms")
 
 
 SECTIONS = {"prefs": prefs, "grid": grid, "display": display, "lf": lf, "geq": geq, "floor": floor}
