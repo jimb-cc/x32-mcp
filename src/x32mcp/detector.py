@@ -3,7 +3,7 @@
 Two synchronous, side-effect-free pieces used by ``cfs.py``:
 
 * :class:`FeedbackDetector` consumes one RTA frame at a time (100 dB values from ``/meters/15``,
-  band ``i`` centred at ``band_hz[i]`` = ``10000 * 2 ** ((i - 90) / 10)`` Hz, docs/research/meters.md §4.2)
+  band ``i`` centred at ``band_hz[i]`` = ``20 * 2 ** (i / 10)`` Hz — measured 2026-09-23, docs/research/meters.md Verification log item 8)
   and returns :class:`Detection` objects for spectral lines that satisfy the feedback predicates below.
 * :class:`NotchController` turns detections into GEQ band cuts (:class:`Notch`) — the planner is unchanged.
 

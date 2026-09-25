@@ -28,7 +28,7 @@ from x32mcp.connection import X32Connection
 from x32mcp.desk import Desk
 from x32mcp.events import EventBus
 from x32mcp.fakedesk import FakeDesk
-from x32mcp.meters import SyntheticRta, rta_band_hz
+from x32mcp.meters import RTA_BAND_HZ, SyntheticRta, band_for_hz, rta_band_hz
 from x32mcp.nodes import SnapshotStore
 from x32mcp.policy import Policy
 from x32mcp.provision import apply_setup, plan_setup
@@ -36,6 +36,10 @@ from x32mcp.provision import apply_setup, plan_setup
 GEQ_BAND_1K = 18          # 1-based GEQ band at 1 kHz
 PAR_1K = f"/fx/5/par/{GEQ_BAND_1K:02d}"
 COLOR = "/bus/01/config/color"
+# SyntheticRta puts an injected tone into its NEAREST analysis bin, so the detector reports that bin's centre: the
+# expectations below are grid-relative (970 / 1940 Hz on the measured grid 20*2^(i/10); 1015 / 2031 on the DOC table)
+HZ_1K = RTA_BAND_HZ[band_for_hz(1000.0)]
+HZ_2K = RTA_BAND_HZ[band_for_hz(2000.0)]
 
 
 @dataclass
@@ -179,7 +183,7 @@ async def test_tier_b_cuts_a_loudish_moderate_line_once_then_deepens_only_on_hel
     rig.rta.inject_note(1000.0, -18.0, rise_frames=1)
     ses = rig.cfs._ses
     # published as MODERATE, never cut by the detector itself
-    await wait_until(lambda: any(c.klass == "MODERATE" and abs(c.freq_hz - 1015) < 40 for c in ses.det.candidates), timeout=1.5, what="MODERATE candidate")
+    await wait_until(lambda: any(c.klass == "MODERATE" and abs(c.freq_hz - HZ_1K) < 40 for c in ses.det.candidates), timeout=1.5, what="MODERATE candidate")
     await wait_until(lambda: rig.notches(), timeout=3.0, what="the tier-B cut")
     dt = time.monotonic() - t_inject
     n0 = rig.notches()[0]
@@ -276,7 +280,7 @@ async def test_scribble_strip_alert_follows_the_candidates_and_is_restored_when_
     await rig.settle()
     assert rig.fake.value(COLOR) == "RDi"
     ons = [e for e in rig.events_of("candidate") if e["alert"] == "on"]
-    assert len(ons) == 1 and ons[0]["klass"] == "MODERATE" and ons[0]["alert_class"] == "MODERATE" and abs(ons[0]["freq_hz"] - 2030) < 60
+    assert len(ons) == 1 and ons[0]["klass"] == "MODERATE" and ons[0]["alert_class"] == "MODERATE" and abs(ons[0]["freq_hz"] - HZ_2K) < 60
     assert rig.notches() == []
     rig.rta.stop_note(2000.0)
     await wait_until(lambda: any(e["on"] is False for e in rig.events_of("alert")), timeout=3.0, what="strip colour restored after clear_s")
@@ -328,6 +332,9 @@ async def test_colour_the_engineer_sets_mid_session_is_the_one_restored(make_rig
     await asyncio.sleep(0.6)
     rig.rta.inject_note(2000.0, -34.0, rise_frames=1)
     await wait_until(lambda: rig.events_of("alert"), timeout=2.0, what="strip alert write")
+    # the alert event is published when the RDi write is SENT; wait until the desk carries it, or the engineer's BL set
+    # here is overwritten by our own datagram still in flight (review request 2026-09-23 item 6)
+    await wait_until(lambda: rig.fake.value(COLOR) == "RDi", timeout=2.0, what="the RDi alert colour applied on the desk")
     rig.fake.set_value(COLOR, "BL")                          # a front-panel change pushed over /xremote
     await asyncio.sleep(0.2)
     rig.rta.stop_note(2000.0)
@@ -403,7 +410,7 @@ async def test_a_quiet_at_arm_line_is_alerted_not_cut_in_watch(make_rig):
     await asyncio.sleep(1.5)
     assert rig.notches() == [] and rig.rta.cuts == {}
     rec = ses.policy.at_arm_log[0]
-    assert abs(rec["freq_hz"] - 1015) < 40 and rec["level_db"] == pytest.approx(-36.0, abs=1.0) and rec["prominence_db"] < 30
+    assert abs(rec["freq_hz"] - HZ_1K) < 40 and rec["level_db"] == pytest.approx(-36.0, abs=1.0) and rec["prominence_db"] < 30
     assert any(d.get("suppressed") == "at_arm" and "established_at_arm" in d["reasons"] for d in ses.detections)
     assert any(e["alert"] == "on" and e["alert_class"] == "AT_ARM" for e in rig.events_of("candidate"))
     await rig.settle()
@@ -594,7 +601,7 @@ async def test_backoff_probe_separates_a_room_source_from_a_compressor_held_howl
     probes = rep["policy"]["backoff_probes"]
     assert probes, ("no back-off probe ran", rep["detection_log"][-3:], rep["stages"][-6:])
     p = probes[0]
-    assert abs(p["freq_hz"] - 1015) < 40 and p["master_probe_db"] == pytest.approx(p["master_from_db"] - 3.0, abs=0.15)
+    assert abs(p["freq_hz"] - HZ_1K) < 40 and p["master_probe_db"] == pytest.approx(p["master_from_db"] - 3.0, abs=0.15)
     stages = [s["stage"] for s in rep["stages"]]
     assert "PROBE" in stages
     if not howl:

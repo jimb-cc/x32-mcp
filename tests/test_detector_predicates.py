@@ -243,8 +243,8 @@ def test_p5_lines_present_at_arm(cfg, band_hz):
     for i in range(80):
         v = sp.bed(i * FRAME_S)
         for k, rel in ((1, 0.0), (2, -6.0), (3, -3.0), (4, -14.0), (5, -8.0)):      # 50 Hz hum + buzz family
-            sp.tone(v, 10.0 * math.log2(50.0 * k / 19.53), -46.0 + rel)
-        sp.tone(v, 10.0 * math.log2(587.0 / 19.53), -50.0)                          # HVAC whine
+            sp.tone(v, 10.0 * math.log2(50.0 * k / 20.0), -46.0 + rel)
+        sp.tone(v, 10.0 * math.log2(587.0 / 20.0), -50.0)                          # HVAC whine
         sp.tone(v, 87.0, -8.0)                                                       # established ring, 8.1 kHz
         frames.append(v)
     dets = run(FeedbackDetector(cfg, band_hz), frames)
@@ -459,7 +459,7 @@ def test_g2_held_line_cut_on_plateau_evidence_and_loudish_is_deepened_once_per_v
     'deepen_held'), never a free-running ratchet: with no further note_cut() there is no further emission."""
     sp = Spectrum(72, bed_db=-70.0, noise_db=0.5)
     hz = 2000.0
-    band = 10.0 * math.log2(hz / 19.53)
+    band = 10.0 * math.log2(hz / 20.0)
     frames = _established_line_frames(sp, band, lambda t: -15.0 if t < 1.0 else -18.0, 120)
     det = FeedbackDetector(cfg, band_hz)
     dets = []
@@ -486,7 +486,7 @@ def test_g2_held_line_cut_on_rise_alone_is_cut_once_and_regrowth_re_admits_it(cf
     evidence, and quiet): never re-emitted while it sits there. When it later grows 7 dB above the held level it is re-emitted
     (fresh regrowth), and a line that ENDS by itself after a cut is 'false_cut' (klass FALSE_CUT)."""
     hz = 2000.0
-    band = 10.0 * math.log2(hz / 19.53)
+    band = 10.0 * math.log2(hz / 20.0)
     def level(t):
         if t < 0.5:
             return None
@@ -529,7 +529,7 @@ def test_g2_note_cut_confirms_a_killed_ring_and_flags_an_insufficient_cut(cfg, b
     """Same line; (a) after the cut it collapses 20 dB within two frames -> 'confirmed'; (b) it drops only 0.5 dB ->
     'insufficient' (excess larger than the bell: deepening is legitimate, and a +4 dB regrowth re-emits)."""
     hz = 2000.0
-    band = 10.0 * math.log2(hz / 19.53)
+    band = 10.0 * math.log2(hz / 20.0)
     for drop, want in ((20.0, "confirmed"), (0.5, "insufficient")):
         sp = Spectrum(73, bed_db=-70.0, noise_db=0.5)
         frames = _established_line_frames(sp, band, lambda t: -15.0 if t < 1.05 else -15.0 - drop, 60)
@@ -814,7 +814,7 @@ def test_kill_check_quiet_compressor_held_howl_is_deepened_on_excess_not_level(c
     verdict carries a deepen right although the line is quiet; with held_deepen_excess_db raised out of reach it does not (the
     pre-kill-check behaviour that let K4 survive)."""
     hz = 2500.0
-    band = 10.0 * math.log2(hz / 19.53)
+    band = 10.0 * math.log2(hz / 20.0)
 
     def level(t):
         if t < 1.0:

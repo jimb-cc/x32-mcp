@@ -327,6 +327,11 @@ channel-fed tone, 40 Hz rise time, whether the oscillator into Main sits before 
   the DOC's printed table that `device.yaml`/`meters.py` reproduce (fix on `review/rta-band-grid`, PR); response flat ±0.2 dB
   42 Hz–9.5 kHz; skirts symmetric and steep (≈ order 5) above 200 Hz, widening to ≈ 2 at 50 Hz; PEAK attack 3 frames to −3 dB at HF.
 
+### 4e. Review response, 2026-09-24
+
+[`docs/REVIEW_RESPONSE_2026-09-24.md`](REVIEW_RESPONSE_2026-09-24.md) answers `REVIEW_REQUEST_2026-09-23.md`. Read its §0 before
+acting on §4d (ii): the "GEQ realises a third of its depth" reading is disputed (one leg of the stereo Main was cut), and the
+semitone sweep ran at decay 1.0 in the −97-floor state, not at PEAK / 0.25. Its §9 is the next desk session, 20 minutes.
 * **2026-09-25 (reviewer, studio)**: (1) the `/meters/15` analyser is dormant after power-up until the console shows its
   RTA page (`/-stat/screen/screen 1` + `METER/page 4` wakes it remotely; it then stays alive) — arm preflight needed;
   (2) 180 s of real programme (Spotify → Main, PEAK/0.25) replayed through the shipped detector: 20 STRONG emissions, all

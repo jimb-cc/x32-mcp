@@ -304,7 +304,7 @@ Also stated in [issue #8]: "/meters/15 (RTA output) is the one case where the X3
 - Formula: `dB = int16 / 256.0` → resolution 1/256 dB = 0.0039 dB; range −128.0 (0x8000 = −32768, the floor / "no signal") … 0.0 (0x0000 = clipping). Positive values do not occur (range is [0x8000, 0x0000]).
 - Worked examples (verified): bytes `00 80 00 c0` → shorts −32768, −16384 → −128.0 dB, −64.0 dB. Bytes `40 e0 ff ff` → shorts −8128, −1 → −31.75 dB, −0.0039 dB. Short −6144 (0xE800) → −24.0 dB.
 - Linear (for drawing on the same scale as other meters): `lin = 10 ** (dB/20)`.
-- MEASURED (2026-09-22/23, Verification log): the stream is the raw analysis. `gain` 0 vs 18, `autogain` ON, `peakhold` 2 — no change at all; the −40 dB oscillator reads −40.2/−39 in its band regardless. Only `det` (floor −97 RMS / −128 PEAK, levels otherwise equal) and `decay` (release ≈ 66 dB/s at 0.25) reach `/meters/15`. The server's pinning of gain/autogain/peak-hold at arm is harmless housekeeping for the engineer's screen, nothing more.
+- MEASURED (2026-09-22/23, Verification log): the stream is the raw analysis. `gain` 0 vs 18, `autogain` ON, `peakhold` 2 — no change at all; the −40 dB oscillator reads −40.2/−39 in its band regardless. Only `det` (floor −97 RMS / −128 PEAK, levels otherwise equal; PEAK attacks within a frame, RMS averages both ways) and `decay` (release 20/decay dB/s: 4.05 dB/frame measured at 0.25; under RMS the attack follows the same pole, T20 = decay) reach `/meters/15`. Every capture made after the server or a script wrote det = PEAK is in the RMS state: whether that write takes is open (REVIEW_RESPONSE_2026-09-24 §3). The server's pinning of gain/autogain/peak-hold at arm is harmless housekeeping for the engineer's screen, nothing more.
 
 **Band centre frequencies — SOURCE [DOC 4.09] p.19, verbatim table (Hz), 100 entries, index 0 … 99 row-major:**
 ```
@@ -616,9 +616,20 @@ Method as on 2026-09-22 plus `scripts/log_rta_frames.py` (every `/meters/15` fra
    therefore ~1.3/2.6/3.9 dB of real attenuation, which is why it took "−9" to die. Dual TruEQ (the band-interaction-
    corrected type) was not measured. The insert-on-Main + oscillator combination read total silence once, but the tone was
    off at the time: no conclusion about the injection point relative to the insert.
+   **DISPUTED 2026-09-24 (docs/REVIEW_RESPONSE_2026-09-24.md item 1):** only side A was moved, and on a stereo strip side A
+   is the L leg alone. A full-depth cut of gain g on one leg, read through a tap that sums L and R, reads
+   20·log10((1+g)/2): 2.49 dB for −6 and 4.07 dB for −12 (measured 2.6 and 4.1), and 3.70 dB one semitone off centre for a
+   Q 4.3 bell (measured 3.8 and 3.6). Not a GEQ depth until both legs are cut together (REVIEW_REPORT §8 item 5). The cut
+   being visible at the post-EQ tap does settle the injection point: the oscillator enters upstream of the insert send.
 
 8. **Semitone sweep 42 Hz – 9.5 kHz, 95 tones (`scripts/measure_rta_bands.py`; data `rta_bands_semitone_sweep_2026-09-23*.jsonl.gz`;
    det PEAK, decay 0.25, Main post-EQ, oscillator −40 dB):**
+   **CORRECTION 2026-09-24 (`scripts/reanalyse_rta_logs.py prefs`): the heading is what the script asked for, not what the
+   desk did.** The frame log shows a release of 1.00 dB/frame after every tone (decay 1.0: `measure_rta_release.py` had
+   restored its default four minutes earlier and this script did not set decay) and no value below −97.0 in 4956 frames
+   (the RMS state). Centres, flatness and the ±1 skirts are static and stand. The −2 skirt above 320 Hz reads the floor
+   itself in 31 of 59 tones. The "attack under PEAK" bullet is the RMS display pole at decay 1.0 (−3.0 dB after 3
+   frames, −1.0 after 7), not a property of PEAK. Both scripts now set, read back and record the prefs.
    * **The analysis bins are at `f(i) = 20 · 2^(i/10)` Hz, not at the DOC's printed table.** The table on DOC p.19 (item 4.2 above)
      is reproduced exactly by `10000·2^((i−90)/10)` (band 0 = 19.53 → "20", band 90 = 10.00K), but the desk's bins sit a
      constant **+0.034 oct** (a third of a band) above it: with the +1/−1 neighbour ratio as the estimator, the symmetry point
