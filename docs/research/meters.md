@@ -653,3 +653,24 @@ Method as on 2026-09-22 plus `scripts/log_rta_frames.py` (every `/meters/15` fra
 4. **`det` write and floors** (silence, prefs/screen writes only): writing raw 0 drops the floor to −128 within a second, page
    or no page; writing raw 1 restores the −97 floor after a +50 dB all-band transient (max −44 dB from a −97 floor) that
    decays over seconds. The enum labelling (raw 0 = RMS in `device.yaml`) is now in question — see the review request §2b.
+5. **The `det` enum is inverted in the descriptor** (`det_label.py`): the console's `/node -prefs/rta` line prints **PEAK for
+   raw 0 and RMS for raw 1**, toggled both ways and read back. So the server's arm-time `det 1` "PEAK" has always set RMS,
+   the 2026-09-23 scripted runs "at PEAK" were RMS (the frontier's re-analysis was right), and Jim's hand-set PEAK on
+   09-23 (floor −128) was raw 0. Floors: PEAK (raw 0) −128; RMS (raw 1) −97. Fix: `review/rta-det-enum` (PR #20).
+6. **Switching to RMS (raw 1) throws a broadband burst** (`rta_det_rise_frozen_2026-09-25.jsonl.gz`, phase `A_det1_b`): with a
+   2 kHz tone on, the frame after the write has every band ~25 dB up (median −72.6 against −97; the peak band −10.4 against
+   its −25.0 plateau), decaying at the decay-0.25 release (3–5 dB/frame) over ~10 frames. Switching to PEAK (raw 0) is clean:
+   the floor drops to −128 within a frame and the tone reads its plateau within one frame. An arm-time det write must be
+   followed by ≥ 0.6 s before any level reference is taken.
+7. **A steady electronic tone does not look frozen** (2 kHz, 58 frames, 4-decimal values, `measure_rta_det_rise.py` phase B):
+   the peak band shows 5–6 distinct values, longest bit-identical run **2 frames**, spread 0.03–0.05 dB under both detectors;
+   ±1 and ±2 skirt bands the same. `frozen_frames` 5 cannot fire on it. Floor bands are bit-identical (−97.0039, 58/58 under
+   RMS) — floors freeze, peaks do not.
+8. **LF attack is the analysis window, not the detector** (gated tones, decay 0.25, frames to −3 / −1 dB): 40 Hz PEAK 6/7,
+   RMS 5/7; 63 Hz 3/4 vs 4/6; 100 Hz 4/4 vs 4/5; 2 kHz PEAK **1/1**, RMS 1/3. Above ~200 Hz PEAK settles within one frame
+   (the settle rule with k = 1 is exact there); RMS needs three. On-centre 40 Hz skirts −24.9 / −12.5 / −13.7 / −25.5 (order
+   ≈ 2, symmetric); 63 Hz (0.03 oct off-centre) and 100 Hz (0.02 oct) show the expected asymmetry. 2000.0 Hz again splits
+   band 66 / 67 by 5.7 dB — the 09-23 grid reading, reproduced.
+9. **`/config/osc/level` follows the fader law** (the 161-step `send` scale, scales_params.md §10), not `[-90..10]` linear:
+   raw 0.1875 = −40.0 dB (the desk prints `-40.0` in `/node config/osc`), raw 0.3 = −26 dB — a tone meant as −60 dB read −25.0
+   on the stream. `Descriptor.scale("send").to_raw(dB)` is the conversion; `measure_rta_det_rise.py` uses it.

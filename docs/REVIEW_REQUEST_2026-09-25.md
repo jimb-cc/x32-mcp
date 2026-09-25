@@ -120,10 +120,15 @@ floor and a +50 dB all-band transient** that decays over seconds. The 2026-09-23
 was taken with Jim switching the desk's screen control, and `device.yaml` maps raw 0 → `RMS`, raw 1 → `PEAK` (the DOC's
 enum order). If the desk's screen showed PEAK while the raw value was 0, the descriptor's enum is inverted and every
 "PEAK" the server has ever written (`det 1`) was RMS — which is exactly what your re-analysis of the 09-23 logs found
-("every capture taken after the server wrote det = PEAK shows RMS ballistics"). To be settled today with a tone under each
-raw value (attack speed, floor) and by reading the desk's screen label against the raw value. Until then the server's
-arm-time `det` write is suspect in *sign*, not in effect — and it throws a +50 dB transient into the first second of every
-session, which the at-arm logic must ignore.
+("every capture taken after the server wrote det = PEAK shows RMS ballistics"). **Settled at 11:35** (`meters.md` 2026-09-25 items 5–9): the console's own `/node -prefs/rta` line prints **PEAK for raw
+0 and RMS for raw 1**, toggled both ways. The descriptor's enum was inverted, so every arm-time "PEAK" the server wrote set
+RMS: a 3-frame attack at 2 kHz instead of one, a −97 floor instead of −128, and a ~25 dB broadband burst on the write that
+decays over ten frames. **PR #20** (`review/rta-det-enum`) flips the enum, makes `set_rta_source` take PEAK's raw value
+from the descriptor, pins it with a test, and corrects the docs; the fixed measurement scripts on PR #16 got the same
+correction. Under real PEAK the settle rule with k = 1 is exact above ~200 Hz; at 40 Hz the analysis window sets 6–7
+frames whatever the detector. A steady electronic tone never repeats a peak-band value more than 2 frames running, so
+the frozen-line veto cannot fire on it. Please re-read the at-arm timing in `DETECTOR.md` against a clean one-frame PEAK
+attack, and keep ≥ 0.6 s between the pref writes and the arm reference in case the desk was on RMS.
 
 ## 3. C2 verified at the cfs level; note the GEQ merge
 
@@ -142,7 +147,7 @@ verdict; against `7444c16`'s `tier_b_eligible` it never is. Two things the test 
 
 ## 4. Pending desk work today (needs silence: Jim is in a meeting)
 
-`scripts/desk_checks.py` (to be committed with its results) then `scripts/measure_rta_bands.py --det PEAK --decay 0.25`
-(your fixed version, PR #16): det read-back and the det-switch transient; the frozen-line check on a steady tone at 4
-decimals; 40 / 63 / 100 Hz rise under PEAK and RMS; the semitone sweep under verified prefs. The GEQ both-legs test and the
-bus tap-order check need Jim's hands and a channel-fed tone; they are queued for when he is free.
+Done at −26 dB while Jim was on a call (`scripts/measure_rta_det_rise.py`, log `rta_det_rise_frozen_2026-09-25.jsonl.gz`):
+det read-back and the switch transient, the frozen-line check at 4 decimals, 40 / 63 / 100 / 2000 Hz rise under both
+detectors (items 5–9). Still to run: the semitone sweep under real PEAK / 0.25 at −40 dB (PR #16's script with the corrected
+`DET_INDEX`), the GEQ both-legs test and the bus tap-order check (Jim's hands, a channel-fed tone).
