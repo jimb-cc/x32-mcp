@@ -326,3 +326,9 @@ channel-fed tone, 40 Hz rise time, whether the oscillator into Main sits before 
 * **Semitone sweep (95 tones, `scripts/measure_rta_bands.py`)**: the RTA bins are `20·2^(i/10)` Hz — a third of a band above
   the DOC's printed table that `device.yaml`/`meters.py` reproduce (fix on `review/rta-band-grid`, PR); response flat ±0.2 dB
   42 Hz–9.5 kHz; skirts symmetric and steep (≈ order 5) above 200 Hz, widening to ≈ 2 at 50 Hz; PEAK attack 3 frames to −3 dB at HF.
+
+* **2026-09-25 (reviewer, studio)**: (1) the `/meters/15` analyser is dormant after power-up until the console shows its
+  RTA page (`/-stat/screen/screen 1` + `METER/page 4` wakes it remotely; it then stays alive) — arm preflight needed;
+  (2) 180 s of real programme (Spotify → Main, PEAK/0.25) replayed through the shipped detector: 20 STRONG emissions, all
+  music — proposed gate G5 on desk-logged programme (`scripts/replay_rta_log.py`, `docs/research/data/programme_*.jsonl.gz`);
+  (3) the frontier's bundle is PRs #16/#17/#18 (C2 now has a cfs-level test); merge order in `REVIEW_REQUEST_2026-09-25.md`.
