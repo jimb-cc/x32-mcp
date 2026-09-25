@@ -674,3 +674,18 @@ Method as on 2026-09-22 plus `scripts/log_rta_frames.py` (every `/meters/15` fra
 9. **`/config/osc/level` follows the fader law** (the 161-step `send` scale, scales_params.md §10), not `[-90..10]` linear:
    raw 0.1875 = −40.0 dB (the desk prints `-40.0` in `/node config/osc`), raw 0.3 = −26 dB — a tone meant as −60 dB read −25.0
    on the stream. `Descriptor.scale("send").to_raw(dB)` is the conversion; `measure_rta_det_rise.py` uses it.
+10. **Semitone sweep under real PEAK / 0.25** (`measure_rta_bands.py` from PR #16 with the corrected `DET_INDEX`, prefs read back
+    "det PEAK, decay 0.25 s"; 95 tones 42.3 Hz – 9.46 kHz at −40 dB; `rta_bands_semitone_sweep_2026-09-25_peak025.jsonl.gz` +
+    `_frames_`; `scripts/compare_rta_sweeps.py` against the 09-23 RMS run):
+    * **Grid**: offset from `20·2^(i/10)` mean −0.0004 oct, sd 0.029 over the tones ≥ 300 Hz — identical to 09-23. Confirmed
+      under both detectors.
+    * **Flat**: −38.1 ± 0.6 dB (09-23 RMS: −38.0 ± 0.6).
+    * **Skirts are the filter bank, not the detector** (median relative dB at −2/−1/+1/+2 bands, on-centre tones): 40–80 Hz
+      −25.5/−13.6/−16.3/−32.4; 80–160 −40.1/−21.1/−26.0/−48.3; 160–320 −55.6/−29.1/−32.4/−57.0; 320–1000 −56.7/−31.0/−31.0/−56.0;
+      1–3 k −60.8/−35.8/−28.8/−53.8; 3–10 k −61.9/−34.0/−30.7/−54.8 — every figure within 2 dB of the RMS sweep. The 09-23 skirt
+      conclusions (order ≈ 5 above 200 Hz, ≈ 3 at 100 Hz, ≈ 2 at 50 Hz, asymmetric at LF) stand.
+    * **Attack under PEAK / 0.25** (median frames from the first frame above −120 dB to −3 / −1 dB of the plateau): ≥ 320 Hz
+      **0 / 0.5–1**, 160–320 Hz 1 / 1, 80–160 Hz 1 / 2, 40–80 Hz 2 / 3. The RMS run at decay 1.0 needed 4–6 / 7.5–9.5. Above
+      ~150 Hz the settle rule with k = 1 is exact; the −40 dB tones at 40–80 Hz settled in 2–3 frames here against 6–7 for the
+      −26 dB tones of item 8 (same detector, same decay) — the LF window-fill count depends on where the rise is caught; the
+      two frame logs carry both for a fit.

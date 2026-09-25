@@ -152,5 +152,6 @@ verdict; against `7444c16`'s `tier_b_eligible` it never is. Two things the test 
 
 Done at −26 dB while Jim was on a call (`scripts/measure_rta_det_rise.py`, log `rta_det_rise_frozen_2026-09-25.jsonl.gz`):
 det read-back and the switch transient, the frozen-line check at 4 decimals, 40 / 63 / 100 / 2000 Hz rise under both
-detectors (items 5–9). Still to run: the semitone sweep under real PEAK / 0.25 at −40 dB (PR #16's script with the corrected
-`DET_INDEX`), the GEQ both-legs test and the bus tap-order check (Jim's hands, a channel-fed tone).
+detectors (items 5–9). The semitone sweep under real PEAK / 0.25 at −40 dB ran at 12:15 (item 10): grid and skirts identical to the RMS run
+(they are the filter bank); attack ≥ 320 Hz 0 / 1 frames to −3 / −1 dB, 40–80 Hz 2 / 3. Still to run: the GEQ both-legs test
+and the bus tap-order check (Jim's hands, a channel-fed tone).
