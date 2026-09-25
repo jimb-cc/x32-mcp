@@ -10,7 +10,7 @@ tap carried at that moment, as ``feedback_watch`` would be).
 Prints every emission (what tier A would have cut), the MODERATE/STRONG tracks the policy layer would have seen (tier B's
 input), and the level statistics of the log. Pure product code plus stdlib.
 
-    .venv/Scripts/python scripts/replay_rta_log.py docs/research/data/programme_spotify_main_2026-09-25_peak025.jsonl.gz
+    .venv/Scripts/python scripts/replay_rta_log.py docs/research/data/programme_spotify_main_2026-09-25_rms025.jsonl.gz
     .venv/Scripts/python scripts/replay_rta_log.py LOG --mode ringout --top 30
 """
 

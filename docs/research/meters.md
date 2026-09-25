@@ -640,12 +640,12 @@ Method as on 2026-09-22 plus `scripts/log_rta_frames.py` (every `/meters/15` fra
 ### Verification log 2026-09-25 (studio, X32RACK-Jim FW 4.13 at 192.168.1.141) — see `docs/REVIEW_REQUEST_2026-09-25.md`
 
 1. **`/meters/15` is dormant until the console has displayed its RTA page once.** After a cold start on the HOME screen, with
-   Spotify at −10 dBFS on Ch 2/3 → Main and RTA prefs source 72 / POST / PEAK / decay 0.25 all read back, every frame read
+   Spotify at −10 dBFS on Ch 2/3 → Main and RTA prefs source 72 / POST / det raw 1 (RMS, item 5) / decay 0.25 all read back, every frame read
    −97.0 in all 100 bands for 180 s (`rta_dormant_static_floor_2026-09-25.jsonl.gz`). Writing `/-stat/screen/screen 1` +
    `/-stat/screen/METER/page 4` brought the stream alive within 0.8 s; it stayed alive after the screen was restored to
    HOME. The channel EQ page (`CHAN/page 3`) did not wake it. Product action: a wake step in the arm preflight.
-2. **Real programme false positives**: 180 s of Spotify on Main (`programme_spotify_main_2026-09-25_peak025.jsonl.gz`,
-   PEAK / 0.25 read back, p95 −21.9 dBFS) replayed through the shipped detector (`scripts/replay_rta_log.py`) gives **20
+2. **Real programme false positives**: 180 s of Spotify on Main (`programme_spotify_main_2026-09-25_rms025.jsonl.gz`,
+   `det` raw 1 = **RMS** (item 5) / decay 0.25 read back, p95 −21.9 dBFS) replayed through the shipped detector (`scripts/replay_rta_log.py`) gives **20
    STRONG emissions** (watch and ring-out alike), all sustained musical notes passing BASE and earning RISE 6–9 dB (twice
    FAST-RISE). The synthetic corpus's FP 0 does not transfer to real programme. Proposed gate G5: 0 emissions on every
    desk-logged programme file.

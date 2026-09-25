@@ -45,7 +45,7 @@ on its RTA page — a display-load effect?). The corpus and the detector's `fram
 
 ## 2. Real programme through the real analyser: 20 STRONG emissions in 180 s (detector, highest consequence)
 
-`docs/research/data/programme_spotify_main_2026-09-25_peak025.jsonl.gz` (3598 frames, det PEAK read back, decay 0.25 read
+`docs/research/data/programme_spotify_main_2026-09-25_rms025.jsonl.gz` (3598 frames, `det` raw 1 read back — which item 5 later showed is **RMS**, not PEAK — decay 0.25 read
 back, RTA Main post-EQ, Spotify on Ch 2/3 at about −10 dBFS, peak-band p50 / p95 −26.9 / −21.9 dBFS), replayed with
 `scripts/replay_rta_log.py` — the product `FeedbackDetector` built as `CfsManager` builds it (`DetectorConfig.from_descriptor`,
 watch mode, fed from the first frame):
@@ -94,7 +94,10 @@ No family → no veto → BASE, and a note that swells 6 dB is RISE.
    `scripts/replay_rta_log.py --json` per emission, and say what evidence a real ring has that these notes do not (the
    reviewer's guess: none at 6 dB of RISE — a note and a slow ring are the same line at this resolution; only FAST-RISE,
    LOUD, AT-ARM, PROBE and the post-cut verdict separate them, so RISE alone may have to become tier-B evidence).
-3. More logs are coming today: the same desk with the band's own programme tonight (The Molecules, 19:30, in-ears on the mix
+3. The log is RMS ballistics (raw 1), i.e. what every session since M7 actually armed on. A PEAK (raw 0) log of the same
+   kind is needed before G5 is judged on the corrected product; the reviewer will take one at the next chance (tonight's band,
+   or Spotify again) with `scripts/log_rta_session.py`, which records the raw `det` value in the log.
+4. More logs are coming today: the same desk with the band's own programme tonight (The Molecules, 19:30, in-ears on the mix
    buses) if Jim agrees to a passive log, and a quieter genre if time permits. The reviewer will log at 4 decimals
    (`int16/256` resolution) so the frozen-frame logic can be replayed too; today's log is rounded to 0.01 dB.
 
