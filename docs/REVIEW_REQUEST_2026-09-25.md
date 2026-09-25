@@ -147,7 +147,10 @@ into candidates and one got cut (tier A needs an absolute level floor); `NotchCo
 and an open mic cut the music 15 times in three minutes, 12 of them by tier B with `confirmed` verdicts** — a note that
 ends inside the response window is indistinguishable from a killed ring, so the verdict must be time-locked to the write
 under programme, or tier B must stand down while `PROGRAMME_PRESENT`. G5 needs a policy-level replay (tier B on), not
-only the detector's. The run-5 passive log is the first corpus file with the actuator in the loop.
+only the detector's. The run-5 passive log is the first corpus file with the actuator in the loop. Run 6 (a voice, no
+music) drew five cuts in 100 s: the vowel's fundamental by tier B and three partials at −60…−72 dBFS by RISE — so tier A
+also needs an absolute level floor. Two arm-time defects: `set_rta_source` must toggle the source when `/-stat/rtasource`
+disagrees (re-writing the same value does not move it), and a failed arm must restore the prefs it forced.
 
 ## 3. C2 verified at the cfs level; note the GEQ merge
 

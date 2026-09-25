@@ -26,13 +26,18 @@ from x32mcp.config import Settings
 from x32mcp.server import App, _bus_target
 
 
-def _settings() -> Settings:
+def _settings(dash_port: int | None) -> Settings:
+    """The server's settings with autoconnect off and the dashboard on ``dash_port`` (None = off): the MCP server's own
+    dashboard (default 8032) keeps its port, so a script run is watched on a second one (``--dash 8033``)."""
     s = Settings.from_env()
+    kw = {"x32_host": None, "dash_enabled": dash_port is not None}
+    if dash_port is not None:
+        kw["dash_port"] = int(dash_port)
     try:
-        return dataclasses.replace(s, dash_enabled=False, x32_host=None)
+        return dataclasses.replace(s, **kw)
     except TypeError:
-        s.dash_enabled = False
-        s.x32_host = None
+        for k, v in kw.items():
+            setattr(s, k, v)
         return s
 
 
@@ -46,6 +51,7 @@ async def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("host")
     ap.add_argument("--port", type=int, default=10023)
+    ap.add_argument("--dash", type=int, default=None, help="serve this run's dashboard on this port (e.g. 8033; the MCP server keeps 8032)")
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("preflight"); p.add_argument("bus")
     r = sub.add_parser("ringout"); r.add_argument("bus"); r.add_argument("--target", type=float, default=0.0)
@@ -55,8 +61,10 @@ async def main() -> int:
     w.add_argument("--budget", type=int, default=6); w.add_argument("--yes", action="store_true")
     a = ap.parse_args()
 
-    app = App(_settings())
+    app = App(_settings(a.dash))
     await app.start()
+    if a.dash is not None:
+        print(f"dashboard for this run: http://127.0.0.1:{a.dash}/", file=sys.stderr)
     info = await app.connect(a.host, a.port)
     print(f"connected to {info.name} FW {info.firmware} (code: {App.__module__} from this checkout)", file=sys.stderr)
     t = _bus_target(a.bus)
