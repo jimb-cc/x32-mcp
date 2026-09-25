@@ -1,9 +1,10 @@
 # `export_scene_file` — a desk-loadable `.scn` from the server's own dump (spec, 2026-09-25)
 
 *Written by the reviewer after comparing a console-exported scene file with the server's node rendering of the live desk.
-Reference file: `docs/research/data/PRE-MCP-BACKUP_2026-09-25.scn` (2117 lines). Note: that file is NOT the live desk of
-2026-09-25 — it came from an X32 Edit session that had not been synced from the console (channel names "Windows",
-"Ableton", "GLX Mix L", a different routing table) — but it is a genuine console scene file and the format reference.*
+Reference file: `docs/research/data/PRE-MCP-BACKUP_2026-09-25.scn` (2117 lines): Jim's fully featured STUDIO scene
+(channel names "Windows", "Ableton", "GLX Mix L", the studio routing table), deliberately chosen as the format reference
+because every family and feature is populated; it is not the sparse live-session state the desk carried on 2026-09-25, which
+is why 228 shared lines differ in value. A genuine console export, the format reference for this tool.*
 
 ## 1. The format
 
