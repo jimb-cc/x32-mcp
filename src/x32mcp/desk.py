@@ -291,7 +291,7 @@ _OUTPUT_SRC_ALIASES: dict[str, str] = {
     "TB": "Talkback", "TALK": "Talkback", "TALK BACK": "Talkback",
 }
 _OUTPUT_SRC_RE = re.compile(
-    r"^(?:DIRECT\s*OUT\s*|DIRECT\s*)?(MIXBUS|MIX|BUS|MATRIX|MTX|CHANNEL|CH|IN|AUXIN|AUX|FX|MONITOR|MON|MAIN)"
+    r"^(?:DIRECT\s*OUT\s*|DIRECT\s*)?(MIXBUS|MIX|BUS|MATRIX|MTX|CHANNEL|CH|AUXIN|AUX|FX|MONITOR|MON|MAIN)"
     r"\s*[-./]?\s*(\d{1,2})?\s*([LRM])?$"
 )
 _OUTPUT_POS_ALIASES: dict[str, str] = {
@@ -312,7 +312,7 @@ def normalise_output_source(value: Any, tokens: Sequence[str]) -> str:
     enum): the token itself in any case (``'mixbus 03'``, ``'main l'``), the desk's int index 0..76,
     or a short form — ``'bus 3'``/``'mix 3'`` → ``MixBus 03``, ``'mtx 2'`` → ``Matrix 2``, ``'L'``/``'R'``/
     ``'main L'`` → ``Main L``/``Main R``, ``'M/C'``/``'mono'`` → ``M/C``, ``'ch 5'``/``'direct out ch 5'`` →
-    ``DirectOut Ch 05``, ``'aux 2'`` → ``DirectOut Aux 2``, ``'fx 1L'`` → ``DirectOut FX 1L``, ``'mon L'`` →
+    ``DirectOut Ch 05`` (``'in 5'`` is deliberately NOT accepted: that is the input-patch vocabulary), ``'aux 2'`` → ``DirectOut Aux 2``, ``'fx 1L'`` → ``DirectOut FX 1L``, ``'mon L'`` →
     ``Monitor L``, ``'tb'`` → ``Talkback``, ``'off'``/``'none'`` → ``OFF``. ``BAD_ARGUMENT`` otherwise."""
     if isinstance(value, bool) or value is None:
         raise DeskError("BAD_ARGUMENT", f"source must be a token such as 'MixBus 03', got {value!r}")
@@ -337,7 +337,7 @@ def normalise_output_source(value: Any, tokens: Sequence[str]) -> str:
                 candidate = f"MixBus {n:02d}"
             elif fam in ("MATRIX", "MTX") and n is not None and not side:
                 candidate = f"Matrix {n}"
-            elif fam in ("CHANNEL", "CH", "IN") and n is not None and not side:
+            elif fam in ("CHANNEL", "CH") and n is not None and not side:   # not "IN n": that is the input vocabulary, not a direct out
                 candidate = f"DirectOut Ch {n:02d}"
             elif fam in ("AUXIN", "AUX") and n is not None and not side:
                 candidate = f"DirectOut Aux {n}"

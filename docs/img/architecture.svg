@@ -34,7 +34,7 @@
   <g transform="translate(42,162)">
     <rect class="layer" width="584" height="56" rx="8"/>
     <text class="t h" x="16" y="25">tool layer</text>
-    <text class="t d" x="16" y="43">51 MCP tools · engineering units in, JSON envelopes out · thin, delegates everything</text>
+    <text class="t d" x="16" y="43">63 MCP tools · engineering units in, JSON envelopes out · thin, delegates everything</text>
     <text class="t m" x="470" y="25">server.py</text>
   </g>
   <line class="wire" x1="334" y1="218" x2="334" y2="230" marker-end="url(#a2)"/>
