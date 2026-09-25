@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import time
 from types import SimpleNamespace
 from typing import Any
@@ -652,8 +653,9 @@ async def test_held_line_that_really_ends_is_ignore_listed(make_rig):
 
 async def test_h_bystander_verdict_from_a_neighbours_cut_does_not_bar_the_line_from_its_own_tier_b_engagement(make_rig):
     """K8 seed 5 at the cfs level (review response 2026-09-24, C2). A loud-ish MODERATE line A at 1 kHz is about to be cut -3
-    by tier B; a second family-less line B appears 0.3 octave up (1250 Hz: three RTA bands clear of A so both stay narrow,
-    outside the fake desk's +-1/6-octave bell) shortly before the write lands. ``note_cut()`` judges every live line within
+    by tier B; a second family-less line B appears 0.3 octave up (three RTA bands clear of A so both stay narrow, outside the
+    fake desk's +-1/6-octave bell, and inside note_cut()'s 1/3-octave reach of the 1 kHz notch: 1250 Hz on the DOC grid, 1194 Hz
+    on the measured one -- the frequencies are taken from the product's band grid, not written down) shortly before the write lands. ``note_cut()`` judges every live line within
     1/3 octave of the bell, so B -- never emitted, never cut -- is filed with a bystander verdict ('held': the bell's expected
     reach at 0.3 octave is under a decibel and B did not move; 'insufficient' / 'ambiguous' under noise). On main that verdict
     barred B from tier B for ever ("cut verdict held") and the hopped howl of K8 was orphaned. Now B gets its own tier-B
@@ -664,7 +666,13 @@ async def test_h_bystander_verdict_from_a_neighbours_cut_does_not_bar_the_line_f
     rig = await make_rig(policy={"tier_b": {"held_deepen_s": 30.0}})
     await _armed(rig, notch_budget=4)
     await asyncio.sleep(0.6)
-    hz_b = 1250.0
+    # grid-relative (the RTA bins moved a third of a band on 2026-09-23): A is the bin that carries 1 kHz, B the bin three above
+    # it. A fixed 1250 Hz lands on the 1280 Hz bin of the measured grid, 0.36 octave from the 1 kHz notch and so OUTSIDE
+    # note_cut()'s 1/3-octave reach: no bystander verdict would ever be filed and this test would wait for it in vain.
+    band_hz = list(rig.rta.band_hz)
+    i_a = min(range(len(band_hz)), key=lambda i: abs(math.log2(band_hz[i] / 1000.0)))
+    hz_a, hz_b = band_hz[i_a], band_hz[i_a + 3]
+    assert abs(math.log2(hz_b / 1000.0)) < 1.0 / 3.0, (hz_b, "B must sit inside the bell watch of the 1 kHz notch")
     rig.rta.inject_note(1000.0, -18.0, rise_frames=1)
     await asyncio.sleep(0.45)                                  # A is past its onset (not 'swelling'); B is born 9 frames later
     rig.rta.inject_note(hz_b, -18.0, rise_frames=1)
@@ -707,6 +715,6 @@ async def test_h_bystander_verdict_from_a_neighbours_cut_does_not_bar_the_line_f
     await rig.settle()
     assert rig.fake.value(COLOR) == "GN"
     starts = [e for e in rep["policy"]["tier_b"] if e["action"] == "tier_b"]
-    assert [round(e["freq_hz"]) for e in starts] == [1015, 1250], starts
+    assert [round(e["freq_hz"]) for e in starts] == [round(hz_a), round(hz_b)], starts
     print("bystander verdict on B:", vb, "| engagements:", [(e["freq_hz"], e["band"], e["depth_db"]) for e in starts],
           "| notches:", [(n["band"], n["tier"], n.get("policy"), n["depth_db"]) for n in rig.notches()])
