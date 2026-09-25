@@ -362,6 +362,9 @@ def test_node_field_order_matches_the_desk(dev):
     assert all(outs[f"aux/{{idx:02d}}/{leaf}"] == outs[f"main/{{n:02d}}/{leaf}"] for leaf in ("src", "pos", "invert"))
     assert "/outputs/*/src" in dev["guarded"] and "/outputs/*/pos" in dev["guarded"]
     assert len(by_key[("config", "/config/solo")]["fields"]) == 17
+    # the solo section is read-only except the three PFL/AFL mode switches (set_solo_mode, Tier 1)
+    solo_tiers = {f: dev["params"]["config"][f]["tier"] for f in by_key[("config", "/config/solo")]["fields"]}
+    assert {f for f, t in solo_tiers.items() if t == 1} == {"solo/chmode", "solo/busmode", "solo/dcamode"} and set(solo_tiers.values()) == {0, 1}
     assert by_key[("prefs", "/-prefs/rta")]["fields"] == ["rta/visibility", "rta/gain", "rta/autogain", "rta/source", "rta/pos", "rta/mode", "rta/options", "rta/det", "rta/decay", "rta/peakhold"]
     # -show/prepos is swept as its leaf (the only form confirmed anywhere, transport.md §6.4 item 12)
     assert by_key[("show", "/-show/prepos/current")]["fields"] == ["prepos/current"] and ("show", "/-show/prepos") not in by_key
