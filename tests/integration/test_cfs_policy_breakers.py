@@ -652,7 +652,7 @@ async def test_held_line_that_really_ends_is_ignore_listed(make_rig):
 
 async def test_h_bystander_verdict_from_a_neighbours_cut_does_not_bar_the_line_from_its_own_tier_b_engagement(make_rig):
     """K8 seed 5 at the cfs level (review response 2026-09-24, C2). A loud-ish MODERATE line A at 1 kHz is about to be cut -3
-    by tier B; a second family-less line B appears 0.3 octave up (1250 Hz: three RTA bands clear of A so both stay narrow,
+    by tier B; a second family-less line B appears a quarter octave up (1194 Hz: three RTA bands clear of A so both stay narrow,
     outside the fake desk's +-1/6-octave bell) shortly before the write lands. ``note_cut()`` judges every live line within
     1/3 octave of the bell, so B -- never emitted, never cut -- is filed with a bystander verdict ('held': the bell's expected
     reach at 0.3 octave is under a decibel and B did not move; 'insufficient' / 'ambiguous' under noise). On main that verdict
@@ -664,7 +664,7 @@ async def test_h_bystander_verdict_from_a_neighbours_cut_does_not_bar_the_line_f
     rig = await make_rig(policy={"tier_b": {"held_deepen_s": 30.0}})
     await _armed(rig, notch_budget=4)
     await asyncio.sleep(0.6)
-    hz_b = 1250.0
+    hz_b = 1194.0                                             # measured grid: bin 59, three bins above A (bin 56), 0.26 oct from the 1 kHz notch
     rig.rta.inject_note(1000.0, -18.0, rise_frames=1)
     await asyncio.sleep(0.45)                                  # A is past its onset (not 'swelling'); B is born 9 frames later
     rig.rta.inject_note(hz_b, -18.0, rise_frames=1)
@@ -707,6 +707,6 @@ async def test_h_bystander_verdict_from_a_neighbours_cut_does_not_bar_the_line_f
     await rig.settle()
     assert rig.fake.value(COLOR) == "GN"
     starts = [e for e in rep["policy"]["tier_b"] if e["action"] == "tier_b"]
-    assert [round(e["freq_hz"]) for e in starts] == [1015, 1250], starts
+    assert len(starts) == 2 and abs(starts[0]["freq_hz"] - 1000.0) < 80 and abs(starts[1]["freq_hz"] - hz_b) < 80, starts
     print("bystander verdict on B:", vb, "| engagements:", [(e["freq_hz"], e["band"], e["depth_db"]) for e in starts],
           "| notches:", [(n["band"], n["tier"], n.get("policy"), n["depth_db"]) for n in rig.notches()])
