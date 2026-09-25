@@ -650,3 +650,6 @@ Method as on 2026-09-22 plus `scripts/log_rta_frames.py` (every `/meters/15` fra
    FAST-RISE). The synthetic corpus's FP 0 does not transfer to real programme. Proposed gate G5: 0 emissions on every
    desk-logged programme file.
 3. Frame period on both 180 s logs: **50.0 ms** (3598 frames / 179.9 s) — not the 52.0 ms of the 2026-09-22/23 logs.
+4. **`det` write and floors** (silence, prefs/screen writes only): writing raw 0 drops the floor to −128 within a second, page
+   or no page; writing raw 1 restores the −97 floor after a +50 dB all-band transient (max −44 dB from a −97 floor) that
+   decays over seconds. The enum labelling (raw 0 = RMS in `device.yaml`) is now in question — see the review request §2b.

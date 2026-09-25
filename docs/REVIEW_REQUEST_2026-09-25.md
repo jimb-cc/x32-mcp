@@ -98,6 +98,33 @@ No family → no veto → BASE, and a note that swells 6 dB is RISE.
    buses) if Jim agrees to a passive log, and a quieter genre if time permits. The reviewer will log at 4 decimals
    (`int16/256` resolution) so the frozen-frame logic can be replayed too; today's log is rounded to 0.01 dB.
 
+## 2b. The `det` write takes at once — and raw 0 / raw 1 may be labelled the wrong way round
+
+Silence on Main, analyser awake, prefs and screen writes only (`det_probe.py`, 1.2 s of frames per row, floor = the lowest
+band level, max = the highest):
+
+| step | `det` reads | floor (dB) | max (dB) |
+|---|---|---|---|
+| start | 1 | −97.0 | −92.4 |
+| write `det 0` | 0 | **−128.0 … −117.6** | −91.2 |
+| write `det 1` | 1 | −77.1 … −56.4 (a +50 dB transient in every band) | −44.3 |
+| RTA page shown, `det 1` | 1 | −97.0 … −79.1 | −67.2 |
+| screen restored | 1 | −97.0 | −89.1 |
+| write `det 0` (page not shown) | 0 | −128.0 … −116.7 | −89.4 |
+| RTA page shown, `det 0` | 0 | −123.5 … −114.3 | −89.9 |
+| write `det 1` + RTA page | 1 | −78.2 … −57.3 (transient) | −45.2 |
+| screen restored (left at `det 1`) | 1 | −97.0 … −80.4 | −68.3 |
+
+So the remote `det` write changes the analyser immediately, page or no page: **raw 0 gives the −128 floor, raw 1 the −97
+floor and a +50 dB all-band transient** that decays over seconds. The 2026-09-23 reading "−97 under RMS, −128 under PEAK"
+was taken with Jim switching the desk's screen control, and `device.yaml` maps raw 0 → `RMS`, raw 1 → `PEAK` (the DOC's
+enum order). If the desk's screen showed PEAK while the raw value was 0, the descriptor's enum is inverted and every
+"PEAK" the server has ever written (`det 1`) was RMS — which is exactly what your re-analysis of the 09-23 logs found
+("every capture taken after the server wrote det = PEAK shows RMS ballistics"). To be settled today with a tone under each
+raw value (attack speed, floor) and by reading the desk's screen label against the raw value. Until then the server's
+arm-time `det` write is suspect in *sign*, not in effect — and it throws a +50 dB transient into the first second of every
+session, which the at-arm logic must ignore.
+
 ## 3. C2 verified at the cfs level; note the GEQ merge
 
 PR #18 now carries `test_h_bystander_verdict_from_a_neighbours_cut_does_not_bar_the_line_from_its_own_tier_b_engagement`
