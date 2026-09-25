@@ -232,8 +232,7 @@ def main() -> int:
     if a.replay_only:
         run_replay()
         ok = all(ok for _, ok in verdicts)
-        print(f"
-VERDICT (G5 only): {'PASS' if ok else 'FAIL'}")
+        print(f"\nVERDICT (G5 only): {'PASS' if ok else 'FAIL'}")
         return 0 if ok else 1
 
     def run_gate(key: str, name: str, names: list[str], *, closed: bool = False, overrides=None) -> dict[str, Any]:
