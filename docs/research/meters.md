@@ -700,3 +700,8 @@ Method as on 2026-09-22 plus `scripts/log_rta_frames.py` (every `/meters/15` fra
       ~150 Hz the settle rule with k = 1 is exact; the −40 dB tones at 40–80 Hz settled in 2–3 frames here against 6–7 for the
       −26 dB tones of item 8 (same detector, same decay) — the LF window-fill count depends on where the rise is caught; the
       two frame logs carry both for a fit.
+11. **Real programme under PEAK / 0.25** (`programme_spotify_main_2026-09-25_peak025.jsonl.gz`: det raw 0 read back = PEAK,
+    decay 0.25, 3599 frames, Spotify on Main, p50 / p95 −30.1 / −23.2 dBFS): the shipped detector emits **4** STRONG in 180 s
+    (676 Hz rise 11 dB, 521 Hz rise 11 dB, 1194 Hz rise 7 dB, 677 Hz glided-in rise 11 dB — all notes) against 20 under RMS
+    on the earlier passage (item 2); 26 MODERATE/STRONG tracks reach tier B (the loudest 394 Hz at −21.4 dB). PEAK ballistics
+    remove most of the RISE false positives, not all; gate G5 now runs both files and still fails.
