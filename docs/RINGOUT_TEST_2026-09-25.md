@@ -102,5 +102,68 @@ graphic on top. This is the PEQ actuator's case (`docs/PEQ_ACTUATOR_DESIGN.md`),
    after which the report says "MODERATE lines are not cut". A single full-scale line is not programme; the heuristic
    should require broadband activity outside the ring's own neighbourhood.
 
-**Not yet run**: the identical climb on real PEAK (needs the MCP server restarted on today's code: a new session starts
-it) and the quiet-room watch with a voice (§4).
+### Run 4 — the same climb on today's code, real PEAK (13:49, `scripts/run_cfs.py`)
+
+`scripts/run_cfs.py` drives the same `App` the server builds, dashboard off, from the current checkout, so the merged
+fixes ran without restarting the MCP server: `detector_set_peak: True` (raw 0 written), `rta_wake` probed 12 live frames.
+Same placement as runs 2–3, Main PEQ flat, Main −25.1 → 0 dB target, budget 6.
+
+| master | ring (dBFS at the tap) | written | note |
+|---|---|---|---|
+| −11.1 | 91 Hz at **−92** | 100 Hz −3 | **a noise-floor line, not a ring**: under PEAK the floor is −128 and a −92 dBFS hum line is 12 dB prominent and "rising" |
+| −9.1 | 9183 Hz at −80 | 10 kHz −3 | the room's HF mode (8.85 kHz in runs 2–3, now 9.0–9.2) |
+| −8.1 | 5390 Hz at −82 | 5 kHz −3 | |
+| −7.1 / −5.1 | 9047 / 9030 Hz | 10 kHz −6 / −9 | fast-rise 17 dB at 70 dB/s |
+| −5.1 | 5485 Hz | 5 kHz −6 | |
+| −3.1 | 3629 Hz at −68 | **5 kHz −9** (0.46 oct away) | the adjacent-band merge again |
+| −3.1 | 9002 Hz | — | 10 kHz at −9: ABORT, back-off to −9.1 |
+
+Every verify passed (7–14 dB drops), every verdict `confirmed`; gain before the first real ring −9.1 dB as in run 2;
+the climb got two decibels further (−3.1) before the graphic ran out on the 9 kHz mode, which sits 0.15 oct under 10 kHz.
+
+**Third defect, PEAK-specific.** With the −128 floor the detector sees the room's residual lines (91 / 150 / 326 / 963 Hz at
+−90…−102 dBFS) as MODERATE candidates from the first second, flags `PROGRAMME_PRESENT` at t+6.7 s in a silent room, alerts
+on them throughout, and cut one of them (91 Hz at −92 dBFS, "rise 6 dB"). RMS never showed them because its floor is −97.
+Tier A needs an absolute level floor for emission (a line 90 dB below full scale cannot be a howl worth a cut), and the
+programme heuristic must not count lines under it. This changes the detector's calibration story: every M7-era threshold
+was tuned against the RMS floor.
+
+## 7. Run 5 — the gig condition: `feedback_watch` on the mains with music and the open mic (13:58, today's code)
+
+Spotify on Ch 2/3 at a normal listening level, Main at −21.1 (the loop rings from −9.1), the same mic open one metre
+from the PA, limiter on, `scripts/run_cfs.py watch main --seconds 180 --budget 6`; report
+`docs/research/ringout/20260925-135839-watch-main_run5_music_mic.json`, passive 4-decimal log alongside.
+
+Armed with programme playing (arm p95 −23.8 dBFS, loud-ish line −13.8, `PROGRAMME_PRESENT` at 0.4 s). **15 cuts from 7
+detections; the six-band budget was gone at t+105 s**; final graphic 80 Hz −9, 125 −9, 160 −9, 250 −9, 1 kHz −6,
+1.6 kHz −3. Every cut was music:
+
+| t (s) | line | dBFS | written | by |
+|---|---|---|---|---|
+| 0.0 | 73 Hz | −20 | 80 Hz −3 | tier B |
+| 4.5 | 903 Hz | −17 | 1 kHz −3 | tier B |
+| 8.4 | 226 Hz | −26 | 250 Hz −3 | tier B |
+| 20.4 | 123 Hz | −24 | 125 Hz −3 | tier B (later `false_cut`, ignore-listed) |
+| 21.0 | 1480 Hz | −20 | 1.6 kHz −3 | tier A, rise 7 dB |
+| 27.7 / 39.5 | 162 / 173 Hz | −24 / −26 | 125 Hz −6 / −9 | tier B / tier A rise 6 dB (adjacent-band merge) |
+| 29.7 / 99.6 | 226 / 225 Hz | −22 / −31 | 250 Hz −6 / −9 | tier B |
+| 39.5 / 61.9 / 68.9 | 172 / 168 / 165 Hz | −26 / −29 / −34 | 160 Hz −3 / −6 / −9 | tier B |
+| 96.2 / 105.2 | 71 / 74 Hz | −25 / −24 | 80 Hz −6 / −9 | tier B |
+| 119.8 | 904 Hz | −12 | 1 kHz −6 | tier A, rise 8 dB |
+
+**Reading.** Tier B did twelve of the fifteen: a sustained bass or low-mid note at −20 to −30 dBFS is a "loud-ish
+family-less line" for 0.6 s and gets its −3; the detector's post-cut verdict then said **`confirmed`** on eleven of them,
+because the note ended (or the phrase moved on) inside the response window, which is indistinguishable from a killed ring
+by level alone; only one (123 Hz) outlived its window and was filed `false_cut`. Each "confirmed" cut freed the policy to
+engage the next note, and the −6 / −9 steps came from the same lines re-struck a bar later. Tier A added three RISE cuts
+on swelling notes. The replay figure of this morning (4 STRONG per 3 min under PEAK) counted only tier A; on the desk the
+policy layer multiplies it by four. `alerts` 271.
+
+**What this settles.** (1) Watch mode with music is not usable with the current detector + policy; (2) the dominant
+false-cut path is tier B on sustained notes, not RISE; (3) a verdict "confirmed by vanishing" is unsafe under programme
+— a note that stops is not a ring that died; under `PROGRAMME_PRESENT` the verdict must require the drop to be
+time-locked to the write, or tier B must be off altogether; (4) G5 needs a policy-level replay (tier B on), not only the
+detector. The passive log of this run (`programme_spotify_mic_watch_2026-09-25.jsonl.gz`) is the first corpus file with the
+actuator in the loop.
+
+**Not yet run**: the quiet-room watch with a voice (§4).
