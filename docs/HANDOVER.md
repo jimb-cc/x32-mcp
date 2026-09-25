@@ -332,3 +332,9 @@ channel-fed tone, 40 Hz rise time, whether the oscillator into Main sits before 
 [`docs/REVIEW_RESPONSE_2026-09-24.md`](REVIEW_RESPONSE_2026-09-24.md) answers `REVIEW_REQUEST_2026-09-23.md`. Read its §0 before
 acting on §4d (ii): the "GEQ realises a third of its depth" reading is disputed (one leg of the stereo Main was cut), and the
 semitone sweep ran at decay 1.0 in the −97-floor state, not at PEAK / 0.25. Its §9 is the next desk session, 20 minutes.
+* **2026-09-25 (reviewer, studio)**: (1) the `/meters/15` analyser is dormant after power-up until the console shows its
+  RTA page (`/-stat/screen/screen 1` + `METER/page 4` wakes it remotely; it then stays alive) — arm preflight needed;
+  (2) 180 s of real programme (Spotify → Main, PEAK/0.25) replayed through the shipped detector: 20 STRONG emissions, all
+  music — proposed gate G5 on desk-logged programme (`scripts/replay_rta_log.py`, `docs/research/data/programme_*.jsonl.gz`);
+  (3) the frontier's bundle is PRs #16/#17/#18 (C2 now has a cfs-level test); merge order in `REVIEW_REQUEST_2026-09-25.md`;
+  (4) **the RTA `det` enum was inverted** (raw 0 = PEAK per the desk's own /node label): every arm-time "PEAK" write set RMS — PR #20.

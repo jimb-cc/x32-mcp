@@ -8,6 +8,7 @@ simulator rather than the physics; the gate turns each into a condition the cand
     python scripts/accept_discriminator.py                     # the shipped detector: must REJECT
     python scripts/accept_discriminator.py --factory pkg.mod:make_detector
     python scripts/accept_discriminator.py --quick             # ~2 min smoke version
+    python scripts/accept_discriminator.py --replay-only       # G5 alone (seconds)
 
 A factory is ``callable(band_hz: Sequence[float]) -> detector`` where the detector exposes
 ``feed(values_db: list[float], ts: float) -> iterable`` of objects with ``.ts .band .freq_hz
@@ -20,6 +21,10 @@ Gates (all must hold for ACCEPT):
       2 and 5, a slow display (decay 16 s / 240 dB release), peak-hold 2 s, RMS detector       (§7.1)
   G3  EARLY_CREDIT_S = 0: watch-mode latencies with no credit for pre-onset detections         (§7.7)
   G4  closed loop through the real NotchController, the 32 feedback scenarios                  (§7.8)
+  G5  real programme replay (added 2026-09-25, before any candidate answered it): every desk-logged
+      programme file docs/research/data/programme_*.jsonl.gz, replayed frame for frame through the
+      candidate in watch AND ring-out mode: 0 emissions. The files are real music through the real
+      analyser (meters.md 2026-09-25 item 2); the shipped detector gives 20 on the first one.
 Reported, not gated:
   R1  the irreducible pairs (X4/X7/X20/S2a): passing all four with one threshold is a corpus
       regularity, not a law — vary levels before believing it                                  (§7.10)
@@ -111,6 +116,57 @@ def _evaluate(factory, names, *, seeds, closed_loop, notch_cfg, label, overrides
     return evaluate(factory, names, **kw)
 
 
+REPLAY_GLOB = "docs/research/data/programme_*.jsonl.gz"
+
+
+def _load_log(path: Path) -> list[tuple[float, list[float]]]:
+    import gzip
+    opener = gzip.open if path.suffix == ".gz" else open
+    frames = []
+    with opener(path, "rt", encoding="utf-8") as fh:
+        for line in fh:
+            row = json.loads(line)
+            if "db" in row:
+                frames.append((float(row["ts"]), [float(v) for v in row["db"]]))
+    return frames
+
+
+def replay_gate(factory, files: list[Path]) -> dict[str, Any]:
+    """G5: emissions of the candidate on every desk-logged programme file, watch and ring-out mode. The band grid is
+    the product's (device.yaml). A factory whose detector has no ``cfg.mode`` is replayed in its default mode only."""
+    from x32mcp.descriptor import Descriptor
+    from x32mcp.meters import rta_band_hz
+    band_hz = list(rta_band_hz(Descriptor.load()))
+    rows = []
+    for path in files:
+        frames = _load_log(path)
+        if not frames or len(frames[0][1]) != len(band_hz):
+            rows.append({"file": path.name, "mode": "-", "frames": len(frames), "emissions": None, "error": "empty or wrong band count"})
+            continue
+        t0 = frames[0][0]
+        for mode in ("watch", "ringout"):
+            det = factory(band_hz)
+            cfg = getattr(det, "cfg", None)
+            if cfg is not None and dataclasses.is_dataclass(cfg) and hasattr(cfg, "mode"):
+                if getattr(cfg, "mode", None) != mode:
+                    try:
+                        det = type(det)(dataclasses.replace(cfg, mode=mode), band_hz)
+                    except Exception:  # noqa: BLE001 - a custom detector class: default mode only
+                        if mode == "ringout":
+                            continue
+            elif mode == "ringout":
+                continue
+            emitted = []
+            for ts, db in frames:
+                for e in det.feed(db, ts - t0):
+                    emitted.append({"t": round(float(e.ts), 2), "freq_hz": round(float(e.freq_hz)), "band": int(e.band)})
+            rows.append({"file": path.name, "mode": mode, "frames": len(frames), "seconds": round(frames[-1][0] - t0, 1),
+                         "emissions": len(emitted), "first": emitted[:5]})
+    total = sum(r["emissions"] or 0 for r in rows)
+    bad = [r for r in rows if r["emissions"] is None or r["emissions"] > 0]
+    return {"rows": rows, "files": len(files), "emissions": total, "failing": bad}
+
+
 def summarise(res) -> dict[str, Any]:
     rows = res.summary_rows()
     failing = [r for r in rows if r["verdict"] != "PASS"]
@@ -140,6 +196,8 @@ def main() -> int:
     ap.add_argument("--quick", action="store_true", help="2 hold-out seeds, 2 sweeps (~2 min)")
     ap.add_argument("--out", default=None, help="directory for gate.json / gate.md")
     ap.add_argument("--max-fails", type=int, default=12, help="failing scenarios to list per gate")
+    ap.add_argument("--replay", default=REPLAY_GLOB, help="glob of desk-logged programme files for G5 ('' to skip)")
+    ap.add_argument("--replay-only", action="store_true", help="run G5 alone")
     ap.add_argument("--actuator", default="geq", choices=("geq", "peq"),
                     help="closed-loop actuator: the GEQ insert (pre-registered) or the bus PEQ stand-in (docs/PEQ_ACTUATOR_DESIGN.md)")
     a = ap.parse_args()
@@ -160,6 +218,28 @@ def main() -> int:
 
     gates: dict[str, dict[str, Any]] = {}
     verdicts: list[tuple[str, bool]] = []
+
+    def run_replay() -> None:
+        root = Path(__file__).resolve().parent.parent
+        files = sorted(root.glob(a.replay)) if a.replay else []
+        if not files:
+            print(f"  [WARN] G5 real programme replay: no files match {a.replay!r}; gate not run")
+            return
+        t0 = time.perf_counter()
+        g5 = replay_gate(factory, files)
+        g5["wall_s"] = round(time.perf_counter() - t0, 1)
+        gates["G5"] = g5
+        ok = not g5["failing"]
+        verdicts.append(("G5 real programme replay", ok))
+        print(f"  [{'PASS' if ok else 'FAIL'}] G5 real programme replay: {g5['emissions']} emissions over {g5['files']} file(s) x 2 modes ({g5['wall_s']} s)")
+        for r in g5["rows"]:
+            print(f"         {r['file'][:44]:44} {r['mode']:8} {r.get('seconds', 0):6.0f} s  emissions {r['emissions']}  {r.get('first', r.get('error', ''))}")
+
+    if a.replay_only:
+        run_replay()
+        ok = all(ok for _, ok in verdicts)
+        print(f"\nVERDICT (G5 only): {'PASS' if ok else 'FAIL'}")
+        return 0 if ok else 1
 
     def run_gate(key: str, name: str, names: list[str], *, closed: bool = False, overrides=None) -> dict[str, Any]:
         t0 = time.perf_counter()
@@ -194,6 +274,9 @@ def main() -> int:
 
     # G4 — closed loop through the real NotchController
     run_gate("G4", "G4 closed loop (real NotchController)", feedback_names, closed=True)
+
+    # G5 — real programme replay
+    run_replay()
 
     # R1 — the irreducible pairs
     g1rows = {r["scenario"]: r for r in gates["G1"]["rows"]}
