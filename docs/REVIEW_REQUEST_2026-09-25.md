@@ -137,6 +137,18 @@ frames whatever the detector. A steady electronic tone never repeats a peak-band
 the frozen-line veto cannot fire on it. Please re-read the at-arm timing in `DETECTOR.md` against a clean one-frame PEAK
 attack, and keep ≥ 0.6 s between the pref writes and the arm reference in case the desk was on RMS.
 
+## 2c. The afternoon: five controlled runs on the mains (read `RINGOUT_TEST_2026-09-25.md` §6–7 before anything else)
+
+Three ring-outs and a gig-condition watch on the real desk, two of them on the merged code via `scripts/run_cfs.py`. In one
+line each: the GEQ ladder catches and verifies every ring but cannot tame a mode between graphic bands (8.85–9.2 kHz), and
+a hand-set PEQ notch takes the same climb to 0 dB; under real PEAK the −128 floor turns the room's residual −90 dBFS lines
+into candidates and one got cut (tier A needs an absolute level floor); `NotchController.propose` deepens a notch up to
+0.46 oct away through the adjacent-band merge; a limiter-held ring trips `PROGRAMME_PRESENT`; and **the watch with music
+and an open mic cut the music 15 times in three minutes, 12 of them by tier B with `confirmed` verdicts** — a note that
+ends inside the response window is indistinguishable from a killed ring, so the verdict must be time-locked to the write
+under programme, or tier B must stand down while `PROGRAMME_PRESENT`. G5 needs a policy-level replay (tier B on), not
+only the detector's. The run-5 passive log is the first corpus file with the actuator in the loop.
+
 ## 3. C2 verified at the cfs level; note the GEQ merge
 
 PR #18 now carries `test_h_bystander_verdict_from_a_neighbours_cut_does_not_bar_the_line_from_its_own_tier_b_engagement`
