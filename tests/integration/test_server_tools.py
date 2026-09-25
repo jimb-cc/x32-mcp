@@ -24,6 +24,7 @@ from x32mcp import server as srv
 from x32mcp.config import Settings
 from x32mcp.descriptor import Descriptor
 from x32mcp.meters import SyntheticRta, rta_band_hz
+from x32mcp.scales import NEG_INF_DB
 from x32mcp.patches import load_patch_plan
 from x32mcp.server import App
 
@@ -418,6 +419,143 @@ async def test_label_channel(app, fakedesk):
     assert (await srv.get_strip("kick in"))["target"] == "ch.7"
 
 
+async def test_label_bus_shares_label_channel_rules(app, fakedesk):
+    res = await srv.label_bus(3, name="Tony IEM", color="green", icon=5)
+    assert res["ok"] and res["applied"] == {"name": "Tony IEM", "color": "GN", "icon": 5} and res["target"] == "bus.3"
+    assert res["summary"] == "Bus 3 named 'Tony IEM', colour GN, icon 5"
+    assert app.policy.snapshot_before_write is False and app.desk.pre_write_snapshot is not None  # first write took the auto snapshot
+    await settle(app)
+    assert fakedesk.get("/bus/03/config/name") == "Tony IEM" and fakedesk.value("/bus/03/config/color") == "GN" and fakedesk.get("/bus/03/config/icon") == 5
+    long = await srv.label_bus(4, name="Guitarist wedge left")
+    assert long["ok"] and long["truncated"] is True and long["applied"]["name"] == "Guitarist we" and "truncated to 12 characters" in long["summary"]
+    inv = await srv.label_bus(4, color="blue inverted")
+    assert inv["ok"] and inv["applied"] == {"color": "BLi"} and inv["summary"] == "Bus 4 colour BLi"
+    assert_err(await srv.label_bus(4, color="pink"), "BAD_ARGUMENT")
+    assert_err(await srv.label_bus(4), "BAD_ARGUMENT")
+    assert_err(await srv.label_bus(17, name="x"), "BAD_ARGUMENT")
+    assert_err(await srv.label_bus(0, name="x"), "BAD_ARGUMENT")
+    assert_err(await srv.label_bus(4, icon=75), "BAD_ARGUMENT")
+    assert (await srv.get_strip("tony iem"))["target"] == "bus.3"  # the new name resolves
+    assert (await srv.set_send("ch.1", 3, -12.0, ramp_ms=0))["summary"].startswith("Bus 3 'Tony IEM' send from Ch 1 'Ch01'")
+    lab = await srv.label_channel(7, name="Kick In", color="red")  # the shared body did not change the channel tool
+    assert lab["ok"] and lab["summary"] == "Ch 7 named 'Kick In', colour RD" and lab["target"] == "ch.7"
+
+
+# ---------------------------------------------------------------------------------------- send taps, send switch, main assigns
+
+
+async def test_set_send_tap_writes_the_odd_send_of_the_pair(app, fakedesk):
+    assert app.policy.snapshot_before_write is True and app.desk.pre_write_snapshot is None
+    res = await srv.set_send_tap("ch.1", 4, "pre")
+    assert res["ok"] and res["tap"] == "PRE" and res["before"] == "POST" and res["send_to"] == 4 and res["pair"] == [3, 4]
+    assert res["type_send"] == 3 and res["address"] == "/ch/01/mix/03/type" and res["target"] == "ch.1" and res["label"] == "Ch 1"
+    assert res["summary"] == "Bus 4 'Bus04' send from Ch 1 'Ch01' tap POST → PRE (buses 3-4 share the tap point)"
+    assert app.policy.snapshot_before_write is False and app.desk.pre_write_snapshot is not None  # first write took the auto snapshot
+    assert app.desk.pre_write_snapshot.label == "auto-pre-write"
+    await settle(app)
+    assert fakedesk.value("/ch/01/mix/03/type") == "PRE" and fakedesk.value("/ch/01/mix/01/type") == "POST" and fakedesk.value("/ch/01/mix/05/type") == "POST"
+    sends = (await srv.get_channel_sends(1))["sends"]
+    assert sends[2]["type"] == "PRE" and sends[3]["type"] == "PRE" and sends[1]["type"] == "POST"  # both of the pair read it back
+    # the odd bus of a pair writes the same send; the enum tokens, the aliases and any case are accepted
+    for bus, tap, token in ((3, "Post-EQ", "EQ->"), (1, "IN", "IN/LC"), (2, "pre-eq", "<-EQ"), (16, "grp", "GRP"), (6, "<-eq", "<-EQ"), (4, "post", "POST")):
+        r = await srv.set_send_tap("ch.2", bus, tap)
+        assert r["ok"] and r["tap"] == token and r["type_send"] % 2 == 1, (bus, tap, r)
+    await settle(app)
+    assert fakedesk.value("/ch/02/mix/01/type") == "<-EQ" and fakedesk.value("/ch/02/mix/03/type") == "POST"
+    assert fakedesk.value("/ch/02/mix/05/type") == "<-EQ" and fakedesk.value("/ch/02/mix/15/type") == "GRP"
+    same = await srv.set_send_tap("ch.2", 4, "POST")
+    assert same["ok"] and same["before"] == "POST" and same["summary"].endswith("tap POST → POST (buses 3-4 share the tap point) (unchanged)")
+    # every input strip family, by number or by name
+    assert (await srv.label_channel(5, name="Vox Tony"))["ok"]
+    named = await srv.set_send_tap("tony", 1, "pre")
+    assert named["ok"] and named["target"] == "ch.5" and named["address"] == "/ch/05/mix/01/type" and named["summary"].startswith("Bus 1 'Bus01' send from Ch 5 'Vox Tony' tap")
+    aux = await srv.set_send_tap("auxin.1", 2, "post-eq")
+    assert aux["ok"] and aux["address"] == "/auxin/01/mix/01/type" and aux["pair"] == [1, 2]
+    fx = await srv.set_send_tap("fxrtn.2", 5, "in")
+    assert fx["ok"] and fx["address"] == "/fxrtn/02/mix/05/type" and fx["pair"] == [5, 6] and "(buses 5-6 share" in fx["summary"]
+    await settle(app)
+    assert fakedesk.value("/auxin/01/mix/01/type") == "EQ->" and fakedesk.value("/fxrtn/02/mix/05/type") == "IN/LC"
+    # a mix bus sends to matrices 1..6 (no GRP there); the mains' sends are guarded; DCAs/matrices have none
+    mtx = await srv.set_send_tap("bus.1", 2, "pre")
+    assert mtx["ok"] and mtx["address"] == "/bus/01/mix/01/type" and mtx["summary"] == "Matrix 2 'Mtx2' send from Bus 1 'Bus01' tap POST → PRE (matrices 1-2 share the tap point)"
+    assert_err(await srv.set_send_tap("bus.1", 1, "grp"), "BAD_ARGUMENT")
+    assert_err(await srv.set_send_tap("bus.1", 7, "pre"), "BAD_ARGUMENT")
+    assert_err(await srv.set_send_tap("main.st", 1, "pre"), "GUARDED")
+    assert_err(await srv.set_send_tap("dca.1", 1, "pre"), "NOT_SUPPORTED")
+    assert_err(await srv.set_send_tap("mtx.1", 1, "pre"), "NOT_SUPPORTED")
+    # argument checks
+    assert_err(await srv.set_send_tap("ch.1", 17, "pre"), "BAD_ARGUMENT")
+    assert_err(await srv.set_send_tap("ch.1", 0, "pre"), "BAD_ARGUMENT")
+    assert_err(await srv.set_send_tap("ch.1", 4, "bogus"), "BAD_ARGUMENT")
+    assert_err(await srv.set_send_tap("ch.1", 4, 3), "BAD_ARGUMENT")
+    await settle(app)
+    assert fakedesk.value("/ch/01/mix/03/type") == "PRE"  # the refusals wrote nothing
+
+
+async def test_set_send_on_switch_alone_and_with_a_level(app, fakedesk):
+    off = await srv.set_send("ch.1", 3, on=False)
+    assert off["ok"] and off["on"] is False and off["was_on"] is True and off["send_to"] == 3 and off["kind"] == "send" and off["target"] == "ch.1"
+    assert off["summary"] == "Bus 3 'Bus03' send from Ch 1 'Ch01' switched OFF"
+    assert "after_db" not in off  # the level was left alone
+    await settle(app)
+    assert fakedesk.get("/ch/01/mix/03/on") == 0 and fakedesk.value("/ch/01/mix/03/level") == NEG_INF_DB
+    again = await srv.set_send("ch.1", 3, on=False)
+    assert again["ok"] and again["was_on"] is False and again["summary"].endswith("switched OFF (was already OFF)")
+    writes: list[str] = []
+    app.events.subscribe(lambda ev: writes.append(ev.data["address"]), types={"desk.write"})
+    both = await srv.set_send("ch.1", 3, -10.0, ramp_ms=0, on=True)
+    assert both["ok"] and both["after_db"] == -10.0 and both["on"] is True and both["was_on"] is False and both["send_to"] == 3
+    assert both["summary"] == "Bus 3 'Bus03' send from Ch 1 'Ch01' -oo dB → −10.0 dB, switched ON"
+    assert writes == ["/ch/01/mix/03/level", "/ch/01/mix/03/on"]  # the level lands while the send is still off
+    await settle(app)
+    assert fakedesk.get("/ch/01/mix/03/on") == 1 and fakedesk.value("/ch/01/mix/03/level") == pytest.approx(-10.0, abs=0.05)
+    assert (await srv.get_channel_sends(1))["sends"][2]["muted"] is False
+    writes.clear()
+    down = await srv.set_send("ch.1", 3, -20.0, ramp_ms=0, on=False)
+    assert down["ok"] and down["after_db"] == -20.0 and down["summary"].endswith("−10.0 dB → −20.0 dB, switched OFF")
+    assert writes == ["/ch/01/mix/03/on", "/ch/01/mix/03/level"]  # muted first, then moved
+    legacy = await srv.set_send("ch.1", 3, -6.0, ramp_ms=0)  # the call shape from before the switch still works
+    assert legacy["ok"] and legacy["after_db"] == -6.0 and "on" not in legacy and legacy["summary"].endswith("−20.0 dB → −6.0 dB")
+    assert_err(await srv.set_send("ch.1", 3), "BAD_ARGUMENT")
+    assert_err(await srv.set_send("ch.1", 17, on=True), "BAD_ARGUMENT")
+    assert_err(await srv.set_send("ch.1", 3, on=True, ramp_ms=-1), "BAD_ARGUMENT")
+
+
+async def test_set_main_assign(app, fakedesk):
+    ch = await srv.get_channel(1)
+    assert ch["lr_assigned"] is True and ch["mono_assigned"] is False and ch["mono_level"] == "-oo"
+    writes: list[str] = []
+    app.events.subscribe(lambda ev: writes.append(ev.data["address"]), types={"desk.write"})
+    res = await srv.set_main_assign("ch.1", lr=False, mono=True, mono_level_db=-6.0)
+    assert res["ok"] and res["applied"] == {"lr": False, "mono": True, "mono_level_db": -6.0} and res["target"] == "ch.1"
+    assert res["before"] == {"lr": True, "mono": False, "mono_level_db": "-oo", "mono_level": "-oo"}
+    assert res["mono_level"]["kind"] == "send" and res["mono_level"]["ramp_ms"] == 300 and res["mono_level"]["after_db"] == -6.0
+    assert res["summary"] == "Ch 1 'Ch01': Main L/R OFF, M/C ON, M/C level -oo dB → −6.0 dB (ramped 300 ms)"
+    assert app.policy.snapshot_before_write is False and app.desk.pre_write_snapshot is not None  # first write took the auto snapshot
+    # L/R dropped first, the level ramped while M/C was still off, M/C opened last
+    assert writes[0] == "/ch/01/mix/st" and writes[-1] == "/ch/01/mix/mono" and set(writes[1:-1]) == {"/ch/01/mix/mlevel"}
+    await settle(app)
+    assert fakedesk.get("/ch/01/mix/st") == 0 and fakedesk.get("/ch/01/mix/mono") == 1 and fakedesk.value("/ch/01/mix/mlevel") == pytest.approx(-6.0, abs=0.05)
+    ch = await srv.get_channel(1)
+    assert ch["lr_assigned"] is False and ch["mono_assigned"] is True and ch["mono_level_db"] == -6.0
+    one = await srv.set_main_assign("ch.1", lr=True)
+    assert one["ok"] and one["applied"] == {"lr": True} and "mono_level" not in one and one["summary"] == "Ch 1 'Ch01': Main L/R ON"
+    hot = await srv.set_main_assign("bus.2", mono_level_db=+3.0)  # the M/C level has the send ceiling
+    assert hot["ok"] and hot["applied"] == {"mono_level_db": 0.0} and hot["mono_level"]["clamped"]["limit"] == 0.0 and "clamped" in hot["summary"]
+    assert hot["summary"].startswith("Bus 2 'Bus02': M/C level -oo dB → 0.0 dB")
+    aux = await srv.set_main_assign("auxin.1", lr=False)
+    fx = await srv.set_main_assign("fxrtn.1", mono=True)
+    await settle(app)
+    assert aux["ok"] and fx["ok"] and fakedesk.get("/auxin/01/mix/st") == 0 and fakedesk.get("/fxrtn/01/mix/mono") == 1
+    assert fakedesk.value("/bus/02/mix/mlevel") == 0.0
+    assert_err(await srv.set_main_assign("ch.1"), "BAD_ARGUMENT")
+    assert_err(await srv.set_main_assign("ch.1", mono_level_db="loud"), "BAD_ARGUMENT")
+    assert_err(await srv.set_main_assign("mtx.1", lr=True), "NOT_SUPPORTED")
+    assert_err(await srv.set_main_assign("main.st", lr=True), "NOT_SUPPORTED")
+    assert_err(await srv.set_main_assign("dca.1", mono=True), "NOT_SUPPORTED")
+    assert_err(await srv.set_main_assign("ch.99", lr=True), "UNKNOWN_TARGET")
+
+
 async def test_apply_and_export_patch_plan(app, fakedesk, tmp_path):
     res = await srv.apply_patch_plan(str(EXAMPLE))
     assert res["ok"] and res["rows"] == 16 and len(res["applied"]) == 16 and res["failed"] == [] and res["include_source"] is False
@@ -473,6 +611,268 @@ async def test_set_channel_config_dance(app, fakedesk):
     assert (await srv.get_channel(1))["source"] == "IN05"
     assert_err(await srv.set_channel_config(1), "BAD_ARGUMENT")
     assert_err(await srv.set_channel_config(2, source="nope"), "BAD_ARGUMENT")
+
+
+async def test_get_outputs_decodes_taps_and_routing(app, fakedesk):
+    outs = await srv.get_outputs()
+    assert outs["ok"] and len(outs["main"]) == 16 and len(outs["aux"]) == 6
+    assert outs["main"][2] == {
+        "out": 3, "label": "OUT 3", "address": "/outputs/main/03", "source": "MixBus 03", "source_index": 6, "target": "bus.3",
+        "name": "Bus03", "pos": "POST", "invert": False, "follows_mute": True, "xlr": True, "aes50a": [3],
+    }
+    assert outs["main"][10]["aes50a"] == [11] and outs["main"][15]["source"] == "MixBus 16"
+    assert outs["aux"][0] == {
+        "out": 1, "label": "AUX OUT 1", "address": "/outputs/aux/01", "source": "OFF", "source_index": 0, "target": None,
+        "name": None, "pos": "POST", "invert": False, "follows_mute": True,
+    }
+    assert outs["routing"]["OUT"] == {"1-4": "OUT1-4", "5-8": "OUT5-8", "9-12": "OUT9-12", "13-16": "OUT13-16"}
+    assert outs["routing"]["AES50A"] == {"1-8": "OUT1-8", "9-16": "OUT9-16", "17-24": "P161-8", "25-32": "P169-16", "33-40": "AUX1-6/Mon", "41-48": "AuxIN1-6/TB"}
+    assert outs["summary"].startswith("XLR OUT 1-16: 1 ← MixBus 01 'Bus01' POST, 2 ← MixBus 02 'Bus02' POST")
+    assert "AUX OUT 1-6: all OFF; every XLR socket carries its own tap; AES50-A 1-8 ← OUT1-8, 9-16 ← OUT9-16" in outs["summary"]
+    json.dumps(outs)
+    # front-panel changes: a direct out with a name, a PRE tap (ignores the mute), XLR 5-8 handed to the
+    # control room, AES50-A 9-16 turned into inputs -> tap 6 is off its socket, tap 11 off the snake
+    fset(app, fakedesk, "/ch/05/config/name", "Vox Tony")
+    fset(app, fakedesk, "/outputs/main/01/src", "DirectOut Ch 05")
+    fset(app, fakedesk, "/outputs/main/01/pos", "PRE")
+    fset(app, fakedesk, "/outputs/aux/03/src", "Main L")
+    fset(app, fakedesk, "/outputs/aux/03/invert", True)
+    fset(app, fakedesk, "/config/routing/OUT/5-8", "AUX/CR")
+    fset(app, fakedesk, "/config/routing/AES50A/9-16", "AN9-16")
+    outs = await srv.get_outputs()
+    t1 = outs["main"][0]
+    assert t1["source"] == "DirectOut Ch 05" and t1["target"] == "ch.5" and t1["name"] == "Vox Tony" and t1["follows_mute"] is False
+    assert outs["aux"][2]["target"] == "main.st" and outs["aux"][2]["name"] == "Main" and outs["aux"][2]["invert"] is True
+    assert outs["main"][5]["xlr"] is False and outs["main"][4]["aes50a"] == [5] and outs["main"][10]["aes50a"] == []
+    assert outs["summary"].startswith("XLR OUT 1-16: 1 ← DirectOut Ch 05 'Vox Tony' PRE (ignores mute), ")
+    assert "AUX OUT 1-6: 1 ← OFF, 2 ← OFF, 3 ← Main L 'Main' POST inverted, 4 ← OFF" in outs["summary"]
+    assert "XLR 5-8 carry AUX/CR (not their own taps)" in outs["summary"] and "9-16 ← AN9-16" in outs["summary"]
+
+
+async def test_set_output_and_set_aux_output_dance(app, fakedesk):
+    # the first call describes the change (current tap in the envelope) and writes nothing
+    pend = await srv.set_output(3, source="Main L", pos="pre", invert=True)
+    token = assert_pending(pend)
+    assert pend["action_summary"] == ("OUT 3 (XLR out 3): source MixBus 03 'Bus03' → Main L 'Main', tap POST → PRE "
+                                      "(does not follow the source's mute), polarity normal → inverted")
+    assert pend["current"]["source"] == "MixBus 03" and pend["current"]["pos"] == "POST"
+    await settle(app)
+    assert fakedesk.node_line("/outputs/main/03") == "/outputs/main/03 6 POST OFF"
+    # an unknown token is refused and writes nothing; a token is bound to what was shown (and spent on a mismatch)
+    assert_err(await srv.set_output(3, source="Main L", pos="pre", invert=True, confirm_token="nope"), "BAD_TOKEN")
+    assert_err(await srv.set_output(3, source="Main R", pos="pre", invert=True, confirm_token=token), "BAD_TOKEN")
+    await settle(app)
+    assert fakedesk.node_line("/outputs/main/03") == "/outputs/main/03 6 POST OFF"
+    # the token call writes src, pos and invert and reads the tap back
+    token = assert_pending(await srv.set_output(3, source="Main L", pos="pre", invert=True))
+    done = await srv.set_output(3, source="Main L", pos="pre", invert=True, confirm_token=token)
+    assert done["ok"] and done["out"] == 3 and done["group"] == "main" and done["address"] == "/outputs/main/03"
+    assert done["applied"] == {"source": "Main L", "pos": "PRE", "invert": True}
+    assert done["before"]["source"] == "MixBus 03" and done["after"]["source"] == "Main L" and done["after"]["follows_mute"] is False
+    assert done["summary"] == "OUT 3: source Main L, pos PRE, invert on — now Main L 'Main' PRE (ignores mute) inverted"
+    await settle(app)
+    assert fakedesk.get("/outputs/main/03/src") == 1 and fakedesk.get("/outputs/main/03/pos") == 6 and fakedesk.get("/outputs/main/03/invert") == 1
+    assert fakedesk.node_line("/outputs/main/03") == "/outputs/main/03 1 PRE ON"
+    assert (await srv.get_outputs())["main"][2]["source"] == "Main L"
+    assert_err(await srv.set_output(3, source="Main L", pos="pre", invert=True, confirm_token=token), "BAD_TOKEN")  # single use
+    # the pre-write snapshot was taken by the first confirmed write
+    assert app.desk.pre_write_snapshot is not None
+    # aux taps: their own tool AND their own action — a set_output token cannot drive set_aux_output
+    pend = await srv.set_aux_output(2, source="bus 3")
+    tok = assert_pending(pend)
+    assert pend["action_summary"] == "AUX OUT 2 (rear aux out 2): source OFF → MixBus 03 'Bus03'"
+    assert_err(await srv.set_output(2, source="bus 3", confirm_token=tok), "BAD_TOKEN")
+    await settle(app)
+    assert fakedesk.get("/outputs/aux/02/src") == 0
+    tok = assert_pending(await srv.set_aux_output(2, source="bus 3"))
+    done = await srv.set_aux_output(2, source="bus 3", confirm_token=tok)
+    assert done["ok"] and done["applied"] == {"source": "MixBus 03"} and done["label"] == "AUX OUT 2" and done["group"] == "aux"
+    await settle(app)
+    assert fakedesk.node_line("/outputs/aux/02") == "/outputs/aux/02 6 POST OFF"
+    assert (await srv.get_outputs())["aux"][1]["target"] == "bus.3"
+    # spellings: tokens in any case and short forms; the summary names the strip the new source taps
+    fset(app, fakedesk, "/ch/05/config/name", "Vox Tony")
+    pend = await srv.set_aux_output(1, source="ch 5", pos="pre eq mute")
+    assert_pending(pend)
+    assert pend["action_summary"] == "AUX OUT 1 (rear aux out 1): source OFF → DirectOut Ch 05 'Vox Tony', tap POST → <-EQ+M"
+    pend = await srv.set_output(16, source="monitor L", pos="IN/LC")
+    assert_pending(pend)
+    assert pend["action_summary"] == "OUT 16 (XLR out 16): source MixBus 16 'Bus16' → Monitor L, tap POST → IN/LC (does not follow the source's mute)"
+    for spelling in ("MixBus 03", "mixbus 03", "bus 3", "Bus03", "mix 3", "6"):
+        pend = await srv.set_output(1, source=spelling)
+        assert_pending(pend)
+        assert pend["action_summary"].endswith("→ MixBus 03 'Bus03'"), spelling
+    pend = await srv.set_output(1, source="off", invert=False)
+    assert_pending(pend)
+    assert pend["action_summary"] == "OUT 1 (XLR out 1): source MixBus 01 'Bus01' → OFF, polarity normal → normal"
+    # bad arguments never mint a token and never write
+    for bad in (
+        srv.set_output(17, source="off"), srv.set_output(0, source="off"), srv.set_aux_output(7, source="off"),
+        srv.set_output(1), srv.set_output(1, source="nope"), srv.set_output(1, source="bus 17"), srv.set_output(1, source="fx 5L"),
+        srv.set_output(1, pos="post+m"), srv.set_output(1, pos="sideways"), srv.set_output(1, invert="yes"),
+    ):
+        assert_err(await bad, "BAD_ARGUMENT")
+    await settle(app)
+    assert fakedesk.node_line("/outputs/main/01") == "/outputs/main/01 4 POST OFF"
+    assert_err(await srv.dump_desk_state(["outputs.1"]), "BAD_ARGUMENT")
+    dump = await srv.dump_desk_state(["outputs"])
+    assert dump["ok"] and dump["section_count"] == 22 and dump["sections"]["/outputs/main/03"] == {"main/03/src": "Main L", "main/03/pos": "PRE", "main/03/invert": True}
+# ---------------------------------------------------------------------------------------- routing, stereo links, solo
+
+
+async def test_get_routing_reads_the_fake(app, fakedesk):
+    r = await srv.get_routing()
+    assert r["ok"] and r["routswitch"] == "REC" and "play_inputs" not in r
+    assert r["inputs"] == {"1-8": "AN1-8", "9-16": "AN9-16", "17-24": "AN17-24", "25-32": "AN25-32", "AUX": "AUX1-4"}
+    assert len(r["user_in"]) == 32
+    assert r["user_in"][0] == {"slot": 1, "number": 0, "source": "OFF", "description": "off", "active": False, "feeds": None}
+    assert r["bus_links"] == {f"{o}-{o + 1}": False for o in range(1, 17, 2)}
+    assert r["solo"] == {"channels": "PFL", "buses": "AFL", "dcas": "AFL"}
+    assert r["summary"] == ("Inputs (REC): 1-8 AN1-8, 9-16 AN9-16, 17-24 AN17-24, 25-32 AN25-32, AUX AUX1-4; User-In slots live: 0; "
+                            "bus links: none; solo channels PFL, buses AFL, DCAs AFL")
+    json.dumps(r)
+    # a User-In slot is live when an IN block in force reads its UIN group: block 1-8 <- UIN9-16 means slot 12 feeds In 4
+    fset(app, fakedesk, "/config/routing/IN/1-8", "UIN9-16")
+    fset(app, fakedesk, "/config/routing/IN/AUX", "UIN1-6")
+    fset(app, fakedesk, "/config/userrout/in/12", 33)
+    fset(app, fakedesk, "/config/userrout/in/02", 168)
+    r = await srv.get_routing()
+    assert r["user_in"][11] == {"slot": 12, "number": 33, "source": "A01", "description": "AES50-A 1", "active": True, "feeds": "In 4"}
+    assert r["user_in"][1] == {"slot": 2, "number": 168, "source": "TBEXT", "description": "talkback external", "active": True, "feeds": "Aux In 2"}
+    assert r["user_in"][8]["active"] is True and r["user_in"][16]["active"] is False
+    assert "User-In slots live: 14" in r["summary"]
+    # PLAY routing: the PLAY table is the one in force
+    fset(app, fakedesk, "/config/routing/routswitch", "PLAY")
+    r = await srv.get_routing()
+    assert r["routswitch"] == "PLAY" and r["play_inputs"]["1-8"] == "AN1-8" and r["inputs"]["1-8"] == "UIN9-16"
+    assert r["user_in"][11]["active"] is False and r["summary"].startswith("Inputs (PLAY):")
+
+
+async def test_set_bus_link_dance(app, fakedesk):
+    first = await srv.set_bus_link(4, True)
+    token = assert_pending(first)
+    assert first["action_summary"] == "Stereo link Bus 3-4 ('Bus03' / 'Bus04'): OFF → ON" and first["current"] is False
+    await settle(app)
+    assert fakedesk.get("/config/buslink/3-4") == 0 and app.desk.write_count == 0 and app.policy.snapshot_before_write is True  # nothing written
+    assert_err(await srv.set_bus_link(4, True, confirm_token="nope"), "BAD_TOKEN")
+    # a token minted for another pair cannot execute this request
+    other = assert_pending(await srv.set_bus_link(4, True))
+    assert_err(await srv.set_bus_link(6, True, confirm_token=other), "BAD_TOKEN")
+    token = assert_pending(await srv.set_bus_link(3, True))  # either bus of the pair is the same request
+    done = await srv.set_bus_link(4, True, confirm_token=token)
+    assert done["ok"] and done["pair"] == "3-4" and done["buses"] == [3, 4] and done["link"] is True and done["was_linked"] is False
+    assert done["summary"] == "Stereo link Bus 3-4 ('Bus03' / 'Bus04') ON"
+    assert_err(await srv.set_bus_link(4, True, confirm_token=token), "BAD_TOKEN")  # single use
+    await settle(app)
+    assert fakedesk.get("/config/buslink/3-4") == 1 and app.policy.snapshot_before_write is False
+    assert (await srv.get_routing())["bus_links"]["3-4"] is True
+    again = await srv.set_bus_link(4, True)
+    assert again["action_summary"].endswith("ON → ON (no change)")
+    # the token binds the state the user was shown: a front-panel change between the calls voids it
+    tok = assert_pending(await srv.set_bus_link(1, True))
+    fset(app, fakedesk, "/config/buslink/1-2", True)
+    assert_err(await srv.set_bus_link(1, True, confirm_token=tok), "BAD_TOKEN")
+    tok = assert_pending(await srv.set_bus_link(1, False))
+    off = await srv.set_bus_link(1, False, confirm_token=tok)
+    assert off["ok"] and off["link"] is False and off["was_linked"] is True
+    await settle(app)
+    assert fakedesk.get("/config/buslink/1-2") == 0
+    assert_err(await srv.set_bus_link(17, True), "BAD_ARGUMENT")
+    assert_err(await srv.set_bus_link(0, False), "BAD_ARGUMENT")
+
+
+async def test_set_input_block_dance(app, fakedesk):
+    first = await srv.set_input_block("ch 17-24", "a17-24")
+    token = assert_pending(first)
+    assert first["action_summary"] == "Input block 17-24 (In 17-24): AN17-24 → A17-24" and first["current"] == "AN17-24"
+    await settle(app)
+    assert fakedesk.value("/config/routing/IN/17-24") == "AN17-24" and app.desk.write_count == 0 and app.policy.snapshot_before_write is True
+    assert_err(await srv.set_input_block("17-24", "A17-24", confirm_token="nope"), "BAD_TOKEN")
+    token = assert_pending(await srv.set_input_block("IN/17-24", "A17-24"))  # spellings normalise to the same request
+    done = await srv.set_input_block("17-24", "A17-24", confirm_token=token)
+    assert done["ok"] and done["block"] == "17-24" and done["before"] == "AN17-24" and done["source"] == "A17-24"
+    assert done["summary"] == "Input block 17-24 (In 17-24) AN17-24 → A17-24" and done["address"] == "/config/routing/IN/17-24"
+    assert_err(await srv.set_input_block("17-24", "A17-24", confirm_token=token), "BAD_TOKEN")  # single use
+    await settle(app)
+    assert fakedesk.value("/config/routing/IN/17-24") == "A17-24" and app.policy.snapshot_before_write is False
+    assert (await srv.get_routing())["inputs"]["17-24"] == "A17-24"
+    # the AUX block has its own source list
+    tok = assert_pending(await srv.set_input_block("aux", "uin1-6"))
+    aux = await srv.set_input_block("aux in", "UIN1-6", confirm_token=tok)
+    assert aux["ok"] and aux["block"] == "AUX" and aux["source"] == "UIN1-6" and aux["summary"] == "Input block AUX (Aux In 1-6) AUX1-4 → UIN1-6"
+    await settle(app)
+    assert fakedesk.value("/config/routing/IN/AUX") == "UIN1-6"
+    assert_err(await srv.set_input_block("aux", "AN9-16"), "BAD_ARGUMENT")  # not an AUX-block source
+    assert_err(await srv.set_input_block("1-8", "AUX1-4"), "BAD_ARGUMENT")  # not an IN-block source
+    assert_err(await srv.set_input_block("33-40", "AN1-8"), "BAD_ARGUMENT")
+    assert_err(await srv.set_input_block("1-8", "nope"), "BAD_ARGUMENT")
+    # a front-panel change between the calls voids the token
+    tok = assert_pending(await srv.set_input_block("1-8", "B1-8"))
+    fset(app, fakedesk, "/config/routing/IN/1-8", "CARD1-8")
+    assert_err(await srv.set_input_block("1-8", "B1-8", confirm_token=tok), "BAD_TOKEN")
+    await settle(app)
+    assert fakedesk.value("/config/routing/IN/1-8") == "CARD1-8"
+    # PLAY routing is flagged in the summary
+    fset(app, fakedesk, "/config/routing/routswitch", "PLAY")
+    pend = await srv.set_input_block("9-16", "A9-16")
+    assert_pending(pend)
+    assert pend["action_summary"].startswith("Input block 9-16 (In 9-16): AN9-16 → A9-16 — note: the desk is in PLAY routing")
+
+
+async def test_set_user_in_dance(app, fakedesk):
+    first = await srv.set_user_in(4, "AES50-A 1")
+    token = assert_pending(first)
+    assert first["action_summary"] == "User-In slot 4: OFF (off) → A01 (AES50-A 1) [not live: no input block reads UIN1-8 now]"
+    assert first["current"]["slot"] == 4 and first["current"]["number"] == 0
+    await settle(app)
+    assert fakedesk.get("/config/userrout/in/04") == 0 and app.desk.write_count == 0 and app.policy.snapshot_before_write is True
+    assert_err(await srv.set_user_in(4, "A01", confirm_token="nope"), "BAD_TOKEN")
+    token = assert_pending(await srv.set_user_in(4, 33))  # the raw number is the same request
+    done = await srv.set_user_in(4, "a01", confirm_token=token)
+    assert done["ok"] and done["slot"] == 4 and done["number"] == 33 and done["source"] == "A01" and done["description"] == "AES50-A 1"
+    assert done["before"] == 0 and done["before_source"] == "OFF" and done["active"] is False and done["address"] == "/config/userrout/in/04"
+    assert done["summary"] == "User-In slot 4 OFF (off) → A01 (AES50-A 1)"
+    assert_err(await srv.set_user_in(4, "a01", confirm_token=token), "BAD_TOKEN")  # single use
+    await settle(app)
+    assert fakedesk.get("/config/userrout/in/04") == 33 and app.policy.snapshot_before_write is False
+    assert (await srv.get_routing())["user_in"][3]["source"] == "A01"
+    # once the block reads UIN1-8 the slot is live, the summary says which In it feeds, and the
+    # head-amp resolution follows the patch (A01 = AES50-A 1 = head amp 032)
+    fset(app, fakedesk, "/config/routing/IN/1-8", "UIN1-8")
+    assert await app.desk.headamp_index_for("ch.4") == 32
+    pend = await srv.set_user_in(4, "card 2")
+    tok = assert_pending(pend)
+    assert pend["action_summary"] == "User-In slot 4: A01 (AES50-A 1) → CARD02 (card/USB 2) [live: feeds In 4]"
+    fset(app, fakedesk, "/config/userrout/in/04", 34)  # a front-panel change between the calls voids the token
+    assert_err(await srv.set_user_in(4, "card 2", confirm_token=tok), "BAD_TOKEN")
+    await settle(app)
+    assert fakedesk.get("/config/userrout/in/04") == 34
+    tok = assert_pending(await srv.set_user_in(4, "CARD02"))
+    card = await srv.set_user_in(4, "CARD02", confirm_token=tok)
+    assert card["ok"] and card["number"] == 130 and card["before_source"] == "A02" and card["feeds"] == "In 4"
+    assert await app.desk.headamp_index_for("ch.4") is None  # a card source has no preamp
+    for bad in ("A49", "nope", 999, -1, "ch 4", "USBL", 4.5):
+        assert_err(await srv.set_user_in(4, bad), "BAD_ARGUMENT")
+    assert_err(await srv.set_user_in(33, "IN01"), "BAD_ARGUMENT")
+    assert_err(await srv.set_user_in(0, "IN01"), "BAD_ARGUMENT")
+
+
+async def test_set_solo_mode_is_tier1(app, fakedesk):
+    res = await srv.set_solo_mode(channels="afl", dcas="PFL")
+    assert res["ok"] and res["applied"] == {"channels": "AFL", "dcas": "PFL"} and res["before"] == {"channels": "PFL", "dcas": "AFL"}
+    assert res["summary"] == "Solo mode: channels PFL → AFL, DCAs AFL → PFL"
+    assert app.policy.snapshot_before_write is False  # a Tier-1 write: auto snapshot taken, no token asked for
+    await settle(app)
+    assert fakedesk.value("/config/solo/chmode") == "AFL" and fakedesk.value("/config/solo/dcamode") == "PFL"
+    assert fakedesk.value("/config/solo/busmode") == "AFL"  # untouched
+    assert (await srv.get_routing())["solo"] == {"channels": "AFL", "buses": "AFL", "dcas": "PFL"}
+    one = await srv.set_solo_mode(buses="pfl")
+    assert one["ok"] and one["applied"] == {"buses": "PFL"} and one["summary"] == "Solo mode: buses AFL → PFL"
+    assert_err(await srv.set_solo_mode(), "BAD_ARGUMENT")
+    assert_err(await srv.set_solo_mode(buses="XFL"), "BAD_ARGUMENT")
+    assert_err(await srv.set_solo_mode(channels=1), "BAD_ARGUMENT")
+    await settle(app)
+    assert fakedesk.value("/config/solo/busmode") == "PFL"
 
 
 async def test_ramp_ms_is_bounded_and_budgeted_for_the_real_cadence(app):

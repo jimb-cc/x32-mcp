@@ -105,6 +105,7 @@ def test_tier_for(pol):
     assert pol.tier_for("/ch/05/mix/fader") is Tier.MIX
     assert pol.tier_for("/ch/05/config/name") == Tier.MIX == 1
     assert pol.tier_for("/config/solo/level") is Tier.READ
+    assert pol.tier_for("/config/solo/chmode") is Tier.MIX  # set_solo_mode
     # guarded globs
     assert pol.tier_for("/main/st/mix/fader") is Tier.GUARDED
     assert pol.tier_for("/main/m/mix/on") is Tier.GUARDED

@@ -53,6 +53,7 @@ meta:
   roots:
     headamp: "/headamp/{n:03d}"      # n = 0..127: 000-031 local XLR, 032-079 AES50-A, 080-127 AES50-B (§12.2)
     fx: "/fx/{n}"                    # n = 1..8 (single digit, no zero padding)
+    outputs: "/outputs"              # output taps: main/{n:02d} (XLR OUT 1-16) and aux/{idx:02d} (AUX OUT 1-6), fx_routing_scenes.md §4.7
     config: "/config"
     show: "/-show"
     stat: "/-stat"
@@ -130,6 +131,12 @@ enums:
   # /config/routing/OUT/1-4 and 9-12 (list A) / 5-8 and 13-16 (list B), 0..35 (§4.6)
   routing_out_a: ["AN1-4", "AN9-12", "AN17-20", "AN25-28", "A1-4", "A9-12", "A17-20", "A25-28", "A33-36", "A41-44", "B1-4", "B9-12", "B17-20", "B25-28", "B33-36", "B41-44", "CARD1-4", "CARD9-12", "CARD17-20", "CARD25-28", "OUT1-4", "OUT9-12", "P161-4", "P169-12", "AUX/CR", "AUX/TB", "UOUT1-4", "UOUT9-12", "UOUT17-20", "UOUT25-28", "UOUT33-36", "UOUT41-44", "UIN1-4", "UIN9-12", "UIN17-20", "UIN25-28"]
   routing_out_b: ["AN5-8", "AN13-16", "AN21-24", "AN29-32", "A5-8", "A13-16", "A21-24", "A29-32", "A37-40", "A45-48", "B5-8", "B13-16", "B21-24", "B29-32", "B37-40", "B45-48", "CARD5-8", "CARD13-16", "CARD21-24", "CARD29-32", "OUT5-8", "OUT13-16", "P165-8", "P1613-16", "AUX/CR", "AUX/TB", "UOUT5-8", "UOUT13-16", "UOUT21-24", "UOUT29-32", "UOUT37-40", "UOUT45-48", "UIN5-8", "UIN13-16", "UIN21-24", "UIN29-32"]
+  # /outputs/main|aux/NN/src, int 0..76 (fx_routing_scenes.md §4.7 / DOC p.40-42, VERIFIED): 0 OFF, 1-3 Main L/R/M-C,
+  # 4-19 MixBus 01-16 (bus n -> 3+n), 20-25 Matrix 1-6, 26-57 DirectOut Ch 01-32, 58-65 DirectOut Aux 1-8, 66-73 DirectOut
+  # FX 1L..4R, 74-75 Monitor L/R, 76 Talkback. Tokens are the DOC's wording (with spaces); the desk prints the int.
+  output_src: ["OFF", "Main L", "Main R", "M/C", "MixBus 01", "MixBus 02", "MixBus 03", "MixBus 04", "MixBus 05", "MixBus 06", "MixBus 07", "MixBus 08", "MixBus 09", "MixBus 10", "MixBus 11", "MixBus 12", "MixBus 13", "MixBus 14", "MixBus 15", "MixBus 16", "Matrix 1", "Matrix 2", "Matrix 3", "Matrix 4", "Matrix 5", "Matrix 6", "DirectOut Ch 01", "DirectOut Ch 02", "DirectOut Ch 03", "DirectOut Ch 04", "DirectOut Ch 05", "DirectOut Ch 06", "DirectOut Ch 07", "DirectOut Ch 08", "DirectOut Ch 09", "DirectOut Ch 10", "DirectOut Ch 11", "DirectOut Ch 12", "DirectOut Ch 13", "DirectOut Ch 14", "DirectOut Ch 15", "DirectOut Ch 16", "DirectOut Ch 17", "DirectOut Ch 18", "DirectOut Ch 19", "DirectOut Ch 20", "DirectOut Ch 21", "DirectOut Ch 22", "DirectOut Ch 23", "DirectOut Ch 24", "DirectOut Ch 25", "DirectOut Ch 26", "DirectOut Ch 27", "DirectOut Ch 28", "DirectOut Ch 29", "DirectOut Ch 30", "DirectOut Ch 31", "DirectOut Ch 32", "DirectOut Aux 1", "DirectOut Aux 2", "DirectOut Aux 3", "DirectOut Aux 4", "DirectOut Aux 5", "DirectOut Aux 6", "DirectOut Aux 7", "DirectOut Aux 8", "DirectOut FX 1L", "DirectOut FX 1R", "DirectOut FX 2L", "DirectOut FX 2R", "DirectOut FX 3L", "DirectOut FX 3R", "DirectOut FX 4L", "DirectOut FX 4R", "Monitor L", "Monitor R", "Talkback"]
+  # /outputs/*/NN/pos tap point, 0..8 (§4.7, X32.c Xotpos[]): taps without +M ignore the source strip's mute; +M and POST follow it
+  output_pos: ["IN/LC", "IN/LC+M", "<-EQ", "<-EQ+M", "EQ->", "EQ->+M", "PRE", "PRE+M", "POST"]
   solo_source: ["OFF", "LR", "LR+C", "LRPFL", "LRAFL", "AUX56", "AUX78"]                            # §10
   pfl_afl: ["PFL", "AFL"]
   talk_source: ["INT", "EXT"]
@@ -376,6 +383,18 @@ params:
     par/63: *fxpar
     par/64: *fxpar
 
+  outputs:                                # fx_routing_scenes.md §4.7: the 16 XLR "OUT" taps and the 6 rear "AUX" taps that feed
+    # the physical outputs (routing/OUT blocks pick which taps reach the XLRs; AES50/CARD blocks OUT1-8 / OUT9-16 copy them).
+    # src/pos are routing (Tier 2: set_output / set_aux_output confirm); invert is a polarity flip (Tier 1 parameter).
+    # A family has ONE range per template variable (the union of its `for` ranges), so the aux taps use {idx} to
+    # stay 1..6 while main uses {n} 1..16 — a shared {n} would let /outputs/aux/07..16 exist.
+    "main/{n:02d}/src":      {osc: i, enum: output_src, node: int, tier: 2}           # node "4 POST OFF" prints the int
+    "main/{n:02d}/pos":      {osc: i, enum: output_pos, node: enum, tier: 2}
+    "main/{n:02d}/invert":   {osc: i, scale: bool, node: onoff, tier: 1}
+    "aux/{idx:02d}/src":     {osc: i, enum: output_src, node: int, tier: 2}
+    "aux/{idx:02d}/pos":     {osc: i, enum: output_pos, node: enum, tier: 2}
+    "aux/{idx:02d}/invert":  {osc: i, scale: bool, node: onoff, tier: 1}
+
   config:                                 # fx_routing_scenes.md §4 (routing), §5 (mute groups), §9 (talk/solo/mono)
     routing/routswitch: {osc: i, enum: routswitch, node: enum, tier: 2}               # node "/config/routing REC"
     routing/IN/1-8:     {osc: i, enum: routing_in, node: enum, tier: 2}
@@ -384,10 +403,13 @@ params:
     routing/IN/25-32:   {osc: i, enum: routing_in, node: enum, tier: 2}
     routing/IN/AUX:     {osc: i, enum: routing_in_aux, node: enum, tier: 2}
     # Firmware-4.x USER routing. When a /config/routing/IN block reads UIN*, the real per-input
-    # patch lives here: one 1-based source number per user input (1..32 local XLR, 33..80 AES50-A,
-    # 81..128 AES50-B, >128 card/USB). Resolving a channel to its head amp needs it, and both
-    # set_phantom and CFS² mic discovery depend on that. Seen on X32RACK-Jim (FW 4.13) at M5:
-    # "/config/userrout/in 1 129 130 33 34 ..." — ch 4 -> 33 -> head amp 032, where its SM58 gain is.
+    # patch lives here: one source number per user input, int 0..168 (fx_routing_scenes.md §4.8, DOC p.21):
+    #   0 OFF · 1..32 local XLR 1..32 (IN01..IN32) · 33..80 AES50-A 1..48 (A01..A48) · 81..128 AES50-B 1..48
+    #   (B01..B48) · 129..160 card/USB 1..32 (CARD01..CARD32) · 161..166 Aux In 1..6 (AUX1..AUX6) · 167 TB
+    #   internal (TBINT) · 168 TB external (TBEXT). The tokens are ours (desk.user_in_source); the desk prints
+    #   the int. Resolving a channel to its head amp needs it, and both set_phantom and CFS² mic discovery
+    # depend on that. Seen on X32RACK-Jim (FW 4.13) at M5: "/config/userrout/in 1 129 130 33 34 ..." —
+    # ch 4 -> 33 -> head amp 032, where its SM58 gain is. Written by set_user_in (Tier 2).
     userrout/in/01:   {osc: i, scale: int, node: int, tier: 2}
     userrout/in/02:   {osc: i, scale: int, node: int, tier: 2}
     userrout/in/03:   {osc: i, scale: int, node: int, tier: 2}
@@ -510,13 +532,14 @@ params:
     mute/4: {osc: i, scale: bool, node: onoff, tier: 2}
     mute/5: {osc: i, scale: bool, node: onoff, tier: 2}
     mute/6: {osc: i, scale: bool, node: onoff, tier: 2}
-    # solo / monitor section — read-only in v1 (BRIEF §8). Node order §10 (17 values).
+    # solo / monitor section — read-only (BRIEF §8) except the three PFL/AFL mode switches, which are
+    # Tier 1 (set_solo_mode): a monitor-bus preference that moves no level on any output. Node order §10 (17 values).
     solo/level:      {osc: f, scale: send, node: db1, tier: 0}
     solo/source:     {osc: i, enum: solo_source, node: enum, tier: 0}
     solo/sourcetrim: {osc: f, scale: solo_trim, node: float1, tier: 0}
-    solo/chmode:     {osc: i, enum: pfl_afl, node: enum, tier: 0}
-    solo/busmode:    {osc: i, enum: pfl_afl, node: enum, tier: 0}
-    solo/dcamode:    {osc: i, enum: pfl_afl, node: enum, tier: 0}
+    solo/chmode:     {osc: i, enum: pfl_afl, node: enum, tier: 1}
+    solo/busmode:    {osc: i, enum: pfl_afl, node: enum, tier: 1}
+    solo/dcamode:    {osc: i, enum: pfl_afl, node: enum, tier: 1}
     solo/exclusive:  {osc: i, scale: bool, node: onoff, tier: 0}
     solo/followsel:  {osc: i, scale: bool, node: onoff, tier: 0}
     solo/followsolo: {osc: i, scale: bool, node: onoff, tier: 0}
@@ -687,6 +710,10 @@ nodes:
               par/17, par/18, par/19, par/20, par/21, par/22, par/23, par/24, par/25, par/26, par/27, par/28, par/29, par/30, par/31, par/32,
               par/33, par/34, par/35, par/36, par/37, par/38, par/39, par/40, par/41, par/42, par/43, par/44, par/45, par/46, par/47, par/48,
               par/49, par/50, par/51, par/52, par/53, par/54, par/55, par/56, par/57, par/58, par/59, par/60, par/61, par/62, par/63, par/64]}
+  # ---- output taps (fx_routing_scenes.md §4.7, X32.c case OMAIN): "/outputs/main/01 4 POST OFF" = src (int) pos invert.
+  # The delay sub-node (/outputs/main/NN/delay), P16, AES and recorder taps are not modelled.
+  - {family: outputs, path: "/outputs/main/{n:02d}", for: {n: [1, 16]}, fields: ["main/{n:02d}/src", "main/{n:02d}/pos", "main/{n:02d}/invert"]}
+  - {family: outputs, path: "/outputs/aux/{idx:02d}", for: {idx: [1, 6]}, fields: ["aux/{idx:02d}/src", "aux/{idx:02d}/pos", "aux/{idx:02d}/invert"]}
   # ---- console config (fx_routing_scenes.md §4-§5, §9; scene1.scn lines 7-15)
   - {family: config, path: "/config/routing", fields: [routing/routswitch]}
   - {family: config, path: "/config/routing/IN", fields: [routing/IN/1-8, routing/IN/9-16, routing/IN/17-24, routing/IN/25-32, routing/IN/AUX]}
@@ -744,6 +771,8 @@ guarded:
   - "/main/*/eq/*"
   - "/headamp/*/phantom"
   - "/config/routing/*"
+  - "/outputs/*/src"
+  - "/outputs/*/pos"
   - "/config/mute/*"
   - "/*/insert/*"
   - "/fx/*/type"

@@ -28,7 +28,7 @@ NODE_FORMATS_DESIGN = {"str", "int", "sint", "onoff", "enum", "db1", "db2", "flo
 NODE_FORMATS_ADDED = {"sfloat1", "sig3", "token", "bits6", "bits8", "bits9", "bits18"}
 NODE_FORMATS = NODE_FORMATS_DESIGN | NODE_FORMATS_ADDED
 SPEC_KEYS = {"osc", "scale", "enum", "node", "tier", "clamp", "inverted_mute"}
-NON_STRIP_FAMILIES = {"headamp", "fx", "config", "show", "stat", "prefs", "action"}
+NON_STRIP_FAMILIES = {"headamp", "fx", "outputs", "config", "show", "stat", "prefs", "action"}
 
 _TEMPLATE_VAR = re.compile(r"\{(\w+)(?::[^}]*)?\}")
 
@@ -168,6 +168,11 @@ def test_enums_are_unique_string_lists(dev):
         ("routing_aes", 36, {20: "OUT1-8", 21: "OUT9-16", 24: "AUX1-6/Mon", 35: "UIN25-32"}),
         ("routing_out_a", 36, {20: "OUT1-4", 21: "OUT9-12", 24: "AUX/CR", 25: "AUX/TB"}),
         ("routing_out_b", 36, {20: "OUT5-8", 21: "OUT13-16"}),
+        # /outputs/*/NN/src 0..76 (fx_routing_scenes.md §4.7, DOC p.40-42: 1+3+16+6+32+8+8+3 = 77 entries)
+        ("output_src", 77, {0: "OFF", 1: "Main L", 2: "Main R", 3: "M/C", 4: "MixBus 01", 19: "MixBus 16", 20: "Matrix 1", 25: "Matrix 6",
+                            26: "DirectOut Ch 01", 57: "DirectOut Ch 32", 58: "DirectOut Aux 1", 65: "DirectOut Aux 8", 66: "DirectOut FX 1L",
+                            73: "DirectOut FX 4R", 74: "Monitor L", 75: "Monitor R", 76: "Talkback"}),
+        ("output_pos", 9, {0: "IN/LC", 1: "IN/LC+M", 2: "<-EQ", 3: "<-EQ+M", 4: "EQ->", 5: "EQ->+M", 6: "PRE", 7: "PRE+M", 8: "POST"}),
         ("solo_source", 7, {6: "AUX78"}),
         ("rta_visibility", 13, {0: "OFF", 1: "25%", 12: "80%"}),
         ("rta_peakhold", 9, {0: "OFF", 8: "8"}),
@@ -285,7 +290,7 @@ def test_tier2_params_are_consistent_with_guarded_globs(dev):
         else:
             root = dev["meta"]["roots"][fam].format(n=1)
         for rel, spec in params.items():
-            addr = root + "/" + rel.format(band=1, send=1, idx=1)
+            addr = root + "/" + rel.format(n=1, band=1, send=1, idx=1)  # outputs: {n}/{idx} live in the relpath, not the root
             if any(fnmatch.fnmatch(addr, g) for g in dev["guarded"]):
                 assert spec["tier"] == 2, f"{fam}:{rel} matches a guarded glob but is tier {spec['tier']}"
 
@@ -345,7 +350,21 @@ def test_node_field_order_matches_the_desk(dev):
     assert len(by_key[("fx", "/fx/{n}/par")]["fields"]) == 64
     assert by_key[("config", "/config/routing/OUT")]["fields"] == ["routing/OUT/1-4", "routing/OUT/5-8", "routing/OUT/9-12", "routing/OUT/13-16"]
     assert by_key[("config", "/config/routing/IN")]["fields"][-1] == "routing/IN/AUX"
+    # output taps: "/outputs/main/01 4 POST OFF" = src pos invert (X32.c case OMAIN); 16 XLR taps, 6 aux taps
+    assert by_key[("outputs", "/outputs/main/{n:02d}")]["fields"] == ["main/{n:02d}/src", "main/{n:02d}/pos", "main/{n:02d}/invert"]
+    assert by_key[("outputs", "/outputs/main/{n:02d}")]["for"] == {"n": [1, 16]}
+    assert by_key[("outputs", "/outputs/aux/{idx:02d}")]["fields"] == ["aux/{idx:02d}/src", "aux/{idx:02d}/pos", "aux/{idx:02d}/invert"]
+    assert by_key[("outputs", "/outputs/aux/{idx:02d}")]["for"] == {"idx": [1, 6]}
+    outs = dev["params"]["outputs"]
+    assert outs["main/{n:02d}/src"] == {"osc": "i", "enum": "output_src", "node": "int", "tier": 2}  # the desk prints the int
+    assert outs["main/{n:02d}/pos"] == {"osc": "i", "enum": "output_pos", "node": "enum", "tier": 2}
+    assert outs["main/{n:02d}/invert"] == {"osc": "i", "scale": "bool", "node": "onoff", "tier": 1}
+    assert all(outs[f"aux/{{idx:02d}}/{leaf}"] == outs[f"main/{{n:02d}}/{leaf}"] for leaf in ("src", "pos", "invert"))
+    assert "/outputs/*/src" in dev["guarded"] and "/outputs/*/pos" in dev["guarded"]
     assert len(by_key[("config", "/config/solo")]["fields"]) == 17
+    # the solo section is read-only except the three PFL/AFL mode switches (set_solo_mode, Tier 1)
+    solo_tiers = {f: dev["params"]["config"][f]["tier"] for f in by_key[("config", "/config/solo")]["fields"]}
+    assert {f for f, t in solo_tiers.items() if t == 1} == {"solo/chmode", "solo/busmode", "solo/dcamode"} and set(solo_tiers.values()) == {0, 1}
     assert by_key[("prefs", "/-prefs/rta")]["fields"] == ["rta/visibility", "rta/gain", "rta/autogain", "rta/source", "rta/pos", "rta/mode", "rta/options", "rta/det", "rta/decay", "rta/peakhold"]
     # -show/prepos is swept as its leaf (the only form confirmed anywhere, transport.md §6.4 item 12)
     assert by_key[("show", "/-show/prepos/current")]["fields"] == ["prepos/current"] and ("show", "/-show/prepos") not in by_key
@@ -424,6 +443,8 @@ VERBATIM = [
     ("/fx/1 VREV", 0, 0),
     ("/fx/1/source MIX15 MIX15", 0, 0),
     ("/fx/5 GEQ2", 0, 0),
+    ("/outputs/main/01 4 POST OFF", 0, 0),                                # fx_routing_scenes.md §4.7 node form (X32.c case OMAIN)
+    ("/outputs/aux/01 0 POST OFF", 0, 0),
     ("/fx/1/par 40 2.4 100 OFF FRONT 0.0 76 11k9 1.12 0.72 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0", 0, 0),
     ('/-show/showfile/scene/001 "AAA" "aaa" %111111110 1', 0, 0),
     ('/-show/showfile/show "MyShow" 0 0 0 0 0 0 0 0 0 0 "2.08"', 1, 0),   # trailing firmware string not declared
@@ -501,7 +522,8 @@ def test_full_sweep_node_count(dev, capsys):
     assert per_family["config"] == 21 and per_family["stat"] == 7 and per_family["prefs"] == 1
     assert per_family["auxin"] == 8 * 25 and per_family["fxrtn"] == 8 * 24 and per_family["bus"] == 16 * 19
     assert per_family["mtx"] == 6 * 14 and per_family["main"] == 38
-    assert total == sum(per_family.values()) == 2105
+    assert per_family["outputs"] == 16 + 6   # XLR OUT taps + AUX OUT taps
+    assert total == sum(per_family.values()) == 2127
     assert 2000 <= total <= 2500
     # spot-check a few concrete paths + their concrete fields
     d = dict(paths)

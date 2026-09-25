@@ -148,7 +148,7 @@ def test_every_device_yaml_format_is_implemented(d):
 
 
 def test_round_trip_every_node_section(d):
-    """Render → parse for all 2105 concrete node paths, padded and single-spaced."""
+    """Render → parse for all 2127 concrete node paths, padded and single-spaced."""
     n = 0
     for j, node in enumerate(d.nodes()):
         values = synth_values(node, j)
@@ -161,7 +161,7 @@ def test_round_trip_every_node_section(d):
             for k in node.fields:
                 assert same(back[k], values[k]), (node.path, k, values[k], back[k], line)
         n += 1
-    assert n == 2105
+    assert n == 2127
 
 
 def test_single_spaced_render_has_no_padding(d):
@@ -233,6 +233,10 @@ VERBATIM = [
     ('/fx/1 VREV', {"type": "VREV"}),
     ('/fx/5 GEQ2', {"type": "GEQ2"}),
     ('/fx/1/source MIX15 MIX15', {"source/l": "MIX15", "source/r": "MIX15"}),
+    # output taps (fx_routing_scenes.md §4.7, X32.c case OMAIN): src as int, pos token, invert token
+    ('/outputs/main/01 4 POST OFF', {"main/01/src": "MixBus 01", "main/01/pos": "POST", "main/01/invert": False}),
+    ('/outputs/main/11 6 PRE+M ON', {"main/11/src": "MixBus 03", "main/11/pos": "PRE+M", "main/11/invert": True}),
+    ('/outputs/aux/06 76 IN/LC OFF', {"aux/06/src": "Talkback", "aux/06/pos": "IN/LC", "aux/06/invert": False}),
 ]
 
 # Lines whose rendering must match the console text byte for byte (padding included).
@@ -554,9 +558,9 @@ async def test_dump_with_stub_node_many(d):
     drop = {"/fx/8/par", "/ch/32/grp", "/headamp/127"}
     conn = StubConn(lines, drop=drop)
     st = await dump_desk_state(conn, d, concurrency=4)
-    assert conn.calls and conn.calls[0][1] == 4 and len(conn.calls[0][0]) == 2105
+    assert conn.calls and conn.calls[0][1] == 4 and len(conn.calls[0][0]) == 2127
     assert set(st.missing) == drop
-    assert len(st.sections) == 2105 - len(drop)
+    assert len(st.sections) == 2127 - len(drop)
     assert st.scene == {"index": 7, "name": "Molecules"}
     assert st.console == {"name": "X32-FAKE", "model": "X32RACK", "firmware": "4.06"}
     assert st.get("/ch/03/mix/fader") is None and st.get("/ch/03/mix/pan") == 0

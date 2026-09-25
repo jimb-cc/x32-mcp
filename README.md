@@ -7,7 +7,7 @@
 An MCP server that lets Claude operate a **live sound mixing console** — safely enough to use at a
 real gig, with the safety rules enforced in code rather than in a prompt.
 
-It talks to a Behringer X32 Rack over the console's own network protocol, exposes 51 tools that
+It talks to a Behringer X32 Rack over the console's own network protocol, exposes 63 tools that
 speak in decibels and channel numbers rather than raw floats, and refuses to do anything
 dangerous without a human saying yes. On top of that sits **CFS²**, a feedback-suppression
 assistant that closes a real-time control loop *inside the server*, because a language model is
@@ -176,7 +176,7 @@ in code.
 
 | Module | Responsibility |
 |---|---|
-| `server.py` | 51 MCP tools. Thin — parse arguments, delegate, format the envelope. |
+| `server.py` | 57 MCP tools. Thin — parse arguments, delegate, format the envelope. |
 | `policy.py` | Tiers, clamps, ramps, confirmation tokens, rate limiting, show mode. |
 | `desk.py` | Typed reads and writes in engineering units. Mute inversion lives here. |
 | `connection.py`, `osc.py` | One UDP socket, heartbeat, request/reply matching, reconnect backoff. |
@@ -496,8 +496,10 @@ snapshot-before-first-write) · **T2** guarded (confirmation token, see the safe
 | `set_fader(target, db, ramp_ms=300, force=False)` | T1 | Fader to an absolute `db` (channels/aux/FX rtn/DCA cap +5 dB, buses/matrices 0 dB; ≤ −90 = −∞), ramped. The move size is not limited — the ceiling bounds it — so a fader can come up from silence directly; `force` is accepted but unnecessary |
 | `adjust_fader(target, delta_db, ramp_ms=300, force=False)` | T1 | Relative move ("2 dB down" = −2) with the same clamps and limit |
 | `mute(target)` / `unmute(target)` | T1 | Mute/unmute a channel, bus, matrix, DCA … (mains: `set_main_mute`) |
-| `set_send(ch, bus, db, ramp_ms=300, force=False)` | T1 | Send from an input strip to bus 1..16 (cap 0 dB), ramped |
+| `set_send(ch, bus, db=None, ramp_ms=300, force=False, on=None)` | T1 | Send from an input strip to bus 1..16: the level (cap 0 dB, ramped) and/or the send's on/off switch — give `db` and/or `on` |
 | `adjust_send(ch, bus, delta_db, ramp_ms=300, force=False)` | T1 | "More kick in Tony's ears" = `adjust_send("Kick", tonys_bus, +2)` |
+| `set_send_tap(ch, bus, tap)` | T1 | Tap point of a send: `IN/LC <-EQ EQ-> PRE POST GRP` (or `in`, `pre-eq`, `post-eq`, `pre`, `post`, `grp`, any case). The X32 keeps one tap per odd/even bus pair on the odd send, so bus 4 sets buses 3-4 — the summary names the pair. From a mix bus the sends go to matrices 1..6 (no `GRP`) |
+| `set_main_assign(target, lr=, mono=, mono_level_db=)` | T1 | Main L/R assign, Main M/C assign and the M/C send level (cap 0 dB, ramped) of a channel, aux-in, FX return or bus; give at least one |
 | `set_eq_band(target, band, freq_hz=, gain_db=, q=, type=, on=)` | T1 | One EQ band: 20..20 kHz, ±15 dB (clamped), Q 0.3..10, `LCut LShv PEQ VEQ HShv HCut`; `on` switches the whole EQ |
 | `set_pan(target, pan)` | T1 | −100 (L) .. 0 .. +100 (R) |
 | `set_comp(target, on=, threshold_db=, ratio=, attack_ms=, release_ms=, knee=, makeup_db=, mix_pct=)` | T1 | Compressor; only the values given are written; make-up gain clamped to `policy.dyn_makeup_max_db` (6 dB). Main LR/M-C EQ and dynamics are guarded (refused here — change them on the console) |
@@ -529,9 +531,18 @@ snapshot-before-first-write) · **T2** guarded (confirmation token, see the safe
 | Tool | Tier | What it does |
 |---|---|---|
 | `label_channel(ch, name=, color=, icon=)` | T1 | Name (≤ 12 chars), colour token or friendly name, icon 1..74 |
+| `label_bus(bus, name=, color=, icon=)` | T1 | The same for mix bus 1..16 (`/bus/NN/config/*`) — "Tony IEM" on the scribble strip |
 | `apply_patch_plan(file, include_source=False, confirm_token=None)` | T1 / T2 | Names and colours from a plan (T1, writes only what differs); `include_source=true` also patches input sources (T2) |
 | `export_patch_plan(file)` | T0 | Write the desk's names/colours/sources to `patches/<file>.yaml|.csv`, keeping mic/owner/monitor_bus metadata of an existing file |
 | `set_channel_config(ch, source=, link=, confirm_token=None)` | T2 | Input source (`IN05`, `AUX1`, `USBL`, `FX1L`, `BUS03`, `OFF`) and/or stereo link of the channel pair |
+| `get_outputs()` | T0 | The physical output taps: XLR OUT 1..16 (`main`) and rear AUX OUT 1..6 (`aux`), each `{out, source, pos, invert, target, name, follows_mute}` (`follows_mute`: only `POST` and the `+M` taps go quiet with the source's mute), plus the `/config/routing/OUT` blocks (`xlr`: does the socket carry its own tap) and `/config/routing/AES50A` blocks (`aes50a`: snake channels copying the tap) |
+| `set_output(out, source=, pos=, invert=, confirm_token=None)` | T2 | Patch XLR output tap 1..16: source (`MixBus 03` / `bus 3`, `Matrix 2`, `Main L`, `M/C`, `DirectOut Ch 05` / `ch 5`, `DirectOut Aux 2`, `DirectOut FX 1L`, `Monitor L`, `Talkback`, `OFF`; any case), tap point (`IN/LC`, `<-EQ`, `EQ->`, `PRE`, their `+M` mute-following variants, `POST`) and polarity; the first call describes the change, nothing is written without the token |
+| `set_aux_output(out, source=, pos=, invert=, confirm_token=None)` | T2 | The same for the six rear AUX OUT taps (`/outputs/aux/NN`) |
+| `get_routing()` | T0 | The input routing in one read: the five `IN` blocks and `routswitch`, the 32 User-In slots decoded to tokens (`OFF`, `IN04`, `A01`, `B01`, `CARD01`, `AUX1`, `TBINT`/`TBEXT`) with whether each is live and which In it feeds, the eight bus stereo links, the PFL/AFL solo modes |
+| `set_bus_link(bus, on, confirm_token=None)` | T2 | Stereo-link or unlink the mix-bus pair containing `bus` (1-2, 3-4 … 15-16) — `/config/buslink/N-M` |
+| `set_input_block(block, source, confirm_token=None)` | T2 | Route an input block (`1-8`, `9-16`, `17-24`, `25-32`, `AUX`; also `ch 17-24`, `IN/17-24`) to a source (`AN1-8`, `A17-24`, `B1-8`, `CARD1-8`, `UIN17-24`; the AUX block takes `AUX1-4`, `AN1-6`, `A1-6`, `UIN1-6` …) — `/config/routing/IN/<block>`; the summary shows current → new |
+| `set_user_in(slot, source, confirm_token=None)` | T2 | Patch User-In slot 1..32 (`/config/userrout/in/NN`, used when an `IN` block reads `UIN*`): `OFF`, `IN01..IN32` / `local 4` (local XLR), `A01..A48` (AES50-A), `B01..B48` (AES50-B), `CARD01..CARD32`, `AUX1..AUX6`, `TBINT`, `TBEXT` or the desk's own number 0..168 |
+| `set_solo_mode(channels=, buses=, dcas=)` | T1 | `PFL` or `AFL` solo mode of the channels, the mix buses and/or the DCAs (`/config/solo/chmode`, `busmode`, `dcamode`) |
 
 ### Phase 5 — meters and CFS²
 
@@ -579,7 +590,7 @@ Enforced by [`policy.py`](src/x32mcp/policy.py) on every write path; the limits 
 
 **Tier 0 — read.** Always allowed, including while the connection is degraded.
 
-**Tier 1 — mix moves.** Faders, sends, mutes, pan, EQ, dynamics, labels, feedback watch.
+**Tier 1 — mix moves.** Faders, sends, mutes, pan, EQ, dynamics, labels, solo PFL/AFL modes, feedback watch.
 - Clamps (reported, never silently applied): channel/aux/FX-return/DCA faders ≤ +5 dB, bus
   and matrix masters ≤ 0 dB, sends ≤ 0 dB, EQ gain ±15 dB. Anything below −90 dB is −∞.
 - Relative limit: **`adjust_fader` / `adjust_send` only** — one call may move a level at most
@@ -599,7 +610,8 @@ Enforced by [`policy.py`](src/x32mcp/policy.py) on every write path; the limits 
   refused by Tier-1 tools with `GUARDED` even if a target sneaks one in.
 
 **Tier 2 — guarded.** `set_main_fader`, `set_main_mute`, `recall_scene`, `save_scene`,
-`restore_snapshot`, `set_channel_config`, `apply_patch_plan(include_source=true)`,
+`restore_snapshot`, `set_channel_config`, `set_output`, `set_aux_output`, `set_bus_link`, `set_input_block`, `set_user_in`,
+`apply_patch_plan(include_source=true)`,
 `setup_ringout_eqs` (when it must change something), `ring_out`, `ring_out_system`. These use
 the **confirmation dance**: the first call does nothing on the desk and returns
 

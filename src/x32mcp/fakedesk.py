@@ -145,6 +145,10 @@ _DEFAULTS: dict[str, Any] = {
     "routing/AES50B/25-32": "P169-16", "routing/AES50B/33-40": "AUX1-6/Mon", "routing/AES50B/41-48": "AuxIN1-6/TB",
     "routing/CARD/1-8": "AN1-8", "routing/CARD/9-16": "AN9-16", "routing/CARD/17-24": "AN17-24", "routing/CARD/25-32": "AN25-32",
     "routing/OUT/1-4": "OUT1-4", "routing/OUT/5-8": "OUT5-8", "routing/OUT/9-12": "OUT9-12", "routing/OUT/13-16": "OUT13-16",
+    # output taps (fx_routing_scenes.md §4.7): main/NN/src = MixBus NN is computed in _default_value; every tap POST, not inverted;
+    # the rear AUX outs carry nothing until somebody patches them
+    "main/{n:02d}/pos": "POST", "main/{n:02d}/invert": False,
+    "aux/{idx:02d}/src": "OFF", "aux/{idx:02d}/pos": "POST", "aux/{idx:02d}/invert": False,
     "solo/level": 0.0, "solo/source": "LR", "solo/sourcetrim": 0.0, "solo/chmode": "PFL", "solo/busmode": "AFL",
     "solo/dcamode": "AFL", "solo/exclusive": False, "solo/followsel": True, "solo/followsolo": True, "solo/dimatt": -20.0,
     "solo/dim": False, "solo/mono": False, "solo/delay": False, "solo/delaytime": 0.3, "solo/masterctrl": False,
@@ -633,6 +637,10 @@ class FakeDesk:
                 return f"MIX{12 + int(n)}"  # factory default: Mix 13-16 feed FX 1-4
             if rel.startswith("par/"):
                 return 0.5  # raw 0.5 = 0 dB on a GEQ
+        if fam == "outputs" and rel == "main/{n:02d}/src":
+            # factory-style patch: XLR OUT n carries MixBus n (output_src index 3 + n, fx_routing_scenes.md §4.7);
+            # a real desk's shipped OUT 15/16 = Main L/R is UNCONFIRMED (§13 item 13), so the fake keeps the pattern
+            return self.d.enum("output_src")[3 + int(n)]
         if fam == "show" and rel.startswith("showfile/scene/"):
             idx = int(vars.get("idx", 0))
             sc = _SCENES.get(idx)

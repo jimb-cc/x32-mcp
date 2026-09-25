@@ -78,7 +78,8 @@ from .cfs import CfsError, CfsManager, CfsMode, ReportStore
 from .config import Settings
 from .connection import ConnectionError as X32ConnectionError, ConnectionState, NotConnected, RequestTimeout, X32Connection
 from .descriptor import Descriptor
-from .desk import Desk, DeskError
+from .desk import (IN_BLOCKS, Desk, DeskError, bus_link_pair, in_block, normalise_output_pos, normalise_output_source,
+                   output_source_target, routing_token, user_in_number, user_in_source)
 from .events import EventBus
 from .meters import METER_GROUPS, LiveMeters, RtaSourceError, average_frames, rta_band_hz, set_rta_source
 from .nodes import SnapshotError, SnapshotStore, describe_changes, diff_states
@@ -109,19 +110,15 @@ _ARROW = "→"
 INSTRUCTIONS = """\
 x32-mcp controls one Behringer X32/M32 mixer over OSC. Call connect(host) first (discover_consoles \
 finds desks on the LAN), then read with get_channel/get_bus/get_main/get_strip/get_channel_sends/\
-get_eq/get_dynamics. Units everywhere: dB for levels and gains ("-oo" = fader fully down), Hz, ms, %, \
+get_eq/get_dynamics/get_routing. Units everywhere: dB for levels and gains ("-oo" = fader fully down), Hz, ms, %, \
 pan -100 (L) .. +100 (R), 1-based channel/bus numbers, enum tokens (PEQ, RD, IN05). A target is \
 'ch.5', 'bus.3', 'main.st', 'main.m', 'dca.1', 'mtx.2', 'auxin.1', 'fxrtn.1' or a strip name ('Vox Tony').
 Safety tiers (enforced in code): Tier 0 reads are always allowed. Tier 1 mix moves (set_fader, \
-adjust_fader, mute/unmute, set_send, set_eq_band, set_pan, set_comp, set_gate, label_channel, \
-apply_patch_plan names/colours, feedback_watch) are clamped (channels +5 dB, buses/main/sends 0 dB, \
-EQ +-15 dB), ramped (default 300 ms) and limited to +-6 dB per call (+-3 dB in show mode); a larger \
+adjust_fader, mute/unmute, set_send, set_send_tap, set_main_assign, set_eq_band, set_pan, set_comp, set_gate, \nlabel_channel, label_bus, set_solo_mode, apply_patch_plan names/colours, feedback_watch) are clamped (channels +5 dB, buses/main/sends 0 dB, \nEQ +-15 dB), ramped (default 300 ms) and limited to +-6 dB per call (+-3 dB in show mode); a larger \
 move needs force=true, which you pass ONLY when the user explicitly asked for a move of that size. \
 get_rta(target) is Tier 1 too: pointing the RTA writes the console's RTA prefs (get_rta() alone only reads). \
 The first write of a session automatically snapshots the whole desk (restore_snapshot undoes). \
-Tier 2 (set_main_fader, set_main_mute, recall_scene, save_scene, restore_snapshot, set_channel_config, \
-apply_patch_plan with include_source, setup_ringout_eqs, ring_out, ring_out_system) uses a confirmation \
-dance: the first call returns requires_confirmation=true with an action_summary and a single-use \
+Tier 2 (set_main_fader, set_main_mute, recall_scene, save_scene, restore_snapshot, set_channel_config, set_bus_link, set_input_block, set_user_in, \nset_output, set_aux_output, apply_patch_plan with include_source, setup_ringout_eqs, ring_out, ring_out_system) uses a confirmation \ndance: the first call returns requires_confirmation=true with an action_summary and a single-use \
 confirm_token (valid for a few minutes, single use). Show the action_summary to the user; only after they agree, call the SAME tool \
 with the SAME arguments plus confirm_token. Never invent, reuse or pre-empt a token and never confirm \
 on the user's behalf.
@@ -1005,28 +1002,57 @@ async def unmute(target: str) -> dict[str, Any]:
     return _ok(f"{_who(t, name)} unmuted" + (" (was not muted)" if res.get("was_muted") is False else ""), name=name, **res)
 
 
+def _send_dest(t: Target, send_to: int) -> Target:
+    """The strip a send number of ``t`` feeds: a mix bus from an input strip, a matrix from a bus/main."""
+    dest_fam = _app().descriptor.strips[t.family].send_target or "bus"
+    return Target(dest_fam, int(send_to))
+
+
+async def _send_head(desk: Desk, t: Target, send_to: int) -> str:
+    """``Bus 3 'Bus03' send from Ch 1 'Ch01'`` — the subject of every send summary."""
+    dest = _send_dest(t, send_to)
+    return f"{_who(dest, await _name(desk, dest))} send from {_who(t, await _name(desk, t))}"
+
+
 async def _send_summary(desk: Desk, t: Target, res: dict[str, Any]) -> str:
-    dest_fam = _app().descriptor.strips[t.family].send_target or "bus"  # bus/main send to matrices
-    dest = Target(dest_fam, int(res["send_to"]))
-    dest_name = await _name(desk, dest)
-    name = await _name(desk, t)
-    return _level_summary(f"{_who(dest, dest_name)} send from {_who(t, name)}", res, kind="")
+    return _level_summary(await _send_head(desk, t, int(res["send_to"])), res, kind="")
 
 
 @server.tool()
 @_tool(timeout=None)
-async def set_send(ch: str, bus: int, db: float, ramp_ms: int = 300, force: bool = False) -> dict[str, Any]:
-    """Set channel ch's send to bus (1..16) to an absolute level in dB (-90 = -oo, ceiling 0 dB).
-    Ramped over ramp_ms. The size of the move is NOT limited — a send sitting at -oo can be
-    brought straight up to a working level ("more kick in Tony's ears"); force is accepted but not
-    needed. Use adjust_send for relative moves, where the ±6 dB guard applies. Tier 1."""
+async def set_send(ch: str, bus: int, db: float | None = None, ramp_ms: int = 300, force: bool = False, on: bool | None = None) -> dict[str, Any]:
+    """Channel ch's send to bus (1..16): db = an absolute level in dB (-90 = -oo, ceiling 0 dB),
+    ramped over ramp_ms; on = the send's on/off switch. Give db and/or on (a send being switched
+    off is muted before the level moves, one being switched on after it). The size of the move is
+    NOT limited — a send sitting at -oo can be brought straight up to a working level ("more kick
+    in Tony's ears"); force is accepted but not needed. Use adjust_send for relative moves, where
+    the ±6 dB guard applies; set_send_tap for pre/post. Tier 1."""
+    if db is None and on is None:
+        raise DeskError("BAD_ARGUMENT", "nothing to set: give db (the send level) and/or on (the send switch)")
     desk = _desk()
     ms = _int_arg(ramp_ms, "ramp_ms", 0, 60_000)
 
     async def body() -> dict[str, Any]:
         t = await desk.resolve(ch)
-        res = await desk.set_send(t, int(bus), float(db), ramp_ms=ms, force=bool(force))
-        return _ok(await _send_summary(desk, t, res), **res)
+        out: dict[str, Any] = {}
+        sw: dict[str, Any] | None = None
+        if on is not None and not on:
+            sw = await desk.set_send_mute(t, int(bus), True, tool="set_send")
+        if db is not None:
+            res = await desk.set_send(t, int(bus), float(db), ramp_ms=ms, force=bool(force))
+            out.update(res)
+            summary = await _send_summary(desk, t, res)
+        if on is not None and on:
+            sw = await desk.set_send_mute(t, int(bus), False, tool="set_send")
+        if sw is not None:
+            if db is None:
+                out.update({"target": t.key, "label": t.label, "send_to": sw["send_to"], "kind": "send"})
+                summary = await _send_head(desk, t, sw["send_to"])
+            out["on"] = bool(on)
+            out["was_on"] = None if sw["was_muted"] is None else not sw["was_muted"]
+            state = "ON" if on else "OFF"
+            summary += (", " if db is not None else " ") + f"switched {state}" + (f" (was already {state})" if out["was_on"] is bool(on) else "")
+        return _ok(summary, **out)
 
     return await _bounded_level(body(), ms, "set_send")
 
@@ -1046,6 +1072,59 @@ async def adjust_send(ch: str, bus: int, delta_db: float, ramp_ms: int = 300, fo
         return _ok(await _send_summary(desk, t, res), **res)
 
     return await _bounded_level(body(), ms, "adjust_send")
+
+
+_DEST_PLURAL = {"bus": "buses", "mtx": "matrices"}
+
+
+@server.tool()
+@_tool()
+async def set_send_tap(ch: str, bus: int, tap: str) -> dict[str, Any]:
+    """Tap point of the send from ch (an input strip: 'ch.5', 'auxin.1', 'fxrtn.2' or a name) to
+    bus 1..16: IN/LC (input, before the low-cut), <-EQ (pre-EQ), EQ-> (post-EQ, pre-fader), PRE
+    (pre-fader), POST (post-fader) or GRP (subgroup: the send follows the fader at 0 dB); also 'in',
+    'pre-eq', 'post-eq', 'pre', 'post', 'grp', any case. The X32 keeps ONE tap per odd/even bus pair
+    (on the odd send), so setting bus 4 changes buses 3-4 — the summary says which pair. From a mix
+    bus the sends go to matrices 1..6 (no GRP there). Tier 1."""
+    desk = _desk()
+    t = await desk.resolve(ch)
+    res = await desk.set_send_tap(t, bus, tap)
+    head = await _send_head(desk, t, res["send_to"])
+    lo, hi = res["pair"]
+    plural = _DEST_PLURAL.get(_send_dest(t, res["send_to"]).family, "buses")
+    summary = f"{head} tap {res.get('before') or '?'} {_ARROW} {res['tap']} ({plural} {lo}-{hi} share the tap point)"
+    if res.get("before") == res["tap"]:
+        summary += " (unchanged)"
+    return _ok(summary, **res)
+
+
+@server.tool()
+@_tool(timeout=None)
+async def set_main_assign(target: str, lr: bool | None = None, mono: bool | None = None, mono_level_db: float | None = None) -> dict[str, Any]:
+    """Main assigns of a channel, aux-in, FX return or bus: lr = feed Main L/R, mono = feed Main
+    M/C, mono_level_db = the M/C send level (-90 = -oo, ceiling 0 dB, ramped over the policy
+    default; written before M/C is switched on / after it is switched off when both are given).
+    Give at least one. Tier 1 — the mains' own faders and mutes are set_main_fader / set_main_mute."""
+    if lr is None and mono is None and mono_level_db is None:
+        raise DeskError("BAD_ARGUMENT", "nothing to set: give lr, mono and/or mono_level_db")
+    desk = _desk()
+    ms = int(_app().policy.ramp_default_ms)
+
+    async def body() -> dict[str, Any]:
+        t = await desk.resolve(target)
+        res = await desk.set_main_assign(t, lr=lr, mono=mono, mono_level_db=mono_level_db, ramp_ms=ms)
+        name = await _name(desk, t)
+        ap = res["applied"]
+        parts = []
+        if "lr" in ap:
+            parts.append(f"Main L/R {'ON' if ap['lr'] else 'OFF'}")
+        if "mono" in ap:
+            parts.append(f"M/C {'ON' if ap['mono'] else 'OFF'}")
+        if res.get("mono_level"):
+            parts.append(_level_summary("M/C level", res["mono_level"], kind=""))
+        return _ok(f"{_who(t, name)}: " + ", ".join(parts), name=name, **res)
+
+    return await _bounded_level(body(), ms, "set_main_assign")
 
 
 @server.tool()
@@ -1446,14 +1525,11 @@ async def show_mode(on: bool, confirm_token: str | None = None) -> dict[str, Any
 # -- tools: labels, patches, config ------------------------------------------------------------------------
 
 
-@server.tool()
-@_tool()
-async def label_channel(ch: int, name: str | None = None, color: str | None = None, icon: int | None = None) -> dict[str, Any]:
-    """Name (≤ 12 characters, longer is truncated), colour (RD GN YE BL MG CY WH OFF, +i for inverted,
-    or red/green/…/'blue inverted') and icon number (1..74) of channel ch. Tier 1."""
+async def _label_strip(t: Target, name: str | None, color: str | None, icon: int | None) -> dict[str, Any]:
+    """The label tools' shared body: colour in any spelling → token, ``Desk.label`` (which truncates
+    the name to 12 characters and says so), one summary line."""
     a = _app()
     desk = _desk()
-    t = Target("ch", _int_arg(ch, "ch", 1, 32))
     tok: str | None = None
     if color is not None:
         try:
@@ -1470,6 +1546,23 @@ async def label_channel(ch: int, name: str | None = None, color: str | None = No
     if "icon" in ap:
         parts.append(f"icon {ap['icon']}")
     return _ok(f"{t.label} " + ", ".join(parts), **res)
+
+
+@server.tool()
+@_tool()
+async def label_channel(ch: int, name: str | None = None, color: str | None = None, icon: int | None = None) -> dict[str, Any]:
+    """Name (≤ 12 characters, longer is truncated), colour (RD GN YE BL MG CY WH OFF, +i for inverted,
+    or red/green/…/'blue inverted') and icon number (1..74) of channel ch. Tier 1."""
+    return await _label_strip(Target("ch", _int_arg(ch, "ch", 1, 32)), name, color, icon)
+
+
+@server.tool()
+@_tool()
+async def label_bus(bus: int, name: str | None = None, color: str | None = None, icon: int | None = None) -> dict[str, Any]:
+    """Name (≤ 12 characters, longer is truncated), colour (RD GN YE BL MG CY WH OFF, +i for inverted,
+    or red/green/…/'blue inverted') and icon number (1..74) of mix bus 1..16 — "Tony IEM" on the
+    scribble strip. Tier 1."""
+    return await _label_strip(Target("bus", _int_arg(bus, "bus", 1, 16)), name, color, icon)
 
 
 @server.tool()
@@ -1568,6 +1661,225 @@ async def set_channel_config(ch: int, source: str | None = None, link: bool | No
         applied["link"] = bool(link)
         applied["link_pair"] = f"{pair[0]}-{pair[1]}"
     return _ok(f"{_who(t, strip.get('name'))}: {_applied_text(applied)}", target=t.key, label=t.label, applied=applied)
+
+
+# -- tools: output taps ----------------------------------------------------------------------------------------
+
+_ARROW_FROM = "←"
+_OUTPUT_SOCKET = {"main": "XLR out", "aux": "rear aux out"}
+
+
+def _tap_text(tap: dict[str, Any]) -> str:
+    """``MixBus 03 'Wedge A' POST`` / ``OFF`` / ``Main L PRE (ignores mute) inverted`` for summaries."""
+    src = tap.get("source") or "?"
+    if src == "OFF":
+        return "OFF" + (" inverted" if tap.get("invert") else "")
+    name = f" '{tap['name']}'" if tap.get("name") else ""
+    mute = " (ignores mute)" if tap.get("follows_mute") is False else ""
+    inv = " inverted" if tap.get("invert") else ""
+    return f"{src}{name} {tap.get('pos') or '?'}{mute}{inv}"
+
+
+def _taps_text(label: str, taps: list[dict[str, Any]]) -> str:
+    if not taps:
+        return f"{label}: none"
+    span = f"{label} {taps[0]['out']}-{taps[-1]['out']}"
+    if all(t.get("source") == "OFF" and not t.get("invert") for t in taps):
+        return f"{span}: all OFF"
+    return f"{span}: " + ", ".join(f"{t['out']} {_ARROW_FROM} {_tap_text(t)}" for t in taps)
+
+
+@server.tool()
+@_tool()
+async def get_outputs() -> dict[str, Any]:
+    """The desk's physical output taps: XLR OUT 1..16 (main) and rear AUX OUT 1..6 (aux), each
+    {out, source, pos, invert, target, name, follows_mute} — source is what feeds the socket ('MixBus 03',
+    'Main L', 'DirectOut Ch 05', 'OFF'), pos the tap point (POST = post-fader; only POST and the +M taps
+    go quiet with the source's mute), target/name the strip it taps — plus the routing blocks that
+    carry them: /config/routing/OUT (which taps reach the XLR sockets; xlr per tap) and
+    /config/routing/AES50A (what goes down the AES50-A snake; aes50a channels per tap). Tier 0."""
+    desk = _desk()
+    res = await desk.get_outputs()
+    out_blocks, aes_blocks = res["routing"]["OUT"], res["routing"]["AES50A"]
+    off_socket = [f"XLR {k} carry {v}" for k, v in out_blocks.items() if v is not None and v != f"OUT{k}"]
+    parts = [
+        _taps_text("XLR OUT", res["main"]),
+        _taps_text("AUX OUT", res["aux"]),
+        ("; ".join(off_socket) + " (not their own taps)") if off_socket else "every XLR socket carries its own tap",
+        "AES50-A " + ", ".join(f"{k} {_ARROW_FROM} {v}" for k, v in aes_blocks.items()),
+    ]
+    return _ok("; ".join(parts), main=res["main"], aux=res["aux"], routing=res["routing"])
+
+
+async def _output_dance(group: str, tool: str, out: Any, source: Any, pos: Any, invert: Any, confirm_token: str | None) -> dict[str, Any]:
+    """The Tier-2 dance shared by set_output / set_aux_output: normalise every argument, read the
+    tap, describe the change, confirm, then write through :meth:`Desk.set_output` and read back."""
+    a = _app()
+    desk = _desk()
+    if source is None and pos is None and invert is None:
+        raise DeskError("BAD_ARGUMENT", "give source, pos and/or invert")
+    src_tok = normalise_output_source(source, a.descriptor.enum("output_src")) if source is not None else None
+    pos_tok = normalise_output_pos(pos, a.descriptor.enum("output_pos")) if pos is not None else None
+    if invert is not None and not isinstance(invert, bool):
+        raise DeskError("BAD_ARGUMENT", f"invert must be true/false, got {invert!r}")
+    cur = await desk.get_output(group, out)  # validates out (BAD_ARGUMENT) and gives the summary its "before"
+    n = cur["out"]
+    parts: list[str] = []
+    if src_tok is not None:
+        new_name = ""
+        t = output_source_target(src_tok)
+        if t is not None:
+            nm = await _name(desk, t)
+            new_name = f" '{nm}'" if nm else ""
+        cur_name = f" '{cur['name']}'" if cur.get("name") else ""
+        parts.append(f"source {cur.get('source')}{cur_name} {_ARROW} {src_tok}{new_name}")
+    if pos_tok is not None:
+        note = "" if pos_tok in ("POST",) or pos_tok.endswith("+M") else " (does not follow the source's mute)"
+        parts.append(f"tap {cur.get('pos')} {_ARROW} {pos_tok}{note}")
+    if invert is not None:
+        parts.append(f"polarity {'inverted' if cur.get('invert') else 'normal'} {_ARROW} {'inverted' if invert else 'normal'}")
+    payload = {"group": group, "out": n, "source": src_tok, "pos": pos_tok, "invert": invert}
+    summary = f"{cur['label']} ({_OUTPUT_SOCKET[group]} {n}): " + ", ".join(parts)
+    pending = _confirm(tool, summary, payload, confirm_token, current=cur)
+    if pending:
+        return pending
+    res = await desk.set_output(group, n, source=src_tok, pos=pos_tok, invert=invert, tool=tool)
+    after = await desk.get_output(group, n)
+    return _ok(f"{cur['label']}: {_applied_text(res['applied'])} — now {_tap_text(after)}", **res, before=cur, after=after)
+
+
+@server.tool()
+@_tool()
+async def set_output(out: int, source: str | None = None, pos: str | None = None, invert: bool | None = None, confirm_token: str | None = None) -> dict[str, Any]:
+    """Patch XLR output tap out (1..16): source = what feeds it ('MixBus 03' / 'bus 3', 'Matrix 2', 'Main L',
+    'Main R', 'M/C', 'DirectOut Ch 05' / 'ch 5', 'DirectOut Aux 2', 'DirectOut FX 1L', 'Monitor L', 'Talkback', 'OFF';
+    any case), pos = tap point (IN/LC, <-EQ, EQ->, PRE, each also as +M = follows the source's mute, POST = post-fader,
+    follows the mute), invert = polarity. TIER 2 confirmation dance (confirm_token) — this changes what comes out
+    of a physical socket. The first call reads the tap and describes the change; nothing is written without a token."""
+    return await _output_dance("main", "set_output", out, source, pos, invert, confirm_token)
+
+
+@server.tool()
+@_tool()
+async def set_aux_output(out: int, source: str | None = None, pos: str | None = None, invert: bool | None = None, confirm_token: str | None = None) -> dict[str, Any]:
+    """Patch rear AUX OUT tap out (1..6): the same source / pos / invert arguments as set_output (sources
+    'MixBus 03', 'Main L', 'DirectOut Ch 05', 'Monitor L', 'OFF' …; taps POST, PRE, PRE+M …). TIER 2
+    confirmation dance (confirm_token) — this changes what comes out of a physical socket."""
+    return await _output_dance("aux", "set_aux_output", out, source, pos, invert, confirm_token)
+# -- tools: routing, stereo links, solo --------------------------------------------------------------
+
+
+def _routing_summary(r: dict[str, Any]) -> str:
+    blocks = ", ".join(f"{k} {r['inputs'].get(k)}" for k in IN_BLOCKS)
+    live = sum(1 for u in r["user_in"] if u.get("active"))
+    links = [k for k, v in r["bus_links"].items() if v]
+    s = r["solo"]
+    return (f"Inputs ({r.get('routswitch')}): {blocks}; User-In slots live: {live}; bus links: {', '.join(links) or 'none'}; "
+            f"solo channels {s.get('channels')}, buses {s.get('buses')}, DCAs {s.get('dcas')}")
+
+
+def _onoff(v: Any) -> str:
+    return "ON" if v else "OFF"
+
+
+@server.tool()
+@_tool()
+async def get_routing() -> dict[str, Any]:
+    """The input routing in one read: the five /config/routing/IN blocks (1-8, 9-16, 17-24, 25-32, AUX)
+    and routswitch (REC/PLAY), the 32 User-In slots decoded to tokens (OFF; IN01..IN32 local XLR;
+    A01..A48 AES50-A; B01..B48 AES50-B; CARD01..CARD32; AUX1..AUX6; TBINT/TBEXT) with whether each is
+    live and which In it feeds, the eight bus stereo links and the PFL/AFL solo modes. Tier 0."""
+    desk = _desk()
+    res = await desk.get_routing()
+    return _ok(_routing_summary(res), **res)
+
+
+@server.tool()
+@_tool()
+async def set_bus_link(bus: int, on: bool, confirm_token: str | None = None) -> dict[str, Any]:
+    """Stereo-link (on=true) or unlink the mix-bus pair that contains bus (1..16: pairs 1-2, 3-4 … 15-16).
+    TIER 2 confirmation dance (confirm_token) — linking re-syncs the pair's EQ, dynamics, fader and mute."""
+    desk = _desk()
+    o, e = bus_link_pair(_int_arg(bus, "bus", 1, 16))
+    pair = f"{o}-{e}"
+    cur = (await desk.get_routing())["bus_links"].get(pair)
+    names = [await _name(desk, Target("bus", b)) for b in (o, e)]
+    who = f"Bus {pair}" + (f" ('{names[0]}' / '{names[1]}')" if any(names) else "")
+    new = bool(on)
+    summary = f"Stereo link {who}: {_onoff(cur)} {_ARROW} {_onoff(new)}" + (" (no change)" if cur == new else "")
+    payload = {"pair": pair, "on": new, "before": cur}
+    pending = _confirm("set_bus_link", summary, payload, confirm_token, current=cur)
+    if pending:
+        return pending
+    res = await desk.set_bus_link(o, new)
+    return _ok(f"Stereo link {who} {_onoff(res['link'])}", **res)
+
+
+@server.tool()
+@_tool()
+async def set_input_block(block: str, source: str, confirm_token: str | None = None) -> dict[str, Any]:
+    """Route an input block: block '1-8', '9-16', '17-24', '25-32' (also 'ch 17-24', 'IN/17-24') or 'AUX';
+    source a routing token — AN1-8 … AN25-32 (local XLR), A1-8 … A41-48 (AES50-A), B1-8 … B41-48 (AES50-B),
+    CARD1-8 … CARD25-32, UIN1-8 … UIN25-32 (the User-In patch, see set_user_in); the AUX block takes
+    AUX1-4 (the local aux inputs) or AN/A/B/CARD/UIN 1-2, 1-4, 1-6. Writes /config/routing/IN/<block>
+    (the table in force while routswitch is REC). TIER 2 confirmation dance (confirm_token) — this
+    changes which physical inputs the channels hear."""
+    a = _app()
+    desk = _desk()
+    key = in_block(block)
+    tok = routing_token(source, a.descriptor.enum("routing_in_aux" if key == "AUX" else "routing_in"))
+    r = await desk.get_routing()
+    cur = r["inputs"].get(key)
+    what = f"Input block {key} ({'Aux In 1-6' if key == 'AUX' else f'In {key}'})"
+    summary = f"{what}: {cur} {_ARROW} {tok}" + (" (no change)" if cur == tok else "")
+    if r.get("routswitch") == "PLAY":
+        summary += " — note: the desk is in PLAY routing, so the IN table is not in force until routswitch is REC"
+    payload = {"block": key, "source": tok, "before": cur}
+    pending = _confirm("set_input_block", summary, payload, confirm_token, current=cur)
+    if pending:
+        return pending
+    res = await desk.set_input_block(key, tok)
+    return _ok(f"{what} {res['before']} {_ARROW} {res['source']}", **res)
+
+
+@server.tool()
+@_tool()
+async def set_user_in(slot: int, source: str | int, confirm_token: str | None = None) -> dict[str, Any]:
+    """Patch User-In slot 1..32 (/config/userrout/in/NN — the per-input patch an IN block uses when it
+    reads UIN*). source is a token or the desk's own number 0..168: OFF = 0; IN01..IN32 ('in 4',
+    'local 4', 'xlr 4') = 1..32 local XLR; A01..A48 ('AES50-A 1') = 33..80; B01..B48 = 81..128 AES50-B;
+    CARD01..CARD32 ('usb 1') = 129..160; AUX1..AUX6 ('aux in 2') = 161..166; TBINT = 167, TBEXT = 168
+    (talkback). TIER 2 confirmation dance (confirm_token) — this changes which physical input a channel hears."""
+    desk = _desk()
+    s = _int_arg(slot, "slot", 1, 32)
+    n = user_in_number(source)
+    cur = (await desk.get_routing())["user_in"][s - 1]
+    new_tok, new_desc = user_in_source(n)
+    cur_txt = f"{cur['source']} ({cur['description']})" if cur.get("source") else f"{cur.get('number')!r}"
+    lo = (s - 1) // 8 * 8 + 1
+    live = f"live: feeds {cur['feeds']}" if cur.get("active") else f"not live: no input block reads UIN{lo}-{lo + 7} now"
+    summary = f"User-In slot {s}: {cur_txt} {_ARROW} {new_tok} ({new_desc}) [{live}]" + (" (no change)" if cur.get("number") == n else "")
+    payload = {"slot": s, "number": n, "before": cur.get("number")}
+    pending = _confirm("set_user_in", summary, payload, confirm_token, current=cur)
+    if pending:
+        return pending
+    res = await desk.set_user_in(s, n)
+    return _ok(f"User-In slot {s} {cur_txt} {_ARROW} {res['source']} ({res['description']})", active=cur.get("active"), feeds=cur.get("feeds"), **res)
+
+
+_SOLO_LABELS = {"channels": "channels", "buses": "buses", "dcas": "DCAs"}
+
+
+@server.tool()
+@_tool()
+async def set_solo_mode(channels: str | None = None, buses: str | None = None, dcas: str | None = None) -> dict[str, Any]:
+    """Solo mode of the channels, the mix buses and/or the DCAs: 'PFL' (pre-fader listen) or 'AFL'
+    (after-fader). Writes /config/solo/chmode, busmode, dcamode — give at least one. Tier 1: a
+    monitor-section preference that moves no level on any output."""
+    desk = _desk()
+    res = await desk.set_solo_mode(channels=channels, buses=buses, dcas=dcas)
+    parts = [f"{_SOLO_LABELS[k]} {res['before'].get(k)} {_ARROW} {v}" for k, v in res["applied"].items()]
+    return _ok("Solo mode: " + ", ".join(parts), **res)
 
 
 # -- tools: meters ----------------------------------------------------------------------------------------

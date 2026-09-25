@@ -41,20 +41,20 @@ def test_loads_real_file_default_and_explicit_path(d):
     assert Descriptor.load(DEVICE_YAML).all_node_paths() == d.all_node_paths()
     assert Descriptor.load(str(DEVICE_YAML)).meta["model"] == "X32"
     assert d.meta["osc_port"] == 10023
-    assert "X32" in repr(d) and "2105 nodes" in repr(d)
+    assert "X32" in repr(d) and "2127 nodes" in repr(d)
 
 
 def test_counts(d):
     assert len(d.scales) == 29 and all(isinstance(s, Scale) for s in d.scales.values())
-    assert len(d.enums) == 37
+    assert len(d.enums) == 39
     assert list(d.strips) == ["ch", "auxin", "fxrtn", "bus", "mtx", "main", "dca"]
-    assert d.families == ("ch", "auxin", "fxrtn", "bus", "mtx", "main", "dca", "headamp", "fx", "config", "show", "stat", "prefs", "action")
+    assert d.families == ("ch", "auxin", "fxrtn", "bus", "mtx", "main", "dca", "headamp", "fx", "outputs", "config", "show", "stat", "prefs", "action")
     assert len(d.params["fx"]) == 67 and len(d.params["headamp"]) == 2 and len(d.params["action"]) == 3
-    assert len(d.params["ch"]) == 63 and len(d.params["dca"]) == 5
-    assert len(list(d.iter_params())) == sum(len(p) for p in d.params.values()) == 493
-    assert len(d.node_sections()) == 92
+    assert len(d.params["ch"]) == 63 and len(d.params["dca"]) == 5 and len(d.params["outputs"]) == 6
+    assert len(list(d.iter_params())) == sum(len(p) for p in d.params.values()) == 499
+    assert len(d.node_sections()) == 94
     assert d.roots == {
-        "headamp": "/headamp/{n:03d}", "fx": "/fx/{n}", "config": "/config", "show": "/-show",
+        "headamp": "/headamp/{n:03d}", "fx": "/fx/{n}", "outputs": "/outputs", "config": "/config", "show": "/-show",
         "stat": "/-stat", "prefs": "/-prefs", "action": "/-action",
     }
 
@@ -145,6 +145,7 @@ def test_param_flags_from_yaml(d):
     assert d.param("action", "goscene").clamp_max == 99 and d.param("action", "goscene").tier == 2
     assert d.param("headamp", "gain").tier == 2 and d.param("headamp", "phantom").tier == 2
     assert d.param("config", "solo/level").tier == 0 and d.param("prefs", "rta/source").tier == 1
+    assert all(d.param("config", f"solo/{k}").tier == 1 for k in ("chmode", "busmode", "dcamode"))  # set_solo_mode (Tier 1)
     color = d.param("ch", "config/color")
     assert color.enum == d.enums["color"] and color.enum_name == "color" and color.scale_name is None and color.osc_type == "i"
     assert d.param("fx", "type").enum == d.enums["fx_type_14"] and len(d.param("fx", "type").enum) == 61
@@ -292,7 +293,7 @@ def test_every_param_round_trips_through_reverse_lookup(d):
             found = d.param_for_address(addr)
             assert found is not None and found[0] is spec and found[1] == vars, addr
             n_checked += 1
-    assert n_checked == 2 * 493
+    assert n_checked == 2 * 499
 
 
 # ---------------------------------------------------------------------------------------------- tiers
@@ -338,6 +339,11 @@ def test_every_param_round_trips_through_reverse_lookup(d):
         ("/config/linkcfg/eq", 2),
         ("/config/mute/6", 2),
         ("/config/solo/level", 0),
+        ("/config/solo/chmode", 1),  # PFL/AFL modes are the only writable solo leaves (set_solo_mode)
+        ("/config/solo/busmode", 1),
+        ("/config/solo/dcamode", 1),
+        ("/config/buslink/3-4", 2),
+        ("/config/userrout/in/04", 2),
         ("/config/talk/A/level", 0),
         ("/config/mono/mode", 0),
         ("/-show/prepos/current", 0),
@@ -388,10 +394,10 @@ def test_all_node_paths_count_and_shape(d, capsys):
     assert all(p.startswith("/") and not p.endswith("/") and "{" not in p for p in concrete)
     assert all(isinstance(f, tuple) and f and all("{" not in x for x in f) for _, f in paths)
     # research: a console scene file has 2104 node lines; DESIGN's "< 1500" is not reachable (deviation)
-    assert total == 2105 and total < 2500
+    assert total == 2127 and total < 2500
     assert per_family == {
         "ch": 992, "auxin": 200, "fxrtn": 192, "bus": 304, "mtx": 84, "main": 38, "dca": 16,
-        "headamp": 128, "fx": 20, "config": 21, "show": 102, "stat": 7, "prefs": 1,
+        "headamp": 128, "fx": 20, "outputs": 22, "config": 21, "show": 102, "stat": 7, "prefs": 1,
     }
     # sweep order = scene-file order (scales_params.md §13): families as in the yaml, strip-major
     # inside a family, sections in yaml order — /ch/01/config … /ch/01/grp, /ch/02/config …
@@ -408,8 +414,12 @@ def test_all_node_paths_count_and_shape(d, capsys):
     for n in d.nodes():
         if not fam_order or fam_order[-1] != n.family:
             fam_order.append(n.family)
-    assert fam_order == ["ch", "auxin", "fxrtn", "bus", "mtx", "main", "dca", "headamp", "fx", "config", "show", "stat", "prefs"]
+    assert fam_order == ["ch", "auxin", "fxrtn", "bus", "mtx", "main", "dca", "headamp", "fx", "outputs", "config", "show", "stat", "prefs"]
     assert paths == [(n.path, n.fields) for n in d.nodes()]
+    # the output taps sit between the FX rack and the console config, XLR taps before the aux taps (scene-file order)
+    i = concrete.index("/outputs/main/01")
+    assert concrete[i - 1] == "/fx/8/par" and concrete[i + 15] == "/outputs/main/16" and concrete[i + 16] == "/outputs/aux/01"
+    assert concrete[i + 21] == "/outputs/aux/06" and concrete[i + 22] == "/config/routing"
 
 
 def test_node_paths_spot_checks(d):
@@ -590,6 +600,42 @@ def test_enum_encode_decode(d):
     assert d.param("fx", "type").to_raw("GEQ2") == 27 and d.param("ch", "insert/sel").to_raw("FX8R") == 16
     assert d.param("ch", "dyn/ratio").to_raw("10") == 9 and d.param("ch", "dyn/ratio").to_raw(10) == 10  # int = index
     assert d.param("prefs", "rta/source").to_value(72) == "MAIN" and d.param("prefs", "rta/source").to_raw("BUS03") == 52
+
+
+def test_output_tap_enums_and_addresses(d):
+    """/outputs/main|aux/NN src (int 0..76), pos (0..8) and invert — fx_routing_scenes.md §4.7 / DOC p.40-42."""
+    src = d.enum("output_src")
+    assert len(src) == 77 and src[0] == "OFF" and src[1:4] == ("Main L", "Main R", "M/C")
+    assert src[4] == "MixBus 01" and src[19] == "MixBus 16" and src[20] == "Matrix 1" and src[25] == "Matrix 6"
+    assert src[26] == "DirectOut Ch 01" and src[57] == "DirectOut Ch 32" and src[58] == "DirectOut Aux 1" and src[65] == "DirectOut Aux 8"
+    assert src[66] == "DirectOut FX 1L" and src[67] == "DirectOut FX 1R" and src[73] == "DirectOut FX 4R"
+    assert src[74:] == ("Monitor L", "Monitor R", "Talkback")
+    assert d.enum("output_pos") == ("IN/LC", "IN/LC+M", "<-EQ", "<-EQ+M", "EQ->", "EQ->+M", "PRE", "PRE+M", "POST")
+    main_src = d.param("outputs", "main/{n:02d}/src")
+    assert main_src.address(n=3) == "/outputs/main/03/src" and main_src.address(n=16) == "/outputs/main/16/src"
+    assert main_src.to_raw("MixBus 03") == 6 and main_src.to_raw("mixbus 03") == 6 and main_src.to_value(76) == "Talkback"
+    assert main_src.osc_type == "i" and main_src.node_fmt == "int" and main_src.tier == 2  # the desk prints the int
+    assert d.param("outputs", "main/{n:02d}/pos").node_fmt == "enum" and d.param("outputs", "main/{n:02d}/pos").tier == 2
+    assert d.param("outputs", "main/{n:02d}/invert").scale.kind == "bool" and d.param("outputs", "main/{n:02d}/invert").tier == 1
+    aux_src = d.param("outputs", "aux/{idx:02d}/src")
+    assert aux_src.address(idx=6) == "/outputs/aux/06/src" and aux_src.enum == main_src.enum
+    assert d.param("outputs", "aux/03/pos").key == "outputs:aux/{idx:02d}/pos"  # concrete relpaths resolve too
+    with pytest.raises(DescriptorError):
+        main_src.address(n=17)
+    with pytest.raises(DescriptorError):
+        aux_src.address(idx=7)  # the aux taps stop at 6 (their own template variable keeps the range exact)
+    assert d.param_for_address("/outputs/aux/07/src") is None and d.param_for_address("/outputs/main/17/src") is None
+    assert d.param_for_address("/outputs/aux/06/invert")[1] == {"idx": 6}
+    assert d.param_for_address("/outputs/main/01/src")[1] == {"n": 1}
+    # routing is guarded, the polarity flip is a plain Tier-1 parameter
+    assert d.tier_for("/outputs/main/01/src") == 2 and d.tier_for("/outputs/aux/06/pos") == 2 and d.tier_for("/outputs/main/01/invert") == 1
+    assert d.is_guarded("/outputs/main/01/src") and d.is_guarded("/outputs/aux/01/pos") and not d.is_guarded("/outputs/main/01/invert")
+    # node form "/outputs/main/01 4 POST OFF" (X32.c case OMAIN): src pos invert
+    node = d.node("/outputs/main/01")
+    assert node.fields == ("main/01/src", "main/01/pos", "main/01/invert") and node.root == "/outputs" and node.vars == {"n": 1}
+    assert node.addresses == ("/outputs/main/01/src", "/outputs/main/01/pos", "/outputs/main/01/invert")
+    assert d.node("/outputs/aux/06").fields == ("aux/06/src", "aux/06/pos", "aux/06/invert") and d.node("/outputs/aux/06").vars == {"idx": 6}
+    assert len(d.node_paths_for(family="outputs")) == 22 and d.node_paths_for(family="outputs")[0].target is None
 
 
 def test_bool_str_int_pan_encode_decode(d):

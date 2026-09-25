@@ -54,6 +54,17 @@ Decisions where DESIGN.md is silent (or where verified research overrides it):
 * Extras beyond DESIGN §13: ``set_send_mute``, ``headamp_index_for``, ``invalidate``, ``close``,
   ``pre_write_snapshot``, ``stats``; ``get_sends`` items carry ``to``/``name`` beside
   ``bus``/``bus_name`` (bus → matrix sends).
+* **Output taps** (fx_routing_scenes.md §4.7): ``get_outputs``/``get_output`` decode
+  ``/outputs/main|aux/NN`` (source token, tap point, polarity, the strip the source taps and
+  whether the tap follows its mute) with the ``/config/routing/OUT`` and ``AES50A`` blocks that
+  carry them; ``set_output`` writes ``src``/``pos`` (guarded — the confirming tools are
+  ``set_output``/``set_aux_output``) and ``invert`` after normalising every argument
+  (:func:`normalise_output_source` accepts ``'bus 3'``, ``'main L'``, ``'ch 5'`` …).
+* **Routing / links / solo** (``get_routing``, ``set_bus_link``, ``set_input_block``, ``set_user_in``,
+  ``set_solo_mode``): the guarded ``/config/buslink``, ``/config/routing/IN`` and ``/config/userrout/in``
+  writes are Tier-2 executors like ``set_source``; the three PFL/AFL solo modes are Tier 1. The User-In
+  numbering (0 OFF, 1..32 local XLR, 33..80 AES50-A, 81..128 AES50-B, 129..160 card, 161..166 aux in,
+  167/168 talkback — fx_routing_scenes.md §4.8) lives in the module-level ``user_in_*`` helpers.
 
 Errors are :class:`DeskError` (``code`` + ``to_dict()`` for the tool envelope) — ``NOT_CONNECTED``,
 ``TIMEOUT``, ``BAD_ARGUMENT``, ``NOT_SUPPORTED``, ``GUARDED``, ``UNKNOWN_TARGET``, ``AMBIGUOUS_NAME``,
@@ -67,6 +78,7 @@ import contextlib
 import contextvars
 import logging
 import math
+import re
 import time
 from typing import Any, Iterable, Iterator, Literal, Mapping, Sequence
 
@@ -88,7 +100,8 @@ from .settle import read_until
 from .targets import Target, TargetError, parse_target
 
 __all__ = [
-    "priority_writes","DeskError", "Desk", "ALL_FAMILIES"]
+    "priority_writes", "DeskError", "Desk", "ALL_FAMILIES", "normalise_output_source", "normalise_output_pos", "output_source_target",
+    "IN_BLOCKS", "USER_IN_MAX", "user_in_source", "user_in_token", "user_in_number", "in_block", "bus_link_pair", "routing_token"]
 
 log = logging.getLogger(__name__)
 
@@ -215,6 +228,322 @@ def _insert_side(sel: Any) -> tuple[int | None, str | None]:
     if isinstance(sel, str) and len(sel) == 4 and sel.startswith("FX") and sel[2].isdigit() and sel[3] in "LR":
         return int(sel[2]), "A" if sel[3] == "L" else "B"
     return None, None
+
+
+_SEND_TAP_ALIASES: dict[str, str] = {
+    # scales_params.md §4.9: 0 input/low-cut, 1 pre-EQ, 2 post-EQ (pre-fader), 3 pre-fader, 4 post-fader, 5 subgroup
+    "in": "IN/LC", "in/lc": "IN/LC", "input": "IN/LC", "lc": "IN/LC", "lowcut": "IN/LC", "low-cut": "IN/LC",
+    "pre-eq": "<-EQ", "pre eq": "<-EQ", "pre_eq": "<-EQ", "preeq": "<-EQ",
+    "post-eq": "EQ->", "post eq": "EQ->", "post_eq": "EQ->", "posteq": "EQ->",
+    "pre": "PRE", "pre-fader": "PRE", "pre fader": "PRE", "pre_fader": "PRE", "prefader": "PRE",
+    "post": "POST", "post-fader": "POST", "post fader": "POST", "post_fader": "POST", "postfader": "POST",
+    "grp": "GRP", "group": "GRP", "sub": "GRP", "subgroup": "GRP",
+}
+_SEND_TAP_HINT = "in, pre-eq, post-eq, pre, post or grp"
+
+
+def send_pair(send: Any, count: int = 16) -> tuple[int, int]:
+    """The odd/even pair a send number belongs to: the X32 keeps ONE tap point (``mix/NN/type``) and
+    one pan per pair, on the odd send (scales_params.md §4.9), so 3 → (3, 4) and 4 → (3, 4).
+    ``send`` must be an integer 1..``count`` (BAD_ARGUMENT otherwise)."""
+    n = _int(send, "bus", 1, count)
+    lo = n if n % 2 else n - 1
+    return lo, min(lo + 1, count)
+
+
+def normalise_send_tap(tap: Any, tokens: Sequence[str]) -> str:
+    """A tap point in any accepted spelling → the ``send_type`` token: the tokens themselves
+    (``IN/LC``, ``<-EQ``, ``EQ->``, ``PRE``, ``POST``, ``GRP``; any case) or the aliases ``in``,
+    ``pre-eq``, ``post-eq``, ``pre``, ``post``, ``grp`` (``pre-fader``, ``subgroup`` … too). ``tokens`` is
+    the enum of the send being written — bus → matrix sends have no GRP — and a token outside it is
+    BAD_ARGUMENT, as is anything unrecognised."""
+    if isinstance(tap, bool) or not isinstance(tap, str):
+        raise DeskError("BAD_ARGUMENT", f"tap must be one of {', '.join(tokens)} ({_SEND_TAP_HINT}), got {tap!r}")
+    text = tap.strip()
+    token = _SEND_TAP_ALIASES.get(" ".join(text.lower().split()))
+    if token is None:
+        try:
+            token = tokens[enum_to_index(text, tokens)]
+        except ScaleError:
+            raise DeskError("BAD_ARGUMENT", f"unknown tap {tap!r}; expected one of {', '.join(tokens)} ({_SEND_TAP_HINT})") from None
+    if token not in tokens:
+        raise DeskError("BAD_ARGUMENT", f"tap {token} is not available on this send; expected one of {', '.join(tokens)}")
+    return token
+
+
+# -- output taps (fx_routing_scenes.md §4.7) ------------------------------------------------------------
+
+# group -> (param relpath template of the tap, its template variable, human label). The tap count comes
+# from the descriptor's `for` ranges (main 1..16, aux 1..6), not from here.
+_OUTPUT_GROUPS: dict[str, tuple[str, str, str]] = {
+    "main": ("main/{n:02d}", "n", "OUT"),
+    "aux": ("aux/{idx:02d}", "idx", "AUX OUT"),
+}
+# tap points that go quiet with the source strip's mute (§4.7: +M variants and POST; the others ignore it)
+_OUTPUT_POS_FOLLOWS_MUTE = frozenset({"IN/LC+M", "<-EQ+M", "EQ->+M", "PRE+M", "POST"})
+_OUTPUT_SRC_ALIASES: dict[str, str] = {
+    "NONE": "OFF", "-": "OFF",
+    "L": "Main L", "LEFT": "Main L", "MAIN LEFT": "Main L", "MAINL": "Main L",
+    "R": "Main R", "RIGHT": "Main R", "MAIN RIGHT": "Main R", "MAINR": "Main R",
+    "MC": "M/C", "M-C": "M/C", "MONO": "M/C", "CENTRE": "M/C", "CENTER": "M/C", "MAIN M": "M/C", "MAIN MC": "M/C",
+    "MAIN M/C": "M/C", "MAIN MONO": "M/C", "MAIN C": "M/C",
+    "MON L": "Monitor L", "MONITOR LEFT": "Monitor L", "MON R": "Monitor R", "MONITOR RIGHT": "Monitor R",
+    "TB": "Talkback", "TALK": "Talkback", "TALK BACK": "Talkback",
+}
+_OUTPUT_SRC_RE = re.compile(
+    r"^(?:DIRECT\s*OUT\s*|DIRECT\s*)?(MIXBUS|MIX|BUS|MATRIX|MTX|CHANNEL|CH|AUXIN|AUX|FX|MONITOR|MON|MAIN)"
+    r"\s*[-./]?\s*(\d{1,2})?\s*([LRM])?$"
+)
+_OUTPUT_POS_ALIASES: dict[str, str] = {
+    "IN/LC": "IN/LC", "IN": "IN/LC", "INLC": "IN/LC", "IN LC": "IN/LC", "IN-LC": "IN/LC", "INPUT": "IN/LC", "LC": "IN/LC",
+    "LOWCUT": "IN/LC", "LOW CUT": "IN/LC",
+    "<-EQ": "<-EQ", "<EQ": "<-EQ", "PREEQ": "<-EQ", "PRE EQ": "<-EQ", "PRE-EQ": "<-EQ", "PRE/EQ": "<-EQ", "BEFORE EQ": "<-EQ",
+    "EQ->": "EQ->", "EQ>": "EQ->", "POSTEQ": "EQ->", "POST EQ": "EQ->", "POST-EQ": "EQ->", "POST/EQ": "EQ->", "AFTER EQ": "EQ->",
+    "PRE": "PRE", "PREFADER": "PRE", "PRE FADER": "PRE", "PRE-FADER": "PRE", "PRE FDR": "PRE", "PREFDR": "PRE",
+    "POST": "POST", "POSTFADER": "POST", "POST FADER": "POST", "POST-FADER": "POST", "POST FDR": "POST", "POSTFDR": "POST",
+}
+_OUTPUT_POS_MUTE_RE = re.compile(r"^(.*?)\s*(?:\+|\s)\s*(?:M|MUTE|MUTED)$")
+_OUTPUT_SRC_HELP = ("OFF, Main L, Main R, M/C, MixBus 01..16 ('bus 3'), Matrix 1..6 ('mtx 2'), DirectOut Ch 01..32 ('ch 5'), "
+                    "DirectOut Aux 1..8 ('aux 2'), DirectOut FX 1L..4R ('fx 1L'), Monitor L/R, Talkback, or the desk's index 0..76")
+
+
+def normalise_output_source(value: Any, tokens: Sequence[str]) -> str:
+    """Any accepted spelling of an output-tap source → its ``output_src`` token (``tokens`` is that
+    enum): the token itself in any case (``'mixbus 03'``, ``'main l'``), the desk's int index 0..76,
+    or a short form — ``'bus 3'``/``'mix 3'`` → ``MixBus 03``, ``'mtx 2'`` → ``Matrix 2``, ``'L'``/``'R'``/
+    ``'main L'`` → ``Main L``/``Main R``, ``'M/C'``/``'mono'`` → ``M/C``, ``'ch 5'``/``'direct out ch 5'`` →
+    ``DirectOut Ch 05`` (``'in 5'`` is deliberately NOT accepted: that is the input-patch vocabulary), ``'aux 2'`` → ``DirectOut Aux 2``, ``'fx 1L'`` → ``DirectOut FX 1L``, ``'mon L'`` →
+    ``Monitor L``, ``'tb'`` → ``Talkback``, ``'off'``/``'none'`` → ``OFF``. ``BAD_ARGUMENT`` otherwise."""
+    if isinstance(value, bool) or value is None:
+        raise DeskError("BAD_ARGUMENT", f"source must be a token such as 'MixBus 03', got {value!r}")
+    if isinstance(value, int) or (isinstance(value, str) and value.strip().isdigit()):
+        idx = int(value)
+        if 0 <= idx < len(tokens):
+            return tokens[idx]
+        raise DeskError("BAD_ARGUMENT", f"source index {idx} is out of range 0..{len(tokens) - 1}")
+    if not isinstance(value, str):
+        raise DeskError("BAD_ARGUMENT", f"source must be a token such as 'MixBus 03', got {value!r}")
+    text = " ".join(value.split()).upper()
+    by_upper = {t.upper(): t for t in tokens}
+    if text in by_upper:
+        return by_upper[text]
+    candidate = _OUTPUT_SRC_ALIASES.get(text)
+    if candidate is None:
+        m = _OUTPUT_SRC_RE.match(text)
+        if m:
+            fam, num, side = m.group(1), m.group(2), m.group(3)
+            n = int(num) if num else None
+            if fam in ("MIXBUS", "MIX", "BUS") and n is not None and not side:
+                candidate = f"MixBus {n:02d}"
+            elif fam in ("MATRIX", "MTX") and n is not None and not side:
+                candidate = f"Matrix {n}"
+            elif fam in ("CHANNEL", "CH") and n is not None and not side:   # not "IN n": that is the input vocabulary, not a direct out
+                candidate = f"DirectOut Ch {n:02d}"
+            elif fam in ("AUXIN", "AUX") and n is not None and not side:
+                candidate = f"DirectOut Aux {n}"
+            elif fam == "FX" and n is not None and side in ("L", "R"):
+                candidate = f"DirectOut FX {n}{side}"
+            elif fam in ("MONITOR", "MON") and n is None and side in ("L", "R"):
+                candidate = f"Monitor {side}"
+            elif fam == "MAIN" and n is None and side:
+                candidate = "M/C" if side == "M" else f"Main {side}"
+    if candidate is None or candidate not in tokens:
+        raise DeskError("BAD_ARGUMENT", f"unknown output source {value!r}; use {_OUTPUT_SRC_HELP}")
+    return candidate
+
+
+def normalise_output_pos(value: Any, tokens: Sequence[str]) -> str:
+    """Tap-point spelling → ``output_pos`` token: the token in any case, the index 0..8, or a
+    friendly form (``'pre'``, ``'pre fader'``, ``'pre eq'``, ``'post eq'``, ``'in'``/``'input'``,
+    ``'post'``) with an optional ``+M``/``' mute'`` suffix for the mute-following variant
+    (``'pre+m'``, ``'pre eq mute'``). There is no ``POST+M``: POST already follows the mute."""
+    if isinstance(value, bool) or value is None:
+        raise DeskError("BAD_ARGUMENT", f"pos must be a tap point such as 'POST' or 'PRE+M', got {value!r}")
+    if isinstance(value, int) or (isinstance(value, str) and value.strip().isdigit()):
+        idx = int(value)
+        if 0 <= idx < len(tokens):
+            return tokens[idx]
+        raise DeskError("BAD_ARGUMENT", f"pos index {idx} is out of range 0..{len(tokens) - 1}")
+    if not isinstance(value, str):
+        raise DeskError("BAD_ARGUMENT", f"pos must be a tap point such as 'POST' or 'PRE+M', got {value!r}")
+    text = " ".join(value.split()).upper()
+    by_upper = {t.upper(): t for t in tokens}
+    if text in by_upper:
+        return by_upper[text]
+    mute = False
+    m = _OUTPUT_POS_MUTE_RE.match(text)
+    if m and m.group(1):
+        text, mute = m.group(1).strip(), True
+    base = _OUTPUT_POS_ALIASES.get(text)
+    if base is None:
+        raise DeskError("BAD_ARGUMENT", f"unknown tap point {value!r}; use one of {', '.join(tokens)} "
+                        "(IN/LC = after the low cut, <-EQ = pre-EQ, EQ-> = post-EQ, PRE = pre-fader, POST = post-fader; "
+                        "+M = also follows the mute)")
+    if mute and base == "POST":
+        raise DeskError("BAD_ARGUMENT", "there is no POST+M: a POST tap already follows the source's mute")
+    tok = f"{base}+M" if mute else base
+    if tok not in tokens:
+        raise DeskError("BAD_ARGUMENT", f"unknown tap point {value!r}; use one of {', '.join(tokens)}")
+    return tok
+
+
+def output_source_target(token: Any) -> Target | None:
+    """The strip an ``output_src`` token taps (``MixBus 03`` → bus.3, ``DirectOut FX 1R`` → fxrtn.2,
+    ``Main L`` → main.st); ``None`` for OFF, the monitor and talkback taps or an unknown token."""
+    if not isinstance(token, str):
+        return None
+    if token in ("Main L", "Main R"):
+        return Target("main", "st")
+    if token == "M/C":
+        return Target("main", "m")
+    head, _, rest = token.rpartition(" ")
+    fam = {"MixBus": "bus", "Matrix": "mtx", "DirectOut Ch": "ch", "DirectOut Aux": "auxin"}.get(head)
+    try:
+        if fam and rest.isdigit():
+            return Target(fam, int(rest))
+        if head == "DirectOut FX" and len(rest) == 2 and rest[0].isdigit() and rest[1] in "LR":
+            return Target("fxrtn", 2 * int(rest[0]) - (1 if rest[1] == "L" else 0))
+    except TargetError:
+        return None
+    return None
+
+
+_BLOCK_RE = re.compile(r"^(\d+)-(\d+)$")
+_OUT_BLOCK_RE = re.compile(r"^OUT(\d+)-(\d+)$")
+
+
+def _xlr_carries_tap(out_blocks: Mapping[str, Any], tap: int) -> bool | None:
+    """``/config/routing/OUT/<block>`` = ``OUT<block>`` means XLR sockets ``block`` carry taps ``block``
+    (fx_routing_scenes.md §4.6); ``None`` when the block that owns ``tap`` was not read."""
+    for block, tok in out_blocks.items():
+        m = _BLOCK_RE.match(block)
+        if m and int(m.group(1)) <= tap <= int(m.group(2)):
+            return None if tok is None else tok == f"OUT{block}"
+    return None
+
+
+def _aes_channels_for_tap(aes_blocks: Mapping[str, Any], tap: int) -> list[int]:
+    """AES50 channels that copy XLR tap ``tap``: every 8-channel block whose token is ``OUT1-8`` /
+    ``OUT9-16`` (fx_routing_scenes.md §4.5, §4.7 example: bus 3 on tap 11 with 9-16 = OUT9-16 → channel 11)."""
+    out: list[int] = []
+    for block, tok in aes_blocks.items():
+        mb = _BLOCK_RE.match(block)
+        mt = _OUT_BLOCK_RE.match(tok) if isinstance(tok, str) else None
+        if mb and mt and int(mt.group(1)) <= tap <= int(mt.group(2)):
+            out.append(int(mb.group(1)) + tap - int(mt.group(1)))
+    return out
+# -- routing tokens (fx_routing_scenes.md §4.3, §4.8) -----------------------------------------------
+
+IN_BLOCKS: tuple[str, ...] = ("1-8", "9-16", "17-24", "25-32", "AUX")  # /config/routing/IN/<block>
+USER_IN_MAX = 168  # /config/userrout/in/NN is int 0..168 (fx_routing_scenes.md §4.8, DOC p.21)
+# User-In source numbering: (first number, count, token prefix, digits, description) of each range.
+_USER_IN_RANGES: tuple[tuple[int, int, str, int, str], ...] = (
+    (1, 32, "IN", 2, "local XLR"),
+    (33, 48, "A", 2, "AES50-A"),
+    (81, 48, "B", 2, "AES50-B"),
+    (129, 32, "CARD", 2, "card/USB"),
+    (161, 6, "AUX", 1, "Aux In"),
+)
+_USER_IN_FIXED: dict[int, tuple[str, str]] = {0: ("OFF", "off"), 167: ("TBINT", "talkback internal"), 168: ("TBEXT", "talkback external")}
+_USER_IN_BY_TOKEN: dict[str, int] = {"OFF": 0, "TBINT": 167, "TBINTERNAL": 167, "TBEXT": 168, "TBEXTERNAL": 168}
+_USER_IN_SPELLINGS: dict[str, tuple[int, int, str]] = {  # prefix spelling -> (first number, count, description)
+    "IN": (1, 32, "local XLR"), "INPUT": (1, 32, "local XLR"), "LOCAL": (1, 32, "local XLR"), "LOC": (1, 32, "local XLR"), "XLR": (1, 32, "local XLR"),
+    "A": (33, 48, "AES50-A"), "AES50A": (33, 48, "AES50-A"), "AESA": (33, 48, "AES50-A"),
+    "B": (81, 48, "AES50-B"), "AES50B": (81, 48, "AES50-B"), "AESB": (81, 48, "AES50-B"),
+    "CARD": (129, 32, "card/USB"), "USB": (129, 32, "card/USB"),
+    "AUX": (161, 6, "Aux In"), "AUXIN": (161, 6, "Aux In"),
+}
+_USER_IN_RE = re.compile(r"^(AES50A|AES50B|AESA|AESB|AUXIN|AUX|CARD|USB|INPUT|IN|LOCAL|LOC|XLR|A|B)(\d{1,3})$")
+_USER_IN_HELP = f"OFF, IN01..IN32 (local XLR), A01..A48 (AES50-A), B01..B48 (AES50-B), CARD01..CARD32, AUX1..AUX6, TBINT, TBEXT or a number 0..{USER_IN_MAX}"
+_IN_BLOCK_PREFIX_RE = re.compile(r"^(?:INPUTS|INPUT|IN|CHANNELS|CHANNEL|CH)?\s*/?\s*")
+
+
+def user_in_source(n: Any) -> tuple[str, str]:
+    """A ``/config/userrout/in`` number 0..168 → ``(token, description)``: ``0 → ("OFF", "off")``,
+    ``4 → ("IN04", "local XLR 4")``, ``33 → ("A01", "AES50-A 1")``, ``81 → ("B01", "AES50-B 1")``,
+    ``129 → ("CARD01", "card/USB 1")``, ``161 → ("AUX1", "Aux In 1")``, ``167 / 168 → TBINT / TBEXT``
+    (fx_routing_scenes.md §4.8). ``ValueError`` outside 0..168 or for a non-int."""
+    if isinstance(n, bool) or not isinstance(n, int) or not 0 <= n <= USER_IN_MAX:
+        raise ValueError(f"User-In source number must be 0..{USER_IN_MAX}, got {n!r}")
+    if n in _USER_IN_FIXED:
+        return _USER_IN_FIXED[n]
+    for first, count, prefix, digits, what in _USER_IN_RANGES:
+        if first <= n < first + count:
+            k = n - first + 1
+            return f"{prefix}{k:0{digits}d}", f"{what} {k}"
+    raise AssertionError(f"user-in table does not cover {n}")  # unreachable: the ranges tile 0..168
+
+
+def user_in_token(n: Any) -> str:
+    """Token of a User-In source number (see :func:`user_in_source`)."""
+    return user_in_source(n)[0]
+
+
+def user_in_number(source: Any) -> int:
+    """A User-In source in any accepted spelling → the desk's number 0..168: ``'IN04'`` / ``'in 4'`` /
+    ``'local 4'`` / ``'xlr 4'`` → 4; ``'A01'`` / ``'AES50-A 1'`` → 33; ``'B01'`` → 81; ``'CARD01'`` /
+    ``'usb 1'`` → 129; ``'AUX1'`` / ``'aux in 1'`` → 161; ``'TBINT'`` / ``'TBEXT'`` → 167 / 168;
+    ``'OFF'`` → 0; an int or a digit string is the raw number. Case, spaces, ``_`` and ``-`` are
+    ignored. ``ValueError`` otherwise (a bool, a float, ``'ch 4'``, an out-of-range number)."""
+    if isinstance(source, bool) or not isinstance(source, (int, str)):
+        raise ValueError(f"User-In source must be one of {_USER_IN_HELP}, got {source!r}")
+    if isinstance(source, int):
+        n = source
+    else:
+        text = source.strip()
+        if text[:1] in ("-", "+"):  # a signed number is never a source; "-" is only stripped inside spellings (AES50-A 1)
+            raise ValueError(f"User-In source number must be 0..{USER_IN_MAX}, got {source!r}")
+        key = re.sub(r"[\s_\-]+", "", text.upper())
+        if key.isdigit():
+            n = int(key)
+        elif key in _USER_IN_BY_TOKEN:
+            return _USER_IN_BY_TOKEN[key]
+        else:
+            m = _USER_IN_RE.match(key)
+            if not m:
+                raise ValueError(f"unknown User-In source {source!r}; use {_USER_IN_HELP}")
+            first, count, what = _USER_IN_SPELLINGS[m.group(1)]
+            k = int(m.group(2))
+            if not 1 <= k <= count:
+                raise ValueError(f"{what} {k} is out of range 1..{count} ({source!r})")
+            return first + k - 1
+    if not 0 <= n <= USER_IN_MAX:
+        raise ValueError(f"User-In source number must be 0..{USER_IN_MAX}, got {n}")
+    return n
+
+
+def in_block(block: Any) -> str:
+    """An input-block name in any accepted spelling → one of :data:`IN_BLOCKS`: ``'17-24'``,
+    ``'ch 17-24'``, ``'IN/17-24'``, ``'inputs 17–24'`` → ``'17-24'``; ``'aux'`` / ``'aux in'`` → ``'AUX'``.
+    ``ValueError`` otherwise."""
+    if not isinstance(block, str):
+        raise ValueError(f"block must be one of {', '.join(IN_BLOCKS)}, got {block!r}")
+    key = _IN_BLOCK_PREFIX_RE.sub("", block.strip().upper().replace("–", "-").replace("—", "-"), count=1)
+    key = re.sub(r"\s+", "", key)
+    if key in ("AUX", "AUXIN", "AUXINS", "AUXINPUTS"):
+        return "AUX"
+    if key in IN_BLOCKS:
+        return key
+    raise ValueError(f"unknown input block {block!r}; use one of {', '.join(IN_BLOCKS)}")
+
+
+def bus_link_pair(bus: Any) -> tuple[int, int]:
+    """Mix bus 1..16 → its stereo-link pair ``(odd, even)``: ``1 → (1, 2)``, ``4 → (3, 4)``. ``ValueError`` otherwise."""
+    if isinstance(bus, bool) or not isinstance(bus, int) or not 1 <= bus <= 16:
+        raise ValueError(f"bus must be 1..16, got {bus!r}")
+    return (bus, bus + 1) if bus % 2 else (bus - 1, bus)
+
+
+def routing_token(source: Any, tokens: Sequence[str]) -> str:
+    """A routing-block source in any case or spacing (``'an 1-8'``, ``'a17-24'``, ``'UIN 17-24'``) → its
+    enum token; ``ValueError`` when it is not one of ``tokens``."""
+    if not isinstance(source, str):
+        raise ValueError(f"source must be a token such as {tokens[0]!r}, got {source!r}")
+    key = re.sub(r"[\s_]+", "", source.upper().replace("–", "-"))
+    for t in tokens:
+        if t.upper() == key:
+            return t
+    raise ValueError(f"unknown source {source!r}; use one of {', '.join(tokens)}")
 
 
 class Desk:
@@ -1076,15 +1405,17 @@ class Desk:
 
     async def set_level(
         self, t: Target | str | int, db: float, *, ramp_ms: int | None = None, send_to: int | None = None,
-        force: bool = False, kind: Literal["fader", "send", "mlevel"] = "fader",
+        force: bool = False, kind: Literal["fader", "send", "mlevel"] = "fader", tool: str | None = None,
     ) -> dict[str, Any]:
         """Fader (``kind="fader"``), send level (``send_to`` = destination number) or M/C level
         (``kind="mlevel"``) to ``db`` with a ramp (``ramp_ms`` None → policy default). Clamped to the
-        family ceiling (reported), relative limit unless ``force`` (see module doc)."""
+        family ceiling (reported), relative limit unless ``force`` (see module doc). ``tool`` names
+        the caller in the ``desk.write`` events (default: set_send / set_fader)."""
         t = self._target(t)
         spec, address, pk = self._level_param(t, kind, send_to)
         before = await self._leaf(address)
-        res = await self._move_level(t, spec, address, before, _num(db, "db"), ramp_ms=ramp_ms, force=force, policy_kind=pk, tool="set_send" if pk == "send" and send_to else "set_fader")
+        res = await self._move_level(t, spec, address, before, _num(db, "db"), ramp_ms=ramp_ms, force=force, policy_kind=pk,
+                                     tool=tool or ("set_send" if pk == "send" and send_to else "set_fader"))
         if send_to is not None:
             res["send_to"] = int(send_to)
         return res
@@ -1126,16 +1457,66 @@ class Desk:
     async def adjust_send(self, ch: Target | str | int, bus: int, delta_db: float, *, ramp_ms: int | None = None, force: bool = False) -> dict[str, Any]:
         return await self.adjust_level(ch, delta_db, ramp_ms=ramp_ms, send_to=bus, force=force, kind="send")
 
-    async def set_send_mute(self, ch: Target | str | int, bus: int, muted: bool) -> dict[str, Any]:
-        """Send on/off (``mix/NN/on``, inverted like a strip mute)."""
+    async def set_send_mute(self, ch: Target | str | int, bus: int, muted: bool, *, tool: str = "set_send_mute") -> dict[str, Any]:
+        """Send on/off (``mix/NN/on``, inverted like a strip mute); ``was_muted`` is the state before."""
         t = self._target(ch)
         st = self._d.strips[t.family]
         if not st.sends:
             raise DeskError("NOT_SUPPORTED", f"{t.label} has no sends")
         n = _int(bus, "bus", 1, st.sends)
         spec, address = self._param(t, "mix/{send:02d}/on", send=n)
-        await self._write(address, spec.to_raw(not bool(muted)), value={"muted": bool(muted)}, tool="set_send_mute", target=t)
-        return {"target": t.key, "send_to": n, "muted": bool(muted)}
+        was = await self._leaf(address)
+        await self._write(address, spec.to_raw(not bool(muted)), value={"muted": bool(muted)}, tool=tool, target=t)
+        return {"target": t.key, "label": t.label, "send_to": n, "muted": bool(muted), "was_muted": (not was) if was is not None else None}
+
+    async def set_send_tap(self, ch: Target | str | int, bus: int, tap: str) -> dict[str, Any]:
+        """Tap point of the send from ``ch`` to ``bus`` (``mix/NN/type``: IN/LC, <-EQ, EQ->, PRE, POST,
+        GRP — see :func:`normalise_send_tap` for the spellings; bus → matrix sends have no GRP). The
+        desk keeps one type per odd/even send pair, on the odd send (scales_params.md §4.9), so the
+        write goes to the odd partner and ``pair`` says which two destinations it changed."""
+        t = self._target(ch)
+        st = self._d.strips[t.family]
+        if not st.sends:
+            raise DeskError("NOT_SUPPORTED", f"{t.label} has no sends")
+        n = _int(bus, "bus", 1, st.sends)
+        lo, hi = send_pair(n, st.sends)
+        spec, address = self._param(t, "mix/{send:02d}/type", send=lo)
+        token = normalise_send_tap(tap, spec.enum or ())
+        before = await self._leaf(address)
+        await self._write(address, spec.to_raw(token), value=token, tool="set_send_tap", target=t)
+        return {"target": t.key, "label": t.label, "send_to": n, "pair": [lo, hi], "type_send": lo, "address": address, "tap": token, "before": before}
+
+    async def set_main_assign(
+        self, t: Target | str | int, *, lr: bool | None = None, mono: bool | None = None, mono_level_db: float | None = None,
+        ramp_ms: int | None = None,
+    ) -> dict[str, Any]:
+        """Main L/R assign (``mix/st``), M/C assign (``mix/mono``) and M/C level (``mix/mlevel``: a
+        ramped level move with the send ceiling, ``ramp_ms`` None → policy default) of a channel,
+        aux-in, FX return or bus. An assign being switched OFF is written before the level, one being
+        switched ON after it, so the level never jumps through an open path. ``before`` is the state read
+        first; ``mono_level`` is the level move's own result when one was made."""
+        t = self._target(t)
+        try:
+            self._d.param(t.family, "mix/st")
+        except DescriptorError:
+            raise DeskError("NOT_SUPPORTED", f"{t.label} has no main assign (channels, aux-ins, FX returns and buses only)") from None
+        if lr is None and mono is None and mono_level_db is None:
+            raise DeskError("BAD_ARGUMENT", "nothing to set: give lr, mono and/or mono_level_db")
+        mix = await self._section(f"{t.osc_prefix}/mix")
+        before = {"lr": mix.get("mix/st"), "mono": mix.get("mix/mono"), "mono_level_db": _db1(mix.get("mix/mlevel")), "mono_level": _db_text(mix.get("mix/mlevel"))}
+        switches = (("lr", "mix/st", lr), ("mono", "mix/mono", mono))
+        applied: dict[str, Any] = {}
+        out: dict[str, Any] = {"target": t.key, "label": t.label, "applied": applied, "before": before}
+        for phase in (False, True):  # OFF first, ON last
+            if phase and mono_level_db is not None:
+                lvl = await self.set_level(t, mono_level_db, ramp_ms=ramp_ms, kind="mlevel", tool="set_main_assign")
+                applied["mono_level_db"] = lvl["after_db"]
+                out["mono_level"] = lvl
+            for key, rel, val in switches:
+                if val is not None and bool(val) is phase:
+                    _a, applied[key] = await self._write_value(t, rel, bool(val), tool="set_main_assign")
+        out["applied"] = {k: applied[k] for k in ("lr", "mono", "mono_level_db") if k in applied}
+        return out
 
     async def set_pan(self, t: Target | str | int, pan: int) -> dict[str, Any]:
         """Pan −100 (left) .. +100 (right); the desk keeps 101 values (scales_params.md §3)."""
@@ -1642,6 +2023,129 @@ class Desk:
         await self._write(address, spec.to_raw(bool(on)), value={"phantom": bool(on)}, tool="set_phantom", target=target, guarded=True)
         return {"headamp": idx, "address": address, "on": bool(on), "target": target.key if target else None}
 
+    # -- routing / stereo links / solo (server: get_routing, set_bus_link, set_input_block, set_user_in, set_solo_mode)
+
+    def _config_param(self, rel: str) -> tuple[ParamSpec, str]:
+        spec = self._d.param("config", rel)
+        return spec, spec.address()
+
+    @staticmethod
+    def _uin_group(tok: Any) -> tuple[int, int] | None:
+        """``"UIN9-16"`` → (9, 16), ``"UIN1-6"`` → (1, 6); None for any other routing token."""
+        if not isinstance(tok, str) or not tok.upper().startswith("UIN"):
+            return None
+        lo, _, hi = tok[3:].partition("-")
+        return (int(lo), int(hi)) if lo.isdigit() and hi.isdigit() else None
+
+    async def get_routing(self) -> dict[str, Any]:
+        """The input side of the desk in one read: ``routswitch`` (REC/PLAY), the five ``inputs`` blocks of
+        ``/config/routing/IN`` (plus ``play_inputs`` when PLAY is in force), the 32 ``user_in`` slots
+        (``number`` → ``source`` token and ``description``; ``active`` when a block in force reads their
+        UIN group, ``feeds`` naming the In / Aux In they then feed), ``bus_links`` (``"1-2"`` → bool) and
+        the ``solo`` PFL/AFL modes (``channels``, ``buses``, ``dcas``)."""
+        paths = ["/config/routing", "/config/routing/IN", "/config/routing/PLAY", "/config/userrout/in", "/config/buslink", "/config/solo"]
+        secs = await self._read_sections(paths)
+        switch = self._require(secs, "/config/routing").get("routing/routswitch")
+        play = switch == "PLAY"
+        inputs = {k: self._require(secs, "/config/routing/IN").get(f"routing/IN/{k}") for k in IN_BLOCKS}
+        play_inputs = {k: self._require(secs, "/config/routing/PLAY").get(f"routing/PLAY/{k}") for k in IN_BLOCKS}
+        in_force = play_inputs if play else inputs
+        feeds: dict[int, list[str]] = {}
+        for k in IN_BLOCKS[:4]:  # "UIN9-16" read by block "1-8": user-in slots 9..16 feed In 1..8
+            grp = self._uin_group(in_force.get(k))
+            if grp:
+                first_in = int(k.split("-")[0])
+                for i in range(8):
+                    feeds.setdefault(grp[0] + i, []).append(f"In {first_in + i}")
+        grp = self._uin_group(in_force.get("AUX"))  # UIN1-2 / 1-4 / 1-6: slots 1..n feed Aux In 1..n
+        if grp:
+            for i in range(grp[0], grp[1] + 1):
+                feeds.setdefault(i, []).append(f"Aux In {i}")
+        uin = self._require(secs, "/config/userrout/in")
+        user_in: list[dict[str, Any]] = []
+        for slot in range(1, 33):
+            n = uin.get(f"userrout/in/{slot:02d}")
+            try:
+                tok, desc = user_in_source(n)
+            except ValueError:
+                tok = desc = None
+            user_in.append({"slot": slot, "number": n, "source": tok, "description": desc,
+                            "active": slot in feeds, "feeds": " and ".join(feeds[slot]) if slot in feeds else None})
+        links = self._require(secs, "/config/buslink")
+        bus_links = {f"{o}-{o + 1}": links.get(f"buslink/{o}-{o + 1}") for o in range(1, 17, 2)}
+        solo = self._require(secs, "/config/solo")
+        out: dict[str, Any] = {
+            "routswitch": switch, "inputs": inputs, "user_in": user_in, "bus_links": bus_links,
+            "solo": {"channels": solo.get("solo/chmode"), "buses": solo.get("solo/busmode"), "dcas": solo.get("solo/dcamode")},
+        }
+        if play:
+            out["play_inputs"] = play_inputs
+        return out
+
+    async def set_bus_link(self, bus: int, on: bool) -> dict[str, Any]:
+        """Stereo-link (``on``) or unlink the mix-bus pair holding ``bus`` 1..16 — ``/config/buslink/N-M``
+        (guarded; the Tier-2 executor behind ``set_bus_link``: linking re-syncs the pair)."""
+        o, e = bus_link_pair(_int(bus, "bus", 1, 16))
+        spec, address = self._config_param(f"buslink/{o}-{e}")
+        before = await self._leaf(address)
+        await self._write(address, spec.to_raw(bool(on)), value=bool(on), tool="set_bus_link", target=Target("bus", o), guarded=True)
+        return {"pair": f"{o}-{e}", "buses": [o, e], "link": bool(on), "was_linked": before, "address": address}
+
+    async def set_input_block(self, block: str, source: str) -> dict[str, Any]:
+        """Route an 8-channel input block: ``/config/routing/IN/<block>`` (``1-8`` … ``25-32``: enum
+        ``routing_in``; ``AUX``: ``routing_in_aux``) to a source token (guarded; Tier-2 executor)."""
+        try:
+            key = in_block(block)
+            tok = routing_token(source, self._d.enum("routing_in_aux" if key == "AUX" else "routing_in"))
+        except ValueError as ex:
+            raise DeskError("BAD_ARGUMENT", str(ex)) from None
+        spec, address = self._config_param(f"routing/IN/{key}")
+        before = await self._leaf(address)
+        await self._write(address, spec.to_raw(tok), value=tok, tool="set_input_block", guarded=True)
+        return {"block": key, "address": address, "before": before, "source": tok}
+
+    async def set_user_in(self, slot: int, source: str | int) -> dict[str, Any]:
+        """Patch User-In slot 1..32 (``/config/userrout/in/NN``) to a source (:func:`user_in_number`
+        spellings or the raw number 0..168); guarded, the Tier-2 executor behind ``set_user_in``."""
+        s = _int(slot, "slot", 1, 32)
+        try:
+            n = user_in_number(source)
+        except ValueError as ex:
+            raise DeskError("BAD_ARGUMENT", str(ex)) from None
+        spec, address = self._config_param(f"userrout/in/{s:02d}")
+        before = await self._leaf(address)
+        await self._write(address, spec.to_raw(n), value=n, tool="set_user_in", guarded=True)
+        tok, desc = user_in_source(n)
+        try:
+            before_tok: str | None = user_in_token(before)
+        except ValueError:
+            before_tok = None
+        return {"slot": s, "address": address, "before": before, "before_source": before_tok, "number": n, "source": tok, "description": desc}
+
+    async def set_solo_mode(self, *, channels: str | None = None, buses: str | None = None, dcas: str | None = None) -> dict[str, Any]:
+        """PFL/AFL solo mode of the channels, buses and/or DCAs (``/config/solo/chmode|busmode|dcamode``,
+        enum ``pfl_afl``; Tier 1). Returns ``{"applied": {...}, "before": {...}}`` for the values given."""
+        tokens = self._d.enum("pfl_afl")
+        items: list[tuple[str, str, str]] = []
+        for rel, key, val in (("solo/chmode", "channels", channels), ("solo/busmode", "buses", buses), ("solo/dcamode", "dcas", dcas)):
+            if val is None:
+                continue
+            tok = val.strip().upper() if isinstance(val, str) else None
+            if tok not in tokens:
+                raise DeskError("BAD_ARGUMENT", f"{key} must be {' or '.join(tokens)}, got {val!r}")
+            items.append((rel, key, tok))
+        if not items:
+            raise DeskError("BAD_ARGUMENT", f"give channels, buses and/or dcas ({' or '.join(tokens)})")
+        cur = await self._section("/config/solo")
+        applied: dict[str, str] = {}
+        before: dict[str, Any] = {}
+        for rel, key, tok in items:
+            spec, address = self._config_param(rel)
+            before[key] = cur.get(rel)
+            await self._write(address, spec.to_raw(tok), value=tok, tool="set_solo_mode")
+            applied[key] = tok
+        return {"applied": applied, "before": before}
+
     async def set_insert(self, t: Target | str | int, *, sel: str | None = None, on: bool | None = None, pos: str | None = None) -> dict[str, Any]:
         """Insert point (``OFF``, ``FX1L`` … ``FX8R``, ``AUX1``–``AUX6``), on switch and position
         (``PRE``/``POST``) of a channel/bus/matrix/main strip (guarded ``/*/insert/*``)."""
@@ -1672,6 +2176,128 @@ class Desk:
         await self._write(address, i, value=tokens[i], tool="set_fx_type", guarded=True)
         self._drop(f"/fx/{n}/par")  # the par semantics change with the effect
         return {"slot": n, "type": tokens[i], "index": i}
+
+    # -- output taps (fx_routing_scenes.md §4.7) ------------------------------------------------------
+
+    def _output_spec(self, group: Any, out: Any, rel: str) -> tuple[ParamSpec, str, str, int]:
+        """(spec, concrete address, group, tap number) of ``rel`` (``src``/``pos``/``invert``) on tap
+        ``out`` of ``group`` (``main`` = XLR OUT 1-16, ``aux`` = AUX OUT 1-6); BAD_ARGUMENT otherwise."""
+        g = str(group).strip().lower() if isinstance(group, str) else ""
+        if g not in _OUTPUT_GROUPS:
+            raise DeskError("BAD_ARGUMENT", f"output group must be 'main' (XLR OUT 1-16) or 'aux' (AUX OUT 1-6), got {group!r}")
+        tmpl, var, label = _OUTPUT_GROUPS[g]
+        spec = self._d.param("outputs", f"{tmpl}/{rel}")
+        rng = spec.var_ranges.get(var)
+        lo, hi = rng if isinstance(rng, tuple) else (1, 1)
+        n = _int(out, f"{label} number", lo, hi)
+        return spec, spec.address(**{var: n}), g, n
+
+    def _output_node_path(self, group: str, n: int) -> str:
+        """``/outputs/main/03`` — the tap's node (its ``src`` address minus the leaf)."""
+        _spec, address, _g, _n = self._output_spec(group, n, "src")
+        return address.rsplit("/", 1)[0]
+
+    def _tap_dict(self, group: str, n: int, vals: Mapping[str, Any], names: Mapping[str, Mapping[Any, str]]) -> dict[str, Any]:
+        tmpl, _var, label = _OUTPUT_GROUPS[group]
+        rel = tmpl.format(n=n, idx=n)
+        src, pos, inv = vals.get(f"{rel}/src"), vals.get(f"{rel}/pos"), vals.get(f"{rel}/invert")
+        tokens = self._d.enum("output_src")
+        t = output_source_target(src)
+        return {
+            "out": n,
+            "label": f"{label} {n}",
+            "address": self._output_node_path(group, n),
+            "source": src,
+            "source_index": tokens.index(src) if isinstance(src, str) and src in tokens else None,
+            "target": t.key if t else None,
+            "name": (names.get(t.family) or {}).get(t.index) if t else None,
+            "pos": pos,
+            "invert": inv,
+            "follows_mute": (pos in _OUTPUT_POS_FOLLOWS_MUTE) if isinstance(pos, str) else None,
+        }
+
+    async def _source_names(self, taps: Iterable[Mapping[str, Any]]) -> dict[str, dict[Any, str]]:
+        """Strip names for every family the taps draw from (a failed read just drops the names)."""
+        fams = sorted({t.family for tap in taps if (t := output_source_target(tap.get("source"))) is not None})
+        names: dict[str, dict[Any, str]] = {}
+        for fam in fams:
+            try:
+                names[fam] = await self.get_names(fam)
+            except DeskError:
+                names[fam] = {}
+        return names
+
+    async def get_output(self, group: str, out: int) -> dict[str, Any]:
+        """One output tap: ``{out, label, address, source, source_index, target, name, pos, invert,
+        follows_mute}`` — ``target``/``name`` are the strip the source taps (bus.3 'Wedge A'),
+        ``follows_mute`` whether that strip's mute silences the tap (+M variants and POST)."""
+        _spec, _addr, g, n = self._output_spec(group, out, "src")
+        path = self._output_node_path(g, n)
+        vals = await self._section(path)
+        bare = self._tap_dict(g, n, vals, {})
+        return self._tap_dict(g, n, vals, await self._source_names([bare]))
+
+    async def get_outputs(self) -> dict[str, Any]:
+        """The physical output taps (fx_routing_scenes.md §4.7) and the routing blocks that carry
+        them: ``{"main": [16 taps], "aux": [6 taps], "routing": {"OUT": {block: token}, "AES50A":
+        {block: token}}}``. Taps are :meth:`get_output` dicts; the XLR taps also say whether their own
+        socket carries them (``xlr``: ``/config/routing/OUT`` block = ``OUTn-m``) and which AES50-A
+        channels copy them (``aes50a``, from the ``OUT1-8``/``OUT9-16`` blocks)."""
+        main_n = [n for n in self._output_range("main")]
+        aux_n = [n for n in self._output_range("aux")]
+        main_paths = [self._output_node_path("main", n) for n in main_n]
+        aux_paths = [self._output_node_path("aux", n) for n in aux_n]
+        out_path = self._d.param("config", "routing/OUT/1-4").address().rsplit("/", 1)[0]
+        aes_path = self._d.param("config", "routing/AES50A/1-8").address().rsplit("/", 1)[0]
+        secs = await self._read_sections(main_paths + aux_paths + [out_path, aes_path])
+        main_vals = [self._require(secs, p) for p in main_paths]
+        aux_vals = [self._require(secs, p) for p in aux_paths]
+        out_blocks = {k.rsplit("/", 1)[1]: v for k, v in self._require(secs, out_path).items()}
+        aes_blocks = {k.rsplit("/", 1)[1]: v for k, v in self._require(secs, aes_path).items()}
+        bare = [self._tap_dict("main", n, v, {}) for n, v in zip(main_n, main_vals)] + [self._tap_dict("aux", n, v, {}) for n, v in zip(aux_n, aux_vals)]
+        names = await self._source_names(bare)
+        main = [self._tap_dict("main", n, v, names) for n, v in zip(main_n, main_vals)]
+        aux = [self._tap_dict("aux", n, v, names) for n, v in zip(aux_n, aux_vals)]
+        for tap in main:
+            tap["xlr"] = _xlr_carries_tap(out_blocks, tap["out"])
+            tap["aes50a"] = _aes_channels_for_tap(aes_blocks, tap["out"])
+        return {"main": main, "aux": aux, "routing": {"OUT": out_blocks, "AES50A": aes_blocks}}
+
+    def _output_range(self, group: str) -> range:
+        spec = self._d.param("outputs", f"{_OUTPUT_GROUPS[group][0]}/src")
+        rng = spec.var_ranges.get(_OUTPUT_GROUPS[group][1])
+        lo, hi = rng if isinstance(rng, tuple) else (1, 1)
+        return range(lo, hi + 1)
+
+    async def set_output(
+        self, group: str, out: int, *, source: Any = None, pos: Any = None, invert: bool | None = None, tool: str = "set_output",
+    ) -> dict[str, Any]:
+        """Patch output tap ``out`` of ``group`` (``main`` XLR OUT 1-16 / ``aux`` AUX OUT 1-6):
+        ``source`` in any spelling :func:`normalise_output_source` accepts, ``pos`` per
+        :func:`normalise_output_pos`, ``invert`` polarity. Every argument is normalised before the
+        first write so a bad one leaves the tap untouched. Guarded (``src``/``pos`` are Tier 2 —
+        the confirming tools are ``set_output``/``set_aux_output``); ``invert`` is a Tier-1 parameter
+        written on the same confirmed call."""
+        spec_src, addr_src, g, n = self._output_spec(group, out, "src")
+        writes: list[tuple[str, ParamSpec, str, Any]] = []
+        if source is not None:
+            tok = normalise_output_source(source, self._d.enum("output_src"))
+            writes.append(("source", spec_src, addr_src, tok))
+        if pos is not None:
+            spec, addr, _g, _n = self._output_spec(g, n, "pos")
+            writes.append(("pos", spec, addr, normalise_output_pos(pos, self._d.enum("output_pos"))))
+        if invert is not None:
+            if not isinstance(invert, bool):
+                raise DeskError("BAD_ARGUMENT", f"invert must be true/false, got {invert!r}")
+            spec, addr, _g, _n = self._output_spec(g, n, "invert")
+            writes.append(("invert", spec, addr, bool(invert)))
+        if not writes:
+            raise DeskError("BAD_ARGUMENT", "nothing to set: give source, pos and/or invert")
+        applied: dict[str, Any] = {}
+        for key, spec, addr, value in writes:
+            await self._write(addr, spec.to_raw(value), value=value, tool=tool, guarded=True)
+            applied[key] = value
+        return {"group": g, "out": n, "label": f"{_OUTPUT_GROUPS[g][2]} {n}", "address": self._output_node_path(g, n), "applied": applied}
 
     async def set_geq_band(self, fx_slot: int, side: str, band: int, gain_db: float, *, fx_type: str | None = None) -> None:
         """Raw GEQ write: ``gain_db`` (−15..+15, 0.5 dB grid) to 1-based ``band`` (1..31; 32 = the

@@ -149,6 +149,33 @@ async def test_dump_desk_state_complete_and_fast(conn, descriptor):
     assert state.get("/-show/showfile/scene/001/name") == "The Molecules"
 
 
+async def test_output_taps_seeded_like_a_factory_patch(conn, fakedesk, descriptor):
+    """/outputs/main/NN = MixBus NN (src 3+NN) POST not inverted, AUX OUT taps OFF — the documented node
+    form "/outputs/main/01 4 POST OFF" (fx_routing_scenes.md §4.7, X32.c case OMAIN); /outputs/aux stops at 06."""
+    main = [f"/outputs/main/{n:02d}" for n in range(1, 17)]
+    aux = [f"/outputs/aux/{n:02d}" for n in range(1, 8)]
+    lines = await conn.node_many(main + aux)
+    for n in range(1, 17):
+        assert lines[f"/outputs/main/{n:02d}"] == f"/outputs/main/{n:02d} {3 + n} POST OFF"
+    for n in range(1, 7):
+        assert lines[f"/outputs/aux/{n:02d}"] == f"/outputs/aux/{n:02d} 0 POST OFF"
+    assert lines["/outputs/aux/07"] is None  # not a node on the desk, not one on the fake
+    assert await conn.get("/outputs/main/03/src") == 6 and fakedesk.value("/outputs/main/03/src") == "MixBus 03"
+    assert fakedesk.value("/outputs/main/16/src") == "MixBus 16" and fakedesk.value("/outputs/aux/01/pos") == "POST"
+    # leaves take ints or enum tokens (transport.md §5.2) and the node line follows
+    await conn.set("/outputs/main/03/src", "Main L")
+    await conn.set("/outputs/main/03/pos", 6)
+    await conn.set("/outputs/main/03/invert", 1)
+    assert await conn.get("/outputs/main/03/src") == 1 and await conn.get("/outputs/main/03/pos") == 6
+    assert await conn.node("/outputs/main/03") == "/outputs/main/03 1 PRE ON"
+    await conn.set("/outputs/aux/02/src", 76)
+    assert await conn.node("/outputs/aux/02") == "/outputs/aux/02 76 POST OFF"
+    # the node-style write form works on a tap too
+    await conn.slash("/outputs/aux/02 20 EQ->+M ON")
+    assert fakedesk.value("/outputs/aux/02/src") == "Matrix 1" and fakedesk.value("/outputs/aux/02/pos") == "EQ->+M"
+    assert fakedesk.get("/outputs/aux/02/invert") == 1
+
+
 # ---------------------------------------------------------------------------------------- / writes
 
 # Verbatim console lines (transport.md §6.3 / tests/test_nodes.py VERBATIM): written with `/`, read

@@ -623,6 +623,9 @@ class Desk:
     async def recall_scene(self, index: int) -> dict ; save_scene(index, name, notes="") -> dict
     async def restore(self, snap: Snapshot, *, scope: str | None = None) -> dict   # nodes.restore_plan → conn.slash(line) per section (awaits the echo); rate-limited; returns count + duration + failures
     async def set_source(self, t: Target, source: str) -> dict ; set_phantom(headamp_index|target, on)
+    async def set_bus_link(self, bus: int, on: bool) -> dict ; set_input_block(block, source) ; set_user_in(slot, source)   # routing executors: /config/buslink, /config/routing/IN, /config/userrout/in (guarded writes)
+    async def set_solo_mode(self, *, channels=None, buses=None, dcas=None) -> dict   # Tier 1: /config/solo/chmode|busmode|dcamode PFL/AFL
+    async def get_routing(self) -> dict            # routswitch, the IN blocks, 32 user-in slots decoded (number, token, description, active, feeds), bus links, solo modes
     async def set_geq_band(self, fx_slot: int, side: str, band: int, gain_db: float) -> None   # raw GEQ write (used by cfs via a GeqWriter adapter); validated by policy.validate_notch when called from cfs
     async def set_insert(self, t: Target, *, sel: str | None = None, on: bool | None = None, pos: str | None = None)
     async def set_fx_type(self, slot: int, fx_type: str)
@@ -775,6 +778,11 @@ show_mode(on: bool)
 label_channel(ch: int, name: str | None = None, color: str | None = None, icon: int | None = None)
 apply_patch_plan(file: str, include_source: bool = False, confirm_token=None) ; export_patch_plan(file: str)
 set_channel_config(ch: int, source: str | None = None, link: bool | None = None, confirm_token=None)
+get_routing()                                                      # T0: IN blocks + routswitch, 32 user-in slots decoded to tokens, bus links, solo modes
+set_bus_link(bus: int, on: bool, confirm_token=None)               # T2: /config/buslink/N-M of the pair holding bus
+set_input_block(block: str, source: str, confirm_token=None)       # T2: /config/routing/IN/{1-8|9-16|17-24|25-32|AUX} (enum routing_in / routing_in_aux)
+set_user_in(slot: int, source: str | int, confirm_token=None)      # T2: /config/userrout/in/NN, source token (IN04, A01, B01, CARD01, AUX1, TBINT, TBEXT, OFF) or number 0..168
+set_solo_mode(channels: str | None = None, buses: str | None = None, dcas: str | None = None)   # T1: PFL/AFL on /config/solo/chmode|busmode|dcamode
 get_meters(type: str = "channels", duration_ms: int = 500)      # "channels" | "buses" | "main" → averaged dB
 get_rta(target: str | None = None, frames: int = 10)
 setup_ringout_eqs(buses: list[int], confirm_token=None) ; validate_ringout_eqs(buses: list[int])
