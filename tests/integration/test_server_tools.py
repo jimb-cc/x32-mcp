@@ -613,6 +613,112 @@ async def test_set_channel_config_dance(app, fakedesk):
     assert_err(await srv.set_channel_config(2, source="nope"), "BAD_ARGUMENT")
 
 
+async def test_get_outputs_decodes_taps_and_routing(app, fakedesk):
+    outs = await srv.get_outputs()
+    assert outs["ok"] and len(outs["main"]) == 16 and len(outs["aux"]) == 6
+    assert outs["main"][2] == {
+        "out": 3, "label": "OUT 3", "address": "/outputs/main/03", "source": "MixBus 03", "source_index": 6, "target": "bus.3",
+        "name": "Bus03", "pos": "POST", "invert": False, "follows_mute": True, "xlr": True, "aes50a": [3],
+    }
+    assert outs["main"][10]["aes50a"] == [11] and outs["main"][15]["source"] == "MixBus 16"
+    assert outs["aux"][0] == {
+        "out": 1, "label": "AUX OUT 1", "address": "/outputs/aux/01", "source": "OFF", "source_index": 0, "target": None,
+        "name": None, "pos": "POST", "invert": False, "follows_mute": True,
+    }
+    assert outs["routing"]["OUT"] == {"1-4": "OUT1-4", "5-8": "OUT5-8", "9-12": "OUT9-12", "13-16": "OUT13-16"}
+    assert outs["routing"]["AES50A"] == {"1-8": "OUT1-8", "9-16": "OUT9-16", "17-24": "P161-8", "25-32": "P169-16", "33-40": "AUX1-6/Mon", "41-48": "AuxIN1-6/TB"}
+    assert outs["summary"].startswith("XLR OUT 1-16: 1 ← MixBus 01 'Bus01' POST, 2 ← MixBus 02 'Bus02' POST")
+    assert "AUX OUT 1-6: all OFF; every XLR socket carries its own tap; AES50-A 1-8 ← OUT1-8, 9-16 ← OUT9-16" in outs["summary"]
+    json.dumps(outs)
+    # front-panel changes: a direct out with a name, a PRE tap (ignores the mute), XLR 5-8 handed to the
+    # control room, AES50-A 9-16 turned into inputs -> tap 6 is off its socket, tap 11 off the snake
+    fset(app, fakedesk, "/ch/05/config/name", "Vox Tony")
+    fset(app, fakedesk, "/outputs/main/01/src", "DirectOut Ch 05")
+    fset(app, fakedesk, "/outputs/main/01/pos", "PRE")
+    fset(app, fakedesk, "/outputs/aux/03/src", "Main L")
+    fset(app, fakedesk, "/outputs/aux/03/invert", True)
+    fset(app, fakedesk, "/config/routing/OUT/5-8", "AUX/CR")
+    fset(app, fakedesk, "/config/routing/AES50A/9-16", "AN9-16")
+    outs = await srv.get_outputs()
+    t1 = outs["main"][0]
+    assert t1["source"] == "DirectOut Ch 05" and t1["target"] == "ch.5" and t1["name"] == "Vox Tony" and t1["follows_mute"] is False
+    assert outs["aux"][2]["target"] == "main.st" and outs["aux"][2]["name"] == "Main" and outs["aux"][2]["invert"] is True
+    assert outs["main"][5]["xlr"] is False and outs["main"][4]["aes50a"] == [5] and outs["main"][10]["aes50a"] == []
+    assert outs["summary"].startswith("XLR OUT 1-16: 1 ← DirectOut Ch 05 'Vox Tony' PRE (ignores mute), ")
+    assert "AUX OUT 1-6: 1 ← OFF, 2 ← OFF, 3 ← Main L 'Main' POST inverted, 4 ← OFF" in outs["summary"]
+    assert "XLR 5-8 carry AUX/CR (not their own taps)" in outs["summary"] and "9-16 ← AN9-16" in outs["summary"]
+
+
+async def test_set_output_and_set_aux_output_dance(app, fakedesk):
+    # the first call describes the change (current tap in the envelope) and writes nothing
+    pend = await srv.set_output(3, source="Main L", pos="pre", invert=True)
+    token = assert_pending(pend)
+    assert pend["action_summary"] == ("OUT 3 (XLR out 3): source MixBus 03 'Bus03' → Main L 'Main', tap POST → PRE "
+                                      "(does not follow the source's mute), polarity normal → inverted")
+    assert pend["current"]["source"] == "MixBus 03" and pend["current"]["pos"] == "POST"
+    await settle(app)
+    assert fakedesk.node_line("/outputs/main/03") == "/outputs/main/03 6 POST OFF"
+    # an unknown token is refused and writes nothing; a token is bound to what was shown (and spent on a mismatch)
+    assert_err(await srv.set_output(3, source="Main L", pos="pre", invert=True, confirm_token="nope"), "BAD_TOKEN")
+    assert_err(await srv.set_output(3, source="Main R", pos="pre", invert=True, confirm_token=token), "BAD_TOKEN")
+    await settle(app)
+    assert fakedesk.node_line("/outputs/main/03") == "/outputs/main/03 6 POST OFF"
+    # the token call writes src, pos and invert and reads the tap back
+    token = assert_pending(await srv.set_output(3, source="Main L", pos="pre", invert=True))
+    done = await srv.set_output(3, source="Main L", pos="pre", invert=True, confirm_token=token)
+    assert done["ok"] and done["out"] == 3 and done["group"] == "main" and done["address"] == "/outputs/main/03"
+    assert done["applied"] == {"source": "Main L", "pos": "PRE", "invert": True}
+    assert done["before"]["source"] == "MixBus 03" and done["after"]["source"] == "Main L" and done["after"]["follows_mute"] is False
+    assert done["summary"] == "OUT 3: source Main L, pos PRE, invert on — now Main L 'Main' PRE (ignores mute) inverted"
+    await settle(app)
+    assert fakedesk.get("/outputs/main/03/src") == 1 and fakedesk.get("/outputs/main/03/pos") == 6 and fakedesk.get("/outputs/main/03/invert") == 1
+    assert fakedesk.node_line("/outputs/main/03") == "/outputs/main/03 1 PRE ON"
+    assert (await srv.get_outputs())["main"][2]["source"] == "Main L"
+    assert_err(await srv.set_output(3, source="Main L", pos="pre", invert=True, confirm_token=token), "BAD_TOKEN")  # single use
+    # the pre-write snapshot was taken by the first confirmed write
+    assert app.desk.pre_write_snapshot is not None
+    # aux taps: their own tool AND their own action — a set_output token cannot drive set_aux_output
+    pend = await srv.set_aux_output(2, source="bus 3")
+    tok = assert_pending(pend)
+    assert pend["action_summary"] == "AUX OUT 2 (rear aux out 2): source OFF → MixBus 03 'Bus03'"
+    assert_err(await srv.set_output(2, source="bus 3", confirm_token=tok), "BAD_TOKEN")
+    await settle(app)
+    assert fakedesk.get("/outputs/aux/02/src") == 0
+    tok = assert_pending(await srv.set_aux_output(2, source="bus 3"))
+    done = await srv.set_aux_output(2, source="bus 3", confirm_token=tok)
+    assert done["ok"] and done["applied"] == {"source": "MixBus 03"} and done["label"] == "AUX OUT 2" and done["group"] == "aux"
+    await settle(app)
+    assert fakedesk.node_line("/outputs/aux/02") == "/outputs/aux/02 6 POST OFF"
+    assert (await srv.get_outputs())["aux"][1]["target"] == "bus.3"
+    # spellings: tokens in any case and short forms; the summary names the strip the new source taps
+    fset(app, fakedesk, "/ch/05/config/name", "Vox Tony")
+    pend = await srv.set_aux_output(1, source="ch 5", pos="pre eq mute")
+    assert_pending(pend)
+    assert pend["action_summary"] == "AUX OUT 1 (rear aux out 1): source OFF → DirectOut Ch 05 'Vox Tony', tap POST → <-EQ+M"
+    pend = await srv.set_output(16, source="monitor L", pos="IN/LC")
+    assert_pending(pend)
+    assert pend["action_summary"] == "OUT 16 (XLR out 16): source MixBus 16 'Bus16' → Monitor L, tap POST → IN/LC (does not follow the source's mute)"
+    for spelling in ("MixBus 03", "mixbus 03", "bus 3", "Bus03", "mix 3", "6"):
+        pend = await srv.set_output(1, source=spelling)
+        assert_pending(pend)
+        assert pend["action_summary"].endswith("→ MixBus 03 'Bus03'"), spelling
+    pend = await srv.set_output(1, source="off", invert=False)
+    assert_pending(pend)
+    assert pend["action_summary"] == "OUT 1 (XLR out 1): source MixBus 01 'Bus01' → OFF, polarity normal → normal"
+    # bad arguments never mint a token and never write
+    for bad in (
+        srv.set_output(17, source="off"), srv.set_output(0, source="off"), srv.set_aux_output(7, source="off"),
+        srv.set_output(1), srv.set_output(1, source="nope"), srv.set_output(1, source="bus 17"), srv.set_output(1, source="fx 5L"),
+        srv.set_output(1, pos="post+m"), srv.set_output(1, pos="sideways"), srv.set_output(1, invert="yes"),
+    ):
+        assert_err(await bad, "BAD_ARGUMENT")
+    await settle(app)
+    assert fakedesk.node_line("/outputs/main/01") == "/outputs/main/01 4 POST OFF"
+    assert_err(await srv.dump_desk_state(["outputs.1"]), "BAD_ARGUMENT")
+    dump = await srv.dump_desk_state(["outputs"])
+    assert dump["ok"] and dump["section_count"] == 22 and dump["sections"]["/outputs/main/03"] == {"main/03/src": "Main L", "main/03/pos": "PRE", "main/03/invert": True}
+
+
 async def test_ramp_ms_is_bounded_and_budgeted_for_the_real_cadence(app):
     """ramp_ms is 0..60000 in every docstring — and the budget must outlast the ramp it covers."""
     for call in (
