@@ -166,4 +166,32 @@ time-locked to the write, or tier B must be off altogether; (4) G5 needs a polic
 detector. The passive log of this run (`programme_spotify_mic_watch_2026-09-25.jsonl.gz`) is the first corpus file with the
 actuator in the loop.
 
-**Not yet run**: the quiet-room watch with a voice (§4).
+## 8. Run 6 — the quiet-room watch with a voice (14:17, today's code)
+
+Spotify off, Main −21.1, the same open mic, Jim talking into it with a few long vowels; `run_cfs.py --dash 8033 watch main
+--seconds 90`; report `20260925-141706-watch-main_run6_voice.json`. Armed in silence (arm p95 −91.8, loud-ish line −20).
+
+| t (s) | line | dBFS | written | by |
+|---|---|---|---|---|
+| 0.0 | 9012 Hz | −55 | 10 kHz −3 | tier B (the room's HF mode, 12 dB under the ring level, "excess ≥ 20 dB" over the −128 floor) |
+| 73.4 | 228 Hz | −25 | 250 Hz −3 | tier B: the sustained vowel's fundamental |
+| 74.4 / 74.5 / 77.3 | 6321 / 2737 / 3831 Hz | −72 / −60 / −72 | 6.3k / 2.5k / 4k −3 | tier A, RISE 7–8 dB on the voice's partials |
+
+Five cuts in 100 s of speech; every verdict `confirmed` although the drops were 0–3 dB (the lines vanished when the speech
+moved on: "confirmed by vanishing" again). `PROGRAMME_PRESENT` set; 38 alerts. Speech is enough to draw both tiers: the
+vowel gets the tier-B cut, and RISE fires on partials 60–70 dB below full scale, which is the absolute-level-floor defect of
+run 4 wearing a different hat.
+
+**Two arm-time defects found on the way** (the first attempt refused to arm): (a) `/-stat/rtasource` read 101 (Ch 2 post)
+while the source pref read 72 — X32 Edit's channel view had moved the analyser without touching the pref — and re-writing
+the same pref value does not move the stat; writing another source and then the target does (`set_rta_source` should
+toggle when the read-back disagrees instead of giving up). (b) The failed arm (RTA_UNVERIFIED) left `det` / `decay` at the
+forced values instead of restoring them.
+
+## 9. Where this leaves the product (end of 2026-09-25)
+
+Ring-out in a quiet room works and is safe to use, within the graphic EQ's geometry; the parametric actuator is the next
+step and now has field evidence. Watch mode is not usable with programme or a voice: tier B cuts sustained notes and
+vowels within a second, RISE cuts partials far below any audible level, and the post-cut verdict cannot tell a note that
+stopped from a ring that died. The fixes are the frontier model's; the gate that will judge them is G5 extended to a
+policy-level replay of the run-5 and run-6 logs.
