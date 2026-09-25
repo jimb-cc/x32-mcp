@@ -169,7 +169,7 @@ async def test_ws_hello_rta_state(rig) -> None:
     async with client(rig.dash) as ws:
         hello = await recv_json(ws)
         assert hello["t"] == "hello"
-        assert len(hello["band_hz"]) == RTA_BANDS == 100 and hello["band_hz"][90] == 10000.0
+        assert len(hello["band_hz"]) == RTA_BANDS == 100 and hello["band_hz"][90] == 10240.0
         assert len(hello["geq_band_hz"]) == 31 and hello["geq_band_hz"][0] == 20.0
         assert hello["version"] == "0.1.0" and hello["fps"] == 20
         got = await collect(ws, {"rta", "state", "notches"})

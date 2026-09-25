@@ -113,6 +113,12 @@ Things that made the detector's life unrealistically **easy** (E) or **hard**/ha
 
 ---
 
+*(The corpus runs on the grid it was built and baselined on, `10000·2^((i−90)/10)` (`rtasim.physics.RTA_BAND_HZ`), not yet on
+the desk's measured `20·2^(i/10)` (`x32mcp.meters`): its scenes mix bin-anchored frequencies (`band_centre_hz`) with
+world-anchored ones (notes, rings and GEQ centres in Hz), so the bins cannot move alone without changing what scenarios test.
+The grid moves with the measured analyser model and re-anchored scenarios in the corpus revision; see
+`docs/REVIEW_RESPONSE_2026-09-24.md` item 2 for what the corpus reads when only the bins are moved.)*
+
 ## 3. Scenario table (67 scenarios; ground truth from the rendered trace, seeds 1–3; "0 ev" = nothing may be detected)
 
 Columns: name | dur s | content | ground truth (on = t_onset, vis = t_prom range over seeds, pk = peak prominence) | budget ms |

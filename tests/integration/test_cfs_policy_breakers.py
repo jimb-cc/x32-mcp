@@ -18,7 +18,7 @@ from typing import Any
 import pytest
 
 from conftest import CONN_OPTS, wait_until
-from test_cfs_policy_desk import COLOR, GEQ_BAND_1K, PAR_1K, Rig, RoomSourceRta, _armed, _strum, make_rig  # noqa: F401 (fixture)
+from test_cfs_policy_desk import COLOR, GEQ_BAND_1K, HZ_1K, PAR_1K, Rig, RoomSourceRta, _armed, _strum, make_rig  # noqa: F401 (fixture)
 from x32mcp.cfs import CfsManager, CfsMode, ReportStore
 from x32mcp.cfs_policy import CfsPolicyConfig
 from x32mcp.connection import X32Connection
@@ -576,7 +576,7 @@ async def test_at_arm_loudish_line_under_30db_prominent_is_deepened_by_the_polic
     await wait_until(lambda: rig.notches(), timeout=4.0, what="tier-B cut of the at-arm line")
     n0 = rig.notches()[0]
     assert n0["tier"] == "B" and n0["policy"] == "at_arm", n0     # the notch's policy tag names the rule that engaged the line
-    cand = next(c for c in ses.det.candidates if abs(c.freq_hz - 1015) < 50)
+    cand = next(c for c in ses.det.candidates if abs(c.freq_hz - HZ_1K) < 50)
     assert "established_at_arm" not in cand.emit_evidence and "suppressed_at_arm" in cand.emit_evidence
     await asyncio.sleep(7.5)
     notches = rig.notches()
@@ -615,7 +615,7 @@ async def test_held_line_masked_by_a_transient_is_not_ignore_listed_as_ended(mak
     await asyncio.sleep(6.0)                                 # > held_deepen_s + a verdict, with the line standing again
     ign = list(ses.policy.ignore)
     writes = _band_writes(rig, GEQ_BAND_1K)
-    live = [(round(c.freq_hz), c.klass, c.cut_verdict) for c in ses.det.candidates if abs(c.freq_hz - 1015) < 50 and not c.misses]
+    live = [(round(c.freq_hz), c.klass, c.cut_verdict) for c in ses.det.candidates if abs(c.freq_hz - HZ_1K) < 50 and not c.misses]
     outcomes = [e["next_action"] for e in ses.policy.tier_b_log if e["action"] == "end"]
     print(f"ignore list: {ign}; band writes: {writes}; line now: {live}; alert: {rig.cfs.state.alert}; end rows: {outcomes}")
     await rig.cfs.stop()

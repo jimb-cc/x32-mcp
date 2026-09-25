@@ -99,7 +99,7 @@ def test_strip_targets(d):
 
 def test_accessor_dicts(d):
     assert d.policy["ch_fader_max_db"] == 5 and d.policy["read_cache_ttl_s"] == 2.0 and d.policy["show_mode_default"] is False
-    assert d.rta["meter_type"] == 15 and len(d.rta["band_hz"]) == 100 and d.rta["band_hz"][90] == 10000
+    assert d.rta["meter_type"] == 15 and len(d.rta["band_hz"]) == 100 and d.rta["band_hz"][90] == 10240
     assert d.rta["source_param"] == "/-prefs/rta/source" and d.rta["stat_param"] == "/-stat/rtasource"
     assert len(d.geq["band_hz"]) == 31 and d.geq["gain_scale"] == "geq_gain" and d.geq["insert_slots_preferred"] == [5, 6, 7, 8]
     assert d.geq["fx_types_dual"] == ["GEQ2", "TEQ2"]

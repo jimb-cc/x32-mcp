@@ -41,7 +41,7 @@ RTA_DET = "/-prefs/rta/det"
 RTA_DECAY = "/-prefs/rta/decay"
 DET_INDEX = {"PEAK": 0, "RMS": 1}     # raw 0 = PEAK, raw 1 = RMS: the console's own /node label (meters.md 2026-09-25 item 5)
 F_LO, F_HI, F_STEPS = 20.0, 20000.0, 121          # logf [20, 20000, 121]: semitones
-BAND_HZ = [10000.0 * 2 ** ((i - 90) / 10) for i in range(100)]
+BAND_HZ = [20.0 * 2 ** (i / 10) for i in range(100)]
 
 
 def f1_raw(i: int) -> float:
