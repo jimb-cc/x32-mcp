@@ -1013,6 +1013,78 @@ def _enum_raw(d: Descriptor, address: str, token: str, *, default: int) -> int:
         return default
 
 
+RTA_DORMANT_PROBE_S = 0.6
+
+
+async def wake_rta_analyser(conn: Any, d: Descriptor, frames: FrameSource, *, probe_s: float = RTA_DORMANT_PROBE_S, min_frames: int = 6,
+                            wake_timeout_s: float = 2.0, read_timeout_s: float = 1.0) -> dict[str, Any]:
+    """Start the console's RTA analyser if ``/meters/15`` is carrying a static flat floor.
+
+    Measured 2026-09-25 (meters.md Verification log item 1): after a power-up the console's analyser is not running until
+    its METERS/RTA page has been displayed once, and ``/meters/15`` then carries the same flat frame (-97.0 in every band)
+    for as long as nobody visits that page -- a detector armed on it sees a perfectly quiet room. Showing the page for a
+    moment starts the analyser, which keeps running after the screen is left.
+
+    Called once ``frames`` is delivering: watches the stream for ``probe_s`` (at least ``min_frames`` frames); if every
+    frame is bit-identical AND flat (all bands equal) it saves the console's screen and METERS tab, shows the RTA page
+    (``rta.meters_screen`` / ``rta.rta_page``), waits up to ``wake_timeout_s`` for a frame that differs, and restores the
+    screen. Never raises: the result says what happened -- ``dormant`` True / False / None (the probe saw fewer than
+    ``min_frames`` frames), ``woken``, ``probe_frames``, ``wake_ms``, ``screen_before``, ``error``."""
+    rta = getattr(d, "rta", None) or {}
+    loop = asyncio.get_running_loop()
+    seen: list[tuple[float, ...]] = []
+    unsub = frames.subscribe(lambda fr: seen.append(tuple(fr.values)) if fr.is_rta else None)
+    out: dict[str, Any] = {"dormant": None, "woken": False, "probe_frames": 0}
+    try:
+        deadline = loop.time() + probe_s
+        while len(seen) < 2 * min_frames and loop.time() < deadline:
+            await asyncio.sleep(0.05)
+        out["probe_frames"] = len(seen)
+        if len(seen) < min_frames:
+            return out
+        first = seen[0]
+        if not (max(first) - min(first) < 1e-6 and all(s == first for s in seen)):
+            out["dormant"] = False
+            return out
+        out["dormant"] = True
+        scr = str(rta.get("screen_param", "/-stat/screen/screen"))
+        page = str(rta.get("meter_page_param", "/-stat/screen/METER/page"))
+        before: dict[str, Any] = {}
+        for a in (scr, page):
+            try:
+                before[a] = await asyncio.wait_for(conn.get(a), read_timeout_s)
+            except Exception:  # noqa: BLE001 - no read-back: nothing to restore for that address
+                before[a] = None
+        out["screen_before"] = dict(before)
+        k = len(seen)
+        t0 = loop.time()
+        try:
+            await conn.set(scr, int(rta.get("meters_screen", 1)))
+            await conn.set(page, int(rta.get("rta_page", 4)))
+            while loop.time() - t0 < wake_timeout_s:
+                await asyncio.sleep(0.05)
+                if any(s != first for s in seen[k:]):
+                    out["woken"] = True
+                    break
+        finally:
+            for a, v in before.items():
+                if isinstance(v, (int, float)) and not isinstance(v, bool):
+                    try:
+                        await conn.set(a, int(v))
+                    except Exception as e:  # noqa: BLE001
+                        out["error"] = f"restore {a}: {type(e).__name__}: {e}"
+        out["wake_ms"] = round((loop.time() - t0) * 1000.0, 1)
+        log.log(logging.INFO if out["woken"] else logging.WARNING,
+                "RTA analyser was dormant (a static flat %.1f dB frame): METERS/RTA page shown -> %s after %.0f ms",
+                first[0], "alive" if out["woken"] else "still static", out["wake_ms"])
+        return out
+    except Exception as e:  # noqa: BLE001 - never fail the arm over this
+        out["error"] = f"{type(e).__name__}: {e}"
+        return out
+    finally:
+        unsub()
+
+
 # prefs_before key -> descriptor rta key of the address it came from
 _RESTORABLE_PREFS = (("source", "source_param", "/-prefs/rta/source"), ("pos", "pos_param", "/-prefs/rta/pos"),
                      ("autogain", "autogain_param", "/-prefs/rta/autogain"), ("det", "det_param", "/-prefs/rta/det"),

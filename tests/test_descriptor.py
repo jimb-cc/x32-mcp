@@ -41,7 +41,7 @@ def test_loads_real_file_default_and_explicit_path(d):
     assert Descriptor.load(DEVICE_YAML).all_node_paths() == d.all_node_paths()
     assert Descriptor.load(str(DEVICE_YAML)).meta["model"] == "X32"
     assert d.meta["osc_port"] == 10023
-    assert "X32" in repr(d) and "2103 nodes" in repr(d)
+    assert "X32" in repr(d) and "2105 nodes" in repr(d)
 
 
 def test_counts(d):
@@ -51,8 +51,8 @@ def test_counts(d):
     assert d.families == ("ch", "auxin", "fxrtn", "bus", "mtx", "main", "dca", "headamp", "fx", "config", "show", "stat", "prefs", "action")
     assert len(d.params["fx"]) == 67 and len(d.params["headamp"]) == 2 and len(d.params["action"]) == 3
     assert len(d.params["ch"]) == 63 and len(d.params["dca"]) == 5
-    assert len(list(d.iter_params())) == sum(len(p) for p in d.params.values()) == 491
-    assert len(d.node_sections()) == 90
+    assert len(list(d.iter_params())) == sum(len(p) for p in d.params.values()) == 493
+    assert len(d.node_sections()) == 92
     assert d.roots == {
         "headamp": "/headamp/{n:03d}", "fx": "/fx/{n}", "config": "/config", "show": "/-show",
         "stat": "/-stat", "prefs": "/-prefs", "action": "/-action",
@@ -292,7 +292,7 @@ def test_every_param_round_trips_through_reverse_lookup(d):
             found = d.param_for_address(addr)
             assert found is not None and found[0] is spec and found[1] == vars, addr
             n_checked += 1
-    assert n_checked == 2 * 491
+    assert n_checked == 2 * 493
 
 
 # ---------------------------------------------------------------------------------------------- tiers
@@ -388,10 +388,10 @@ def test_all_node_paths_count_and_shape(d, capsys):
     assert all(p.startswith("/") and not p.endswith("/") and "{" not in p for p in concrete)
     assert all(isinstance(f, tuple) and f and all("{" not in x for x in f) for _, f in paths)
     # research: a console scene file has 2104 node lines; DESIGN's "< 1500" is not reachable (deviation)
-    assert total == 2103 and total < 2500
+    assert total == 2105 and total < 2500
     assert per_family == {
         "ch": 992, "auxin": 200, "fxrtn": 192, "bus": 304, "mtx": 84, "main": 38, "dca": 16,
-        "headamp": 128, "fx": 20, "config": 21, "show": 102, "stat": 5, "prefs": 1,
+        "headamp": 128, "fx": 20, "config": 21, "show": 102, "stat": 7, "prefs": 1,
     }
     # sweep order = scene-file order (scales_params.md §13): families as in the yaml, strip-major
     # inside a family, sections in yaml order — /ch/01/config … /ch/01/grp, /ch/02/config …

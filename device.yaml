@@ -573,6 +573,11 @@ params:
     geqonfdr:   {osc: i, scale: bool, node: onoff, tier: 0}
     geqpos:     {osc: i, scale: int, node: int, tier: 0}                                # (fx# << 8) | start band
     dcaspill:   {osc: i, scale: int, node: int, tier: 0}
+    # The console's screen page and METERS tab (fx_routing_scenes.md: 0 CHAN(HOME) 1 METERS 2 ROUTE 3 SETUP 4 LIB 5 FX 6 MON 7 USB
+    # 8 SCENE 9 ASSIGN 10 LOCK). Writable: remote page select. Showing the METERS/RTA tab (page 4) once STARTS the analyser behind
+    # /meters/15, which otherwise carries one static flat frame after a power-up (meters.md 2026-09-25 item 1; meters.wake_rta_analyser).
+    screen/screen:     {osc: i, scale: int, node: int, tier: 1}
+    screen/METER/page: {osc: i, scale: int, node: int, tier: 1}
 
   prefs:                                  # meters.md §5.1 (rta), fx_routing_scenes.md §7.2
     name:         {osc: s, scale: str, node: str, tier: 0}                              # console name (also in /xinfo)
@@ -723,6 +728,8 @@ nodes:
   - {family: stat, path: "/-stat/rtaeqpre", fields: [rtaeqpre]}
   - {family: stat, path: "/-stat/rtageqpost", fields: [rtageqpost]}
   - {family: stat, path: "/-stat/rtasource", fields: [rtasource]}
+  - {family: stat, path: "/-stat/screen/screen", fields: [screen/screen]}
+  - {family: stat, path: "/-stat/screen/METER/page", fields: [screen/METER/page]}
   # ---- RTA prefs (meters.md §5.1): order visibility gain autogain source pos mode options det decay peakhold
   - {family: prefs, path: "/-prefs/rta", fields: [rta/visibility, rta/gain, rta/autogain, rta/source, rta/pos, rta/mode, rta/options, rta/det, rta/decay, rta/peakhold]}
 
@@ -790,6 +797,13 @@ rta:
   pos_param: "/-prefs/rta/pos"           # 0 PRE, 1 POST
   options_param: "/-prefs/rta/options"   # bit 5 = Solo Priority (clear it); bits 0-4 only affect EQ/GEQ overlay views
   stat_param: "/-stat/rtasource"         # read-back: 0-72 pre-EQ, +98 post-EQ (Bus N post = 146+N-1, Main LR post = 168)
+  # The analyser behind /meters/15 is not running after a power-up until the console has shown its METERS/RTA page once; the
+  # stream is then one static flat frame (-97.0 everywhere). wake_rta_analyser() shows that page for a moment at arm and restores
+  # the screen (measured 2026-09-25, meters.md Verification log item 1).
+  screen_param: "/-stat/screen/screen"
+  meter_page_param: "/-stat/screen/METER/page"
+  meters_screen: 1                       # screen index of METERS
+  rta_page: 4                            # METERS tab index of RTA
   # Both MUST be forced before arming the detector (found at M7, 2026-09-20):
   # auto-gain normalises the whole display, so every band drifts together when the overall level
   # moves and the detector reads that as the growth signature of feedback; RMS blunts a narrow tone.

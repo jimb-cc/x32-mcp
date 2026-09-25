@@ -326,3 +326,7 @@ channel-fed tone, 40 Hz rise time, whether the oscillator into Main sits before 
 * **Semitone sweep (95 tones, `scripts/measure_rta_bands.py`)**: the RTA bins are `20·2^(i/10)` Hz — a third of a band above
   the DOC's printed table that `device.yaml`/`meters.py` reproduce (fix on `review/rta-band-grid`, PR); response flat ±0.2 dB
   42 Hz–9.5 kHz; skirts symmetric and steep (≈ order 5) above 200 Hz, widening to ≈ 2 at 50 Hz; PEAK attack 3 frames to −3 dB at HF.
+* **Arm-time analyser wake (2026-09-25, `review/rta-wake`)**: `meters.wake_rta_analyser()` runs in `CfsManager._arm` once
+  frames flow: a stream that is one static flat frame (the console's analyser has not been started since power-up) makes
+  it show the METERS/RTA page (`/-stat/screen/screen 1`, `/-stat/screen/METER/page 4`) for a moment and restore the screen;
+  the result is `rta_wake` in the arm result, the `cfs.state` event and the report. `FakeDesk(rta_dormant=True)` models it.
