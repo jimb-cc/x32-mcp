@@ -346,3 +346,8 @@ semitone sweep ran at decay 1.0 in the −97-floor state, not at PEAK / 0.25. It
 * **2026-09-25 afternoon (reviewer, studio)**: the Dual GEQ delivers full slider depth when both legs are cut (12.0 dB for −12,
   meters.md item 13) — the 09-23 "one-third depth" reading is withdrawn; the bus RTA post tap is after the bus EQ (item 12);
   a PEAK programme log gives 4 false STRONG emissions in 180 s against 20 under RMS (item 11). All PRs through #23 merged.
+* **Ring-out hands-off via /xremote push (2026-09-25, post-merge)**: `_on_desk_push` now flags `operator_override` the
+  instant the desk pushes the target's `mix/fader` away from the session's belief (`_on_master_push`); the per-step
+  read-back (`_operator_moved_master`) alone missed a move landing between a step's read and its write, which the 0.6 s
+  arm-time analyser probe exposed in `test_scribble_strip_is_restored_when_the_operator_takes_over_a_ring_out`. The
+  bystander test (`test_h`) was retuned to the measured band grid (B at 1194 Hz).

@@ -2632,6 +2632,13 @@ class CfsManager:
         another strip (the detector is now listening to the wrong audio: abort)."""
         if self._ses is not ses or ses.abort_reason is not None:
             return
+        if ses.mode is CfsMode.RINGOUT and address == self._d.param(ses.target.family, "mix/fader").address(ses.target):
+            # The engineer's hand on the master, seen the instant the desk reports it. The per-step read-back
+            # (_operator_moved_master) misses a move that lands between one step's read and its write: the write then
+            # overwrites the engineer (found 2026-09-25 when the arm-time analyser probe shifted the first step by 0.6 s).
+            # The desk never pushes a client its own writes, so a push here is somebody else's move.
+            self._on_master_push(ses, args)
+            return
         why: str | None = None
         if address == f"/fx/{ses.fx_slot}/type":
             why = f"FX slot {ses.fx_slot} was reloaded on the desk during the session; its GEQ pars no longer mean what they did"
@@ -2745,6 +2752,29 @@ class CfsManager:
         except Exception:
             return None
         return NEG_INF_DB if v is None else float(v)
+
+    def _on_master_push(self, ses: _Session, args: Any) -> None:
+        """An /xremote push of the ring-out target's master fader: flag the session hands-off (see
+        :meth:`_operator_moved_master`) unless the value is where this session believes it put it."""
+        if ses.operator_override or ses.abort_reason is not None:
+            return
+        try:
+            spec = self._d.param(ses.target.family, "mix/fader")
+            v = spec.to_value(args[0] if isinstance(args, (list, tuple)) else args)
+        except Exception:
+            log.debug("undecodable master push %r", args, exc_info=True)
+            return
+        actual = NEG_INF_DB if v is None else float(v)
+        belief = ses.master_db
+        both_off = math.isinf(actual) and math.isinf(belief)
+        if both_off or (not math.isinf(actual) and not math.isinf(belief) and abs(actual - belief) <= _INTERVENTION_DB):
+            return
+        ses.operator_override = True
+        ses.abort_reason = (f"{ses.target.label} master was moved on the desk to {format_db(actual)} dB during the run "
+                            f"(the ring-out had it at {format_db(belief)} dB); stopped without touching it again")
+        ses.master_db = actual
+        log.warning("CFS² %s: %s", ses.session_id, ses.abort_reason)
+        self._events.publish("cfs.abort", session_id=ses.session_id, bus=ses.bus, reason=ses.abort_reason)
 
     async def _operator_moved_master(self, ses: _Session) -> bool:
         """True (and the session flagged hands-off) when the master reads back away from where this
