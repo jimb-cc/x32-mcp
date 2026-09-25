@@ -64,3 +64,43 @@ notch during singing is a finding for the frontier model; `feedback_watch_stop` 
 The run's report goes to the server's report store (`list_ringout_reports`); copy its Markdown into
 `docs/research/ringout_2026-09-25.md` with a line on what was heard at each notch, and the desk's RTA prefs before and
 after (they are restored by the tool). The reviewer replays the session's frames if a false cut appears.
+
+---
+
+## 6. Results (13:21–13:39, reports in `docs/research/ringout/`)
+
+Setup as in §1: SM58-type mic on Ch 4 (SD16 input A01, head amp +50 dB, HPF 101 Hz), one metre in front of an Alto PA
+speaker; Main LR limiter on (−6 dB, 100:1); Dual GEQ in FX 5 inserted PRE on Main LR, both sides written. The MCP server
+was the process started at 10:33, i.e. **this morning's code**: analyser on RMS (the enum fix was merged after it started),
+no arm-time wake, no push-based takeover. Three climbs, 1 dB per 1.5 s, six-notch budget.
+
+| run | mic | Main start → end (max) | first ring at | notches | outcome |
+|---|---|---|---|---|---|
+| 1 | 2 m, facing PA | −30.6 → −13.0 (−10.0 target) | none | 0 | DONE, no feedback up to −10 |
+| 2 | 1 m, facing PA | −25.1 → −11.1 (−5.1) | −9.1 dB | 5 kHz −3, 8 kHz −9 | ABORT at −5.1: the 8.85 kHz ring returned with the 8 kHz band at −9 |
+| 3 | as 2, plus a hand-set Main PEQ notch 8.73 kHz −6 Q 6.1 | −25.1 → −3.1 (−0.1) | −8.1 dB | 500 −3, 1k −3, 3.15k −6, 5k −9, 8k −9, 10k −6 | DONE at the 0 dB ceiling: budget spent |
+
+**What worked.** Every ring was caught while still 60–80 dB below full scale (levels −82 to −65 dBFS at the tap; the loud
+10.7 kHz ring in run 3 at −9 then −3 dBFS was the limiter holding it), the GEQ write landed on both sides, and every cut
+verified with a 6–12 dB drop within 0.3–1.5 s; the detector's own verdicts were `confirmed` on 15 of 16 cuts. The one
+`insufficient` (run 3, 8.89 kHz, −3 on the 8 kHz band: the line rose 6 dB) triggered the ladder's deepen at once and the −6
+confirmed. Gain before feedback −9.1 / −8.1 dB; end level backed off 3–6 dB below the last ring.
+
+**What the GEQ cannot do.** The dominant mode of this room with this placement sits at 8.82–8.92 kHz, 0.15 oct above the
+8 kHz band and 0.18 below 10 kHz. In run 2 each −3 step on 8 kHz bought exactly one more decibel of master before the
+mode re-lit, and the ladder ran out at −9. With a parametric notch near it (run 3: 8.73 kHz −6 Q 6.1, 0.03 oct off the
+mode) the same climb reached the 0 dB ceiling, that mode did not ring until −4.1 (5 dB later) and needed only −6 on the
+graphic on top. This is the PEQ actuator's case (`docs/PEQ_ACTUATOR_DESIGN.md`), measured on the desk.
+
+**Two defects for the frontier model.**
+1. **Adjacent-band merge is too coarse.** Run 3 at −3.1: a 10.73 kHz ring (RTA band 91) was written as **8 kHz → −9**,
+   0.42 oct away, because `NotchController.propose` deepens the nearest existing notch within `merge_adjacent_bands` 1
+   before opening the detection's own band (10 kHz). The verify "passed" (the ring happened to collapse) and the next
+   10.7 kHz return had to open 10 kHz anyway. Merge only when the detection lies within the existing notch's own
+   third-octave (or half a band), never across a whole band.
+2. **A limiter-held ring trips `PROGRAMME_PRESENT`.** At t+32 s the 10.7 kHz ring at −9 dBFS set the programme flag,
+   after which the report says "MODERATE lines are not cut". A single full-scale line is not programme; the heuristic
+   should require broadband activity outside the ring's own neighbourhood.
+
+**Not yet run**: the identical climb on real PEAK (needs the MCP server restarted on today's code: a new session starts
+it) and the quiet-room watch with a voice (§4).

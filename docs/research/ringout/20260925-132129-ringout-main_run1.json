@@ -1,0 +1,364 @@
+{
+ "session_id": "20260925-132129-ringout-main",
+ "system_id": null,
+ "mode": "ringout",
+ "bus": "main",
+ "target": "main.st",
+ "bus_name": "",
+ "started": "2026-09-25T13:21:29",
+ "ended": "2026-09-25T13:22:01",
+ "duration_s": 32.0,
+ "start_master_db": -30.6,
+ "start_master": "-30.6",
+ "end_master_db": -13.0,
+ "end_master": "-13.0",
+ "max_master_db": -10.0,
+ "max_master": "-10.0",
+ "gain_before_feedback_db": null,
+ "gain_before_feedback": null,
+ "target_db": -10.0,
+ "step_db": 1.0,
+ "dwell_ms": 1500,
+ "notch_budget": 6,
+ "budget_left": 6,
+ "geq": {
+  "fx_slot": 5,
+  "side": "A",
+  "sel": "FX5L"
+ },
+ "rta": {
+  "target": "main.st",
+  "source_index": 72,
+  "post_eq": true,
+  "stat_expected": 168,
+  "stat_actual": 168,
+  "verified": true,
+  "options_cleared": false,
+  "autogain_cleared": false,
+  "detector_set_peak": false,
+  "decay_set_min": true,
+  "peakhold_cleared": false,
+  "gain_set": false,
+  "prefs_before": {
+   "source": 72,
+   "pos": 1,
+   "autogain": 0,
+   "det": 1,
+   "decay": 0.3333333432674408,
+   "peakhold": 0,
+   "options": 0,
+   "gain": 0.0
+  },
+  "settle_attempts": 1,
+  "settle_ms": 0.0
+ },
+ "rta_restored": {
+  "restored": [
+   "source",
+   "pos",
+   "autogain",
+   "det",
+   "decay",
+   "peakhold",
+   "gain"
+  ],
+  "failed": []
+ },
+ "snapshot": "20260925-132129-ringout-pre-main-st",
+ "notches": [],
+ "existing_cuts": [],
+ "detections": 0,
+ "detection_log": [],
+ "notch_log": [],
+ "stages": [
+  {
+   "stage": "PREFLIGHT",
+   "ts": 1790338889.4547415,
+   "master_db": -30.6
+  },
+  {
+   "stage": "SNAPSHOT",
+   "ts": 1790338889.4547415,
+   "master_db": -30.6
+  },
+  {
+   "stage": "ARM",
+   "ts": 1790338889.4627492,
+   "master_db": -30.6,
+   "target_db": -10.0,
+   "step_db": 1.0,
+   "dwell_ms": 1500
+  },
+  {
+   "stage": "RAISE",
+   "ts": 1790338889.88915,
+   "master_db": -29.6
+  },
+  {
+   "stage": "RAISE",
+   "ts": 1790338891.4021142,
+   "master_db": -28.6
+  },
+  {
+   "stage": "RAISE",
+   "ts": 1790338892.9010704,
+   "master_db": -27.6
+  },
+  {
+   "stage": "RAISE",
+   "ts": 1790338894.3929584,
+   "master_db": -26.6
+  },
+  {
+   "stage": "RAISE",
+   "ts": 1790338895.9078407,
+   "master_db": -25.6
+  },
+  {
+   "stage": "RAISE",
+   "ts": 1790338897.4131124,
+   "master_db": -24.6
+  },
+  {
+   "stage": "RAISE",
+   "ts": 1790338898.9011154,
+   "master_db": -23.6
+  },
+  {
+   "stage": "RAISE",
+   "ts": 1790338900.4048684,
+   "master_db": -22.6
+  },
+  {
+   "stage": "RAISE",
+   "ts": 1790338901.9165587,
+   "master_db": -21.6
+  },
+  {
+   "stage": "RAISE",
+   "ts": 1790338903.4089205,
+   "master_db": -20.6
+  },
+  {
+   "stage": "RAISE",
+   "ts": 1790338904.8940687,
+   "master_db": -19.6
+  },
+  {
+   "stage": "RAISE",
+   "ts": 1790338906.415947,
+   "master_db": -18.6
+  },
+  {
+   "stage": "RAISE",
+   "ts": 1790338907.913235,
+   "master_db": -17.6
+  },
+  {
+   "stage": "RAISE",
+   "ts": 1790338909.398687,
+   "master_db": -16.6
+  },
+  {
+   "stage": "RAISE",
+   "ts": 1790338910.9097335,
+   "master_db": -15.6
+  },
+  {
+   "stage": "RAISE",
+   "ts": 1790338912.4235885,
+   "master_db": -14.6
+  },
+  {
+   "stage": "RAISE",
+   "ts": 1790338913.9334419,
+   "master_db": -13.6
+  },
+  {
+   "stage": "RAISE",
+   "ts": 1790338915.4326665,
+   "master_db": -12.6
+  },
+  {
+   "stage": "RAISE",
+   "ts": 1790338916.9260302,
+   "master_db": -11.6
+  },
+  {
+   "stage": "RAISE",
+   "ts": 1790338918.4373624,
+   "master_db": -10.6
+  },
+  {
+   "stage": "RAISE",
+   "ts": 1790338919.9422438,
+   "master_db": -10.0
+  },
+  {
+   "stage": "BACKOFF",
+   "ts": 1790338921.434333,
+   "master_db": -10.0,
+   "to_db": -13.0,
+   "backoff_db": 3.0
+  },
+  {
+   "stage": "DONE",
+   "ts": 1790338921.4363346,
+   "master_db": -13.0,
+   "reason": "target reached"
+  }
+ ],
+ "frames": 616,
+ "detector": {
+  "flags": [],
+  "release_db_per_s": null,
+  "arm_p95_db": -97.00390625,
+  "loud_threshold_db": -10.0,
+  "loudish_threshold_db": -20.0,
+  "window_low_hz": 70.7,
+  "cut_verdicts": []
+ },
+ "policy": {
+  "config": {
+   "lf_edge": {
+    "hpf_factor": 0.7,
+    "no_hpf_hz": 100.0,
+    "floor_hz": 60.0
+   },
+   "programme_check_s": 5.0,
+   "refresh_arm_reference_on_programme": true,
+   "tier_b": {
+    "enabled": true,
+    "min_excess_db": 20.0,
+    "min_age_s": 0.6,
+    "cooldown_s": 2.0,
+    "held_deepen_s": 3.0,
+    "verdict_timeout_s": 4.0,
+    "ringout_probe_wait_dwells": 2.0,
+    "ringout_hold_raise": true,
+    "ended_drop_db": 6.0
+   },
+   "alerts": {
+    "events": true,
+    "scribble_strip": true,
+    "color": "RDi",
+    "clear_s": 2.0,
+    "min_write_interval_s": 1.0,
+    "hold_s": 0.5
+   },
+   "at_arm_watch_min_prominence_db": 30.0,
+   "reforce_ballistics_on_freeze": true,
+   "frozen_reforce_s": 1.0,
+   "frozen_abort_s": 5.0,
+   "backoff_probe": {
+    "enabled": true,
+    "drop_db": 3.0,
+    "min_response_db": 4.5,
+    "settle_s": 0.3
+   }
+  },
+  "lf_edge": {
+   "lf_edge_hz": 70.7,
+   "from": "ch 4 HPF 101 Hz",
+   "mics": [
+    {
+     "ch": 4,
+     "hpf_on": true,
+     "hpf_hz": 101.0,
+     "edge_hz": 70.7
+    }
+   ],
+   "lf_feedback_possible": false,
+   "window_low_hz": 70.7
+  },
+  "lf_feedback_possible": false,
+  "programme_present": {
+   "detected": false,
+   "first_seen_s": null,
+   "armed_in_silence": true,
+   "arm_reference_refreshed_s": null,
+   "emit_moderate_forced_off": false
+  },
+  "tier_b": [],
+  "ignore": [],
+  "alerts": [],
+  "strip_color": {
+   "original": "WH",
+   "alert": "RDi",
+   "writes": 0,
+   "restored": null
+  },
+  "at_arm_suppressed": [],
+  "flags_seen": [],
+  "ballistics_reforced": null,
+  "backoff_probes": [],
+  "errors": {}
+ },
+ "final_stage": "DONE",
+ "aborted": false,
+ "abort_reason": null,
+ "connection_lost": false,
+ "restored": null,
+ "preflight": {
+  "warnings": [
+   "ch.15 'Drum OH2': sends to Main LR but is muted",
+   "ch.16 'Drum FX': sends to Main LR but is muted"
+  ],
+  "mics": [
+   {
+    "ch": 4,
+    "target": "ch.4",
+    "name": "Lead Vox",
+    "muted": false,
+    "send_db": 0.0,
+    "send": "0.0",
+    "source": "IN04",
+    "physical_input": true,
+    "in_mute_group": false,
+    "patch_mic": null,
+    "owner": null,
+    "include": true,
+    "notes": []
+   },
+   {
+    "ch": 15,
+    "target": "ch.15",
+    "name": "Drum OH2",
+    "muted": true,
+    "send_db": -1.0,
+    "send": "-1.0",
+    "source": "IN15",
+    "physical_input": true,
+    "in_mute_group": false,
+    "patch_mic": null,
+    "owner": null,
+    "include": false,
+    "notes": [
+     "sends to Main LR but is muted"
+    ]
+   },
+   {
+    "ch": 16,
+    "target": "ch.16",
+    "name": "Drum FX",
+    "muted": true,
+    "send_db": -1.5,
+    "send": "-1.5",
+    "source": "IN16",
+    "physical_input": true,
+    "in_mute_group": false,
+    "patch_mic": null,
+    "owner": null,
+    "include": false,
+    "notes": [
+     "sends to Main LR but is muted"
+    ]
+   }
+  ],
+  "included": [
+   4
+  ]
+ },
+ "expected_mics": null,
+ "summary": "ring-out Main LR: master -30.6 -> -13.0 dB (highest -10.0), 0 notch(es), no feedback detected; DONE"
+}
