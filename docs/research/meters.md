@@ -705,3 +705,9 @@ Method as on 2026-09-22 plus `scripts/log_rta_frames.py` (every `/meters/15` fra
     (676 Hz rise 11 dB, 521 Hz rise 11 dB, 1194 Hz rise 7 dB, 677 Hz glided-in rise 11 dB — all notes) against 20 under RMS
     on the earlier passage (item 2); 26 MODERATE/STRONG tracks reach tier B (the loudest 394 Hz at −21.4 dB). PEAK ballistics
     remove most of the RISE false positives, not all; gate G5 now runs both files and still fails.
+12. **Bus RTA tap order — the POST tap is after the bus EQ** (`scripts/log_bus_rta.py`, `tap_order_bus6_{before,after}_2026-09-25.jsonl.gz`):
+    Spotify on Ch 2 sent to bus 6 (−17, EQ→ tap), RTA source 55 = BUS06 post (`/-stat/rtasource` 151 read back), PEAK / 0.25.
+    Jim set bus 6's own PEQ band 3 to 1.02 kHz, −15 dB, Q 2, EQ on (`/node bus/06/eq/3` → `PEQ 1k02 -15.0 2.0`). Median spectra
+    over 15 s before and after: bands 53–59 (788–1194 Hz) fell 20–29 dB while the bands far from 1 kHz fell 11.5 dB (the
+    passage got quieter), a net dip of ~13–17 dB centred on 1.0–1.1 kHz with ±0.3-octave skirts — the bell. A bus-PEQ notch
+    (the PEQ actuator, design §2) is therefore visible to the detector on the bus's own RTA, exactly like a GEQ insert.
