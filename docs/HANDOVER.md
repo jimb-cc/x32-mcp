@@ -351,3 +351,7 @@ semitone sweep ran at decay 1.0 in the −97-floor state, not at PEAK / 0.25. It
   read-back (`_operator_moved_master`) alone missed a move landing between a step's read and its write, which the 0.6 s
   arm-time analyser probe exposed in `test_scribble_strip_is_restored_when_the_operator_takes_over_a_ring_out`. The
   bystander test (`test_h`) was retuned to the measured band grid (B at 1194 Hz).
+* **2026-09-25 afternoon, five runs on the mains** (`docs/RINGOUT_TEST_2026-09-25.md` §6–7; `scripts/run_cfs.py` drives
+  CFS² from the checkout): rings caught and verified every time; the GEQ cannot tame a mode between bands (PEQ notch does);
+  PEAK exposes −90 dBFS residual lines as candidates; adjacent-band merge over-reaches; the gig-condition watch cut the music
+  15× in 3 min, mostly tier B with `confirmed` verdicts. Watch mode with music is not usable until these are fixed.
