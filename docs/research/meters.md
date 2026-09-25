@@ -609,7 +609,9 @@ Method as on 2026-09-22 plus `scripts/log_rta_frames.py` (every `/meters/15` fra
    measurement settles it. The detector's centroid interpolation and every "band → Hz" label inherit the offset.
 6. **Main LR PEQ at 8 kHz**: band 5 PEQ 7.87 kHz Q 6.1 −12 on an 8.00 kHz tone (0.024 oct above the centre): **11.7 dB**
    (RBJ prototype 11.4). No bilinear warping visible at this offset; with the 2 kHz readings the PEQ = RBJ, `q_scale` 1.0.
-7. **The Dual Graphic EQ (GEQ2, FX 5 side A, Main LR insert PRE, RTA post-EQ) realises about a third of its slider depth
+7. **WITHDRAWN 2026-09-25 (item 13): these readings are one leg (side A) of the stereo Main through the summed tap —
+   `20·log10((1+g)/2)` = 2.49 / 4.07 dB; with both legs cut the GEQ delivers its full slider depth.** *Original text:*
+   **The Dual Graphic EQ (GEQ2, FX 5 side A, Main LR insert PRE, RTA post-EQ) realises about a third of its slider depth
    at an isolated band**: 2k slider −6 → **2.6 dB** at 2.00 kHz; −12 → **4.1 dB** at 2.00 kHz, 3.8 at 1.88, 3.6 at 2.11 — a
    broad, shallow dip (±0.09 oct within 0.5 dB of the centre). Nominal depths are what NotchController writes and what the
    corpus's closed loop applies; the desk delivers ~0.35× at −12 and ~0.43× at −6. M7's −3/−6/−9 on the 5 kHz howl were
@@ -705,3 +707,25 @@ Method as on 2026-09-22 plus `scripts/log_rta_frames.py` (every `/meters/15` fra
     (676 Hz rise 11 dB, 521 Hz rise 11 dB, 1194 Hz rise 7 dB, 677 Hz glided-in rise 11 dB — all notes) against 20 under RMS
     on the earlier passage (item 2); 26 MODERATE/STRONG tracks reach tier B (the loudest 394 Hz at −21.4 dB). PEAK ballistics
     remove most of the RISE false positives, not all; gate G5 now runs both files and still fails.
+12. **Bus RTA tap order — the POST tap is after the bus EQ** (`scripts/log_bus_rta.py`, `tap_order_bus6_{before,after}_2026-09-25.jsonl.gz`):
+    Spotify on Ch 2 sent to bus 6 (−17, EQ→ tap), RTA source 55 = BUS06 post (`/-stat/rtasource` 151 read back), PEAK / 0.25.
+    Jim set bus 6's own PEQ band 3 to 1.02 kHz, −15 dB, Q 2, EQ on (`/node bus/06/eq/3` → `PEQ 1k02 -15.0 2.0`). Median spectra
+    over 15 s before and after: bands 53–59 (788–1194 Hz) fell 20–29 dB while the bands far from 1 kHz fell 11.5 dB (the
+    passage got quieter), a net dip of ~13–17 dB centred on 1.0–1.1 kHz with ±0.3-octave skirts — the bell. A bus-PEQ notch
+    (the PEQ actuator, design §2) is therefore visible to the detector on the bus's own RTA, exactly like a GEQ insert.
+13. **The Dual GEQ delivers its full slider depth when BOTH legs are cut** (`scripts/tone_spectrum.py`,
+    `geq_both_legs_{0,m6,m12}_2026-09-25.jsonl.gz`): FX5 = GEQ2 inserted PRE on Main LR (`/main/st/insert ON PRE FX5L`), 2 kHz
+    slider on side A (par 21) AND side B (par 53) read back from the desk; oscillator 2000.0 Hz at −40 dB into L+R; RTA Main
+    post, PEAK / 0.25; medians over 6 s.
+
+    | sliders | band 66 (1940 Hz) | att | band 67 (2079 Hz) | att |
+    |---|---|---|---|---|
+    | 0 / 0 (reference, GEQ in the insert) | −39.5 | — | −44.9 | — |
+    | −6 / −6 | −45.0 | **5.5** | −51.7 | **6.8** |
+    | −12 / −12 | −51.5 | **12.0** | −57.0 | **12.1** |
+
+    Tuesday's 2.6 / 4.1 dB (item 7 of 2026-09-23) was one leg of the stereo Main through the summed tap, exactly the frontier
+    model's `20·log10((1+g)/2)` reading; `REVIEW_REQUEST_2026-09-23.md` §1 is withdrawn in full. The GEQ's Q cannot be read
+    from a tone 0.05 oct off its centre (RBJ Q 2–6 all predict 10.3–11.8 dB here); the 09-23 one-leg off-centre points and the
+    frontier's fit (Q ≈ 4.3) remain the estimate. `NotchController`'s −3/−6/−9 ladder therefore delivers −3/−6/−9 on the mains
+    (both sides written since `review/main-lr-stereo-geq`) and on a mono bus.

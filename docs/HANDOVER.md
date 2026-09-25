@@ -316,12 +316,13 @@ under `docs/research/data/`. Findings, all first-time measurements:
 * Band centres ≈ nominal × 2^0.05 (five-point semitone sweep at 2 kHz, agreed by 8 kHz): the "band → Hz" formula is half a
   band low. Provisional until a finer sweep; affects centroid interpolation and PEQ placement.
 * Main LR PEQ at 8 kHz = RBJ (11.7 dB for −12 Q 6.1 at 0.024 oct off; prototype 11.4).
-* **The Dual Graphic EQ realises ~⅓ of its slider depth** (−6 → 2.6 dB, −12 → 4.1 dB at 2 kHz, broad). M7's −3/−6/−9 were
-  1.3/2.6/3.9 dB real. Strongest argument yet for the PEQ actuator; the corpus's closed-loop GEQ kill margins are ~2.5×
-  optimistic (CORPUS.md §7.8).
+* ~~The Dual Graphic EQ realises ~⅓ of its slider depth~~ **Withdrawn 2026-09-25**: that reading was one leg of the stereo
+  Main through the summed tap. Both legs cut deliver full depth (−12 → 12.0 dB, −6 → 5.5–6.8 dB, meters.md 2026-09-25 item 13).
+  M7's −3/−6/−9 were 1.3/2.6/3.9 dB real only because the left stack alone was cut before `review/main-lr-stereo-geq`.
 
-Still to measure: a finer centre sweep (pink noise or a channel-fed tone), Dual TruEQ's depth, the bus-EQ tap order with a
-channel-fed tone, 40 Hz rise time, whether the oscillator into Main sits before or after the insert send.
+Measured since (2026-09-25): the finer sweep (item 10), the bus-EQ tap order (item 12: the post tap is after the bus EQ),
+40 Hz rise (items 8, 10), and the oscillator into Main enters BEFORE the PRE insert send (the inserted GEQ cut it, item 13).
+Still to measure: Dual TruEQ's depth; the GEQ's Q with off-centre tones on both legs; a real-band programme log under PEAK.
 
 * **Semitone sweep (95 tones, `scripts/measure_rta_bands.py`)**: the RTA bins are `20·2^(i/10)` Hz — a third of a band above
   the DOC's printed table that `device.yaml`/`meters.py` reproduce (fix on `review/rta-band-grid`, PR); response flat ±0.2 dB
@@ -342,3 +343,6 @@ semitone sweep ran at decay 1.0 in the −97-floor state, not at PEAK / 0.25. It
   frames flow: a stream that is one static flat frame (the console's analyser has not been started since power-up) makes
   it show the METERS/RTA page (`/-stat/screen/screen 1`, `/-stat/screen/METER/page 4`) for a moment and restore the screen;
   the result is `rta_wake` in the arm result, the `cfs.state` event and the report. `FakeDesk(rta_dormant=True)` models it.
+* **2026-09-25 afternoon (reviewer, studio)**: the Dual GEQ delivers full slider depth when both legs are cut (12.0 dB for −12,
+  meters.md item 13) — the 09-23 "one-third depth" reading is withdrawn; the bus RTA post tap is after the bus EQ (item 12);
+  a PEAK programme log gives 4 false STRONG emissions in 180 s against 20 under RMS (item 11). All PRs through #23 merged.
