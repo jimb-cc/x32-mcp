@@ -695,20 +695,30 @@ async def test_set_rta_source_unverified_and_read_failures_do_not_raise(d):
         await set_rta_source(stale, d, Target("dca", 2))
 
 
+def test_rta_det_enum_raw_0_is_peak(d):
+    """The console's own ``/node -prefs/rta`` line prints PEAK with the raw value at 0 and RMS at 1 (X32RACK FW 4.13,
+    toggled both ways and read back, meters.md Verification log 2026-09-25 item 5). The DOC and X32.c list RMS first;
+    that order made every arm-time "PEAK" write set RMS until 2026-09-25 (3-frame attack, -97 floor, a broadband burst
+    on the switch) -- see test_set_rta_source_forces_analyser_ballistics."""
+    spec, _ = d.param_for_address("/-prefs/rta/det")
+    assert spec.to_raw("PEAK") == 0 and spec.to_raw("RMS") == 1
+    assert spec.to_value(0) == "PEAK" and spec.to_value(1) == "RMS"
+
+
 async def test_set_rta_source_forces_analyser_ballistics(d):
     """Auto-gain, RMS, a long release and peak-hold are all console *display* preferences that
     corrupt the detector's features; each is forced (only when it differs) and reported."""
     conn = FakeDeskConn({
         "/-prefs/rta/source": 0, "/-prefs/rta/pos": 0, "/-prefs/rta/options": 0, "/-stat/rtasource": 0,
-        "/-prefs/rta/autogain": 1, "/-prefs/rta/det": 0, "/-prefs/rta/decay": 0.5, "/-prefs/rta/peakhold": 3,
+        "/-prefs/rta/autogain": 1, "/-prefs/rta/det": 1, "/-prefs/rta/decay": 0.5, "/-prefs/rta/peakhold": 3,
         "/-prefs/rta/gain": 0.4,
     })
     res = await set_rta_source(conn, d, Target("bus", 1))
     assert ("/-prefs/rta/autogain", (0,)) in conn.sets and res.autogain_cleared
-    assert ("/-prefs/rta/det", (1,)) in conn.sets and res.detector_set_peak
+    assert ("/-prefs/rta/det", (0,)) in conn.sets and res.detector_set_peak     # raw 0 = PEAK on the desk (2026-09-25)
     assert ("/-prefs/rta/decay", (0.0,)) in conn.sets and res.decay_set_min
     assert ("/-prefs/rta/peakhold", (0,)) in conn.sets and res.peakhold_cleared
-    assert res.prefs_before == {"source": 0, "pos": 0, "autogain": 1, "det": 0, "decay": 0.5, "peakhold": 3, "options": 0, "gain": 0.4}
+    assert res.prefs_before == {"source": 0, "pos": 0, "autogain": 1, "det": 1, "decay": 0.5, "peakhold": 3, "options": 0, "gain": 0.4}
     assert ("/-prefs/rta/gain", (0.0,)) in conn.sets and res.gain_set  # pinned to rta.gain_db for the session
     assert res.verified
     # and the engineer's settings go back afterwards (Solo Priority excepted)
@@ -720,7 +730,7 @@ async def test_set_rta_source_forces_analyser_ballistics(d):
     # already right: nothing is rewritten
     good = FakeDeskConn({
         "/-prefs/rta/source": 0, "/-prefs/rta/pos": 0, "/-prefs/rta/options": 0, "/-stat/rtasource": 0,
-        "/-prefs/rta/autogain": 0, "/-prefs/rta/det": 1, "/-prefs/rta/decay": 0.0, "/-prefs/rta/peakhold": 0,
+        "/-prefs/rta/autogain": 0, "/-prefs/rta/det": 0, "/-prefs/rta/decay": 0.0, "/-prefs/rta/peakhold": 0,
         "/-prefs/rta/gain": 0.0,
     })
     res = await set_rta_source(good, d, Target("bus", 1))
