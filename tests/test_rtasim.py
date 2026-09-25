@@ -497,3 +497,46 @@ def test_hop_scenarios_are_one_episode_through_the_hop():
         assert len(gt["events"]) == 1 and gt["events"][0]["visible"], (name, gt["events"])
         assert gt["events"][0]["t_onset"] == pytest.approx(3.0, abs=0.1)
         assert ring.current_hz(5.0) == pytest.approx(2500.0 * 2 ** (cents / 1200.0), rel=1e-3)
+
+
+def test_k8_is_a_policy_layer_case_and_dies_with_tier_b_under_both_actuators():
+    """K8: the howl hops 200 cents after the first cut and ARRIVES at its plateau within one frame (the simulator's hop is an
+    instantaneous retune). Nothing was seen to grow, so the detector classes the new line MODERATE and leaves it to the policy
+    layer by design -- the same class as the fast-howl-to-a-quiet-plateau breakers. The detector alone therefore never kills it;
+    with the policy layer's tier B (stand-in: rtasim.policy) it is dead at the end under both actuators, on six seeds -- including
+    PEQ seed 5, on which the deepen meant for the old line files a bystander 'held' on the hopped one (without the bystander
+    rule in cfs_policy.tier_b_eligible that line is barred from tier B for good and howls at -13 dBFS to the end of the scene)."""
+    from rtasim.harness import run_one
+    from x32mcp.descriptor import Descriptor
+    from x32mcp.detector import DetectorConfig, FeedbackDetector
+    cfg = DetectorConfig.from_descriptor(Descriptor.load())
+    fac = lambda bh: FeedbackDetector(cfg, bh, mode="watch")  # noqa: E731
+    name = "K8_limiter_howl_hops_200c_after_first_cut_e4"
+    alone = run_one(fac, name, 1, closed_loop=True, notch_cfg=cfg)
+    assert alone.survived == [0] and len(alone.notches) == 1 and alone.policy_log == []
+    for actuator in ("geq", "peq"):
+        for seed in (1, 2, 3, 4, 5, 6):
+            rr = run_one(fac, name, seed, closed_loop=True, notch_cfg=cfg, actuator=actuator, policy="tier_b")
+            assert rr.survived == [], (actuator, seed, rr.notches, rr.policy_log)
+            assert rr.policy_log and rr.policy_log[0]["rule"] == "tier_b", (actuator, seed)
+            assert 0.55 <= rr.policy_log[0]["ts"] - 4.6 <= 1.8, (actuator, seed, rr.policy_log)     # min_age_s after the hop; later only
+                                                                                                    # behind a bystander verdict
+            assert sum(1 for d in rr.detections if d.verdict == "FP") == 0
+    with pytest.raises(ValueError):
+        run_one(fac, name, 1, closed_loop=True, notch_cfg=cfg, policy="tier_c")
+
+
+def test_k8r_a_hop_that_regrows_is_the_detectors_own_catch():
+    """K8r: the same event with the new mode regrowing from its seed at e/tau. The detector re-detects it on its own evidence
+    (RISE / FAST-RISE), no policy cut needed; under the PEQ the second notch lands on the new mode and both are dead at the end."""
+    from rtasim.harness import run_one
+    from x32mcp.descriptor import Descriptor
+    from x32mcp.detector import DetectorConfig, FeedbackDetector
+    cfg = DetectorConfig.from_descriptor(Descriptor.load())
+    fac = lambda bh: FeedbackDetector(cfg, bh, mode="watch")  # noqa: E731
+    name = "K8r_limiter_howl_hop_200c_regrows_e4"
+    for seed in (1, 2, 3):
+        rr = run_one(fac, name, seed, closed_loop=True, notch_cfg=cfg, actuator="peq")
+        new_mode = [d for d in rr.detections if d.verdict == "TP" and d.ts > 4.6]
+        assert new_mode and new_mode[0].klass == "STRONG" and new_mode[0].ts - 4.6 <= 1.0, (seed, rr.detections)
+        assert rr.survived == [] and len({n["band"] for n in rr.notches}) == 2, (seed, rr.notches)

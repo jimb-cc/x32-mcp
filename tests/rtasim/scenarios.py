@@ -951,6 +951,21 @@ def _k8(seed, st):
                                                           vox_db=-28.0, t1=13.7), rings=[ring])
 
 
+@scenario("K8r_limiter_howl_hop_200c_regrows_e4", "K8 with the hop modelled as what it is physically: the old mode loses its "
+          "excess when the mic moves (2.5 kHz, e 4 -> -6 at t=4.6) and the NEW mode, 200 cents up, regrows from its seed at "
+          "e/tau (e 4, tau 40 ms: ~100 dB/s less what the first notch still takes there) instead of inheriting the plateau "
+          "within one frame. K8's instantaneous retune is the simulator's idealisation (CORPUS S7.5); this is the same event "
+          "with the growth a detector is entitled to see", "FEEDBACK onset 3.0 (old mode) and 4.6 (new mode); detect each <= "
+          "300 ms; closed loop: both DEAD by the end", 14.0, tags=("feedback", "kill", "limiter", "hop", "music", "mixture"))
+def _k8r(seed, st):
+    old = FeedbackRing(freq_hz=2500.0, tau_loop_s=0.040, t_on=3.0, start_db=-60.0, sat_db=-13.0, wander_db=0.4,
+                       excess_points=[(3.0, 4.0), (4.6, 4.0), (4.61, -6.0)], label="howl_2k5_old_mode")
+    new = FeedbackRing(freq_hz=2500.0 * 2.0 ** (200.0 / 1200.0), excess_db=4.0, tau_loop_s=0.040, t_on=4.6, start_db=-60.0,
+                       sat_db=-13.0, wander_db=0.4, label="howl_2k8_new_mode")
+    return Scene(14.0, sources=[room_noise()] + loud_band(seed, bed_db=-40.0, drums_db=-30.0, bass_db=-34.0, gtr_db=-36.0,
+                                                          vox_db=-28.0, t1=13.7), rings=[old, new])
+
+
 # ==================================================================================================
 # rendering + cache
 # ==================================================================================================

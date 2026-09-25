@@ -49,6 +49,10 @@ the desk grid, -3 dB steps to -12, deepened when a later detection lands within 
 new band (budget 4). ``RunResult.notches`` records every write with its actuator, frequency, Q and gain; ``cuts`` keeps
 its (ts, band, gain) shape with band = the GEQ band nearest the notch so scoring, ``survived`` and tests are
 actuator-agnostic. The detector's ``note_cut`` receives ``q=`` when its signature accepts it (PEQ design S2.4).
+
+POLICY: ``run_one(..., policy="tier_b")`` wraps the detector in :class:`rtasim.policy.TierBStandIn`, the product's tier-B
+rule (docs/CFS_POLICY.md S3) as a stand-in: a MODERATE line the detector publishes but will not cut gets the policy
+layer's one-shot -3 dB and its verdict-driven follow-up. Default ``None`` = the detector alone, as before.
 """
 
 from __future__ import annotations
@@ -124,6 +128,7 @@ class RunResult:
     rings_end: list[dict[str, Any]] = field(default_factory=list)   # closed loop: per ring {label, level_db, e_eff, alive} at the end
     survived: list[int] = field(default_factory=list)   # closed loop: rings (indices) still regenerating at the end (pass criterion)
     notches: list[dict[str, Any]] = field(default_factory=list)   # closed loop: every actuator write {ts, actuator, band, notch_hz, q, gain_db}
+    policy_log: list[dict[str, Any]] = field(default_factory=list)   # policy="tier_b": every policy emission {ts, rule, freq_hz, level_db}
 
     # derived -----------------------------------------------------------------------------------
     @property
@@ -355,10 +360,15 @@ def run_one(detector_factory: Callable[[Sequence[float]], Any], scenario: Scenar
             closed_loop: bool = False, analyser_overrides: dict[str, Any] | None = None,
             notch_cfg: Any = None, geq_band_hz: Sequence[float] = GEQ_BAND_HZ,
             actuation_delay_frames: int = ACTUATION_DELAY_FRAMES, actuator: str = "geq",
-            peq: dict[str, Any] | None = None) -> RunResult:
+            peq: dict[str, Any] | None = None, policy: str | None = None) -> RunResult:
     sc = SCENARIOS[scenario] if isinstance(scenario, str) else scenario
     t0 = time.perf_counter()
     det = detector_factory(RTA_BAND_HZ)
+    if policy not in (None, "tier_b"):
+        raise ValueError(f"policy must be None or 'tier_b', got {policy!r}")
+    if policy == "tier_b":
+        from .policy import TierBStandIn
+        det = TierBStandIn(det)
     dets: list[Det] = []
     cuts: list[tuple[float, int, float]] = []
     notches: list[dict[str, Any]] = []
@@ -439,6 +449,7 @@ def run_one(detector_factory: Callable[[Sequence[float]], Any], scenario: Scenar
                               "alive": bool(last.active and last.e_eff > ALIVE_EXCESS_DB)})
     rr = RunResult(sc.name, seed, closed_loop, episodes, dets, cuts, sc.latency_budget_ms, time.perf_counter() - t0, rings_end)
     rr.notches = notches
+    rr.policy_log = list(getattr(det, "log", ())) if policy else []
     if closed_loop:
         rr.survived = _survivors(rr, r, geq_band_hz)
     return rr
@@ -548,16 +559,16 @@ def evaluate(detector_factory: Callable[[Sequence[float]], Any], scenarios: Iter
              seeds: Sequence[int] = (1, 2, 3), *, closed_loop: bool = False,
              analyser_overrides: dict[str, Any] | None = None, notch_cfg: Any = None,
              geq_band_hz: Sequence[float] = GEQ_BAND_HZ, label: str = "", actuator: str = "geq",
-             peq: dict[str, Any] | None = None) -> Results:
+             peq: dict[str, Any] | None = None, policy: str | None = None) -> Results:
     names = list(scenarios) if scenarios is not None else list(SCENARIOS)
     t0 = time.perf_counter()
-    res = Results(meta={"label": label, "seeds": list(seeds), "closed_loop": closed_loop, "actuator": actuator,
+    res = Results(meta={"label": label, "seeds": list(seeds), "closed_loop": closed_loop, "actuator": actuator, "policy": policy,
                         "analyser_overrides": analyser_overrides or {}, "scenarios": [s if isinstance(s, str) else s.name for s in names]})
     for s in names:
         for seed in seeds:
             res.runs.append(run_one(detector_factory, s, seed, closed_loop=closed_loop,
                                     analyser_overrides=analyser_overrides, notch_cfg=notch_cfg, geq_band_hz=geq_band_hz,
-                                    actuator=actuator, peq=peq))
+                                    actuator=actuator, peq=peq, policy=policy))
     res.meta["wall_s"] = round(time.perf_counter() - t0, 2)
     return res
 
@@ -570,13 +581,14 @@ def _main() -> None:   # pragma: no cover - CLI: python -m rtasim.harness [--clo
     closed = "--closed" in sys.argv
     mode = ([a[7:] for a in sys.argv[1:] if a.startswith("--mode=")] or ["watch"])[0]
     actuator = ([a[11:] for a in sys.argv[1:] if a.startswith("--actuator=")] or ["geq"])[0]
+    policy = ([a[9:] for a in sys.argv[1:] if a.startswith("--policy=")] or [None])[0]
     cfg = DetectorConfig.from_descriptor(Descriptor.load())
     scen: Any = args or None
     if "--adversarial" in sys.argv:
         from .scenarios_adversarial import ADVERSARIAL
         scen = [ADVERSARIAL[a] for a in args] if args else list(ADVERSARIAL.values())
     res = evaluate(lambda bh: FeedbackDetector(cfg, bh, mode=mode), scen, closed_loop=closed, notch_cfg=cfg,
-                   label=f"current FeedbackDetector ({mode}, {actuator})", actuator=actuator)
+                   label=f"current FeedbackDetector ({mode}, {actuator}{', ' + policy if policy else ''})", actuator=actuator, policy=policy)
     print(res.table())
     out = [a[7:] for a in sys.argv[1:] if a.startswith("--json=")]
     if out:

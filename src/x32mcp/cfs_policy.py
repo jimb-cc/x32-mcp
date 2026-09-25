@@ -272,8 +272,14 @@ def tier_b_eligible(
         return False, "line not present this frame"
     if getattr(c, "stationary", False):
         return False, "stationary (followed the gain steps)"
-    if getattr(c, "cut_verdict", None) is not None:
-        return False, f"cut verdict {c.cut_verdict}"
+    verdict = getattr(c, "cut_verdict", None)
+    if verdict is not None and (verdict == "pending" or int(getattr(c, "emitted", 0) or 0) > 0):
+        # a verdict on a line somebody CUT is that cut's business (the detector deepens its own, an open engagement follows
+        # up its own). A line that was never emitted can still carry one: note_cut() judges every line within reach of a
+        # bell, so a neighbour's cut files 'held' on a bystander -- typically the same howl after a mode hop, standing
+        # 1/6 octave from the notch that was meant for it. That verdict says the neighbour's bell did not kill it, which
+        # is no reason to leave it alone: once settled (not 'pending') it does not bar the line from its own engagement.
+        return False, f"cut verdict {verdict}"
     if getattr(c, "false_cut", False):
         return False, "false_cut"
     level = float(getattr(c, "level_db", -128.0))
