@@ -97,7 +97,11 @@ No family → no veto → BASE, and a note that swells 6 dB is RISE.
 3. The log is RMS ballistics (raw 1), i.e. what every session since M7 actually armed on. A PEAK (raw 0) log of the same
    kind is needed before G5 is judged on the corrected product; the reviewer will take one at the next chance (tonight's band,
    or Spotify again) with `scripts/log_rta_session.py`, which records the raw `det` value in the log.
-4. More logs are coming today: the same desk with the band's own programme tonight (The Molecules, 19:30, in-ears on the mix
+4. **PEAK log taken at 12:33** (`programme_spotify_main_2026-09-25_peak025.jsonl.gz`, raw 0 read back): **4** STRONG
+   emissions in 180 s (676 / 521 / 1194 / 677 Hz, RISE 7–11 dB, all notes) and 26 MODERATE/STRONG tracks for tier B, against 20
+   under RMS on the earlier passage. Real PEAK removes most of the RISE false positives; the residue is still one wrong cut
+   every 45 s. G5 replays both files.
+5. More logs are coming today: the same desk with the band's own programme tonight (The Molecules, 19:30, in-ears on the mix
    buses) if Jim agrees to a passive log, and a quieter genre if time permits. The reviewer will log at 4 decimals
    (`int16/256` resolution) so the frozen-frame logic can be replayed too; today's log is rounded to 0.01 dB.
 
