@@ -532,6 +532,9 @@ snapshot-before-first-write) · **T2** guarded (confirmation token, see the safe
 | `apply_patch_plan(file, include_source=False, confirm_token=None)` | T1 / T2 | Names and colours from a plan (T1, writes only what differs); `include_source=true` also patches input sources (T2) |
 | `export_patch_plan(file)` | T0 | Write the desk's names/colours/sources to `patches/<file>.yaml|.csv`, keeping mic/owner/monitor_bus metadata of an existing file |
 | `set_channel_config(ch, source=, link=, confirm_token=None)` | T2 | Input source (`IN05`, `AUX1`, `USBL`, `FX1L`, `BUS03`, `OFF`) and/or stereo link of the channel pair |
+| `get_outputs()` | T0 | The physical output taps: XLR OUT 1..16 (`main`) and rear AUX OUT 1..6 (`aux`), each `{out, source, pos, invert, target, name, follows_mute}` (`follows_mute`: only `POST` and the `+M` taps go quiet with the source's mute), plus the `/config/routing/OUT` blocks (`xlr`: does the socket carry its own tap) and `/config/routing/AES50A` blocks (`aes50a`: snake channels copying the tap) |
+| `set_output(out, source=, pos=, invert=, confirm_token=None)` | T2 | Patch XLR output tap 1..16: source (`MixBus 03` / `bus 3`, `Matrix 2`, `Main L`, `M/C`, `DirectOut Ch 05` / `ch 5`, `DirectOut Aux 2`, `DirectOut FX 1L`, `Monitor L`, `Talkback`, `OFF`; any case), tap point (`IN/LC`, `<-EQ`, `EQ->`, `PRE`, their `+M` mute-following variants, `POST`) and polarity; the first call describes the change, nothing is written without the token |
+| `set_aux_output(out, source=, pos=, invert=, confirm_token=None)` | T2 | The same for the six rear AUX OUT taps (`/outputs/aux/NN`) |
 
 ### Phase 5 — meters and CFS²
 
@@ -599,7 +602,7 @@ Enforced by [`policy.py`](src/x32mcp/policy.py) on every write path; the limits 
   refused by Tier-1 tools with `GUARDED` even if a target sneaks one in.
 
 **Tier 2 — guarded.** `set_main_fader`, `set_main_mute`, `recall_scene`, `save_scene`,
-`restore_snapshot`, `set_channel_config`, `apply_patch_plan(include_source=true)`,
+`restore_snapshot`, `set_channel_config`, `set_output`, `set_aux_output`, `apply_patch_plan(include_source=true)`,
 `setup_ringout_eqs` (when it must change something), `ring_out`, `ring_out_system`. These use
 the **confirmation dance**: the first call does nothing on the desk and returns
 

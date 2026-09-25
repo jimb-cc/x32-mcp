@@ -78,7 +78,7 @@ from .cfs import CfsError, CfsManager, CfsMode, ReportStore
 from .config import Settings
 from .connection import ConnectionError as X32ConnectionError, ConnectionState, NotConnected, RequestTimeout, X32Connection
 from .descriptor import Descriptor
-from .desk import Desk, DeskError
+from .desk import Desk, DeskError, normalise_output_pos, normalise_output_source, output_source_target
 from .events import EventBus
 from .meters import METER_GROUPS, LiveMeters, RtaSourceError, average_frames, rta_band_hz, set_rta_source
 from .nodes import SnapshotError, SnapshotStore, describe_changes, diff_states
@@ -120,7 +120,7 @@ move needs force=true, which you pass ONLY when the user explicitly asked for a 
 get_rta(target) is Tier 1 too: pointing the RTA writes the console's RTA prefs (get_rta() alone only reads). \
 The first write of a session automatically snapshots the whole desk (restore_snapshot undoes). \
 Tier 2 (set_main_fader, set_main_mute, recall_scene, save_scene, restore_snapshot, set_channel_config, \
-apply_patch_plan with include_source, setup_ringout_eqs, ring_out, ring_out_system) uses a confirmation \
+set_output, set_aux_output, apply_patch_plan with include_source, setup_ringout_eqs, ring_out, ring_out_system) uses a confirmation \
 dance: the first call returns requires_confirmation=true with an action_summary and a single-use \
 confirm_token (valid for a few minutes, single use). Show the action_summary to the user; only after they agree, call the SAME tool \
 with the SAME arguments plus confirm_token. Never invent, reuse or pre-empt a token and never confirm \
@@ -1568,6 +1568,111 @@ async def set_channel_config(ch: int, source: str | None = None, link: bool | No
         applied["link"] = bool(link)
         applied["link_pair"] = f"{pair[0]}-{pair[1]}"
     return _ok(f"{_who(t, strip.get('name'))}: {_applied_text(applied)}", target=t.key, label=t.label, applied=applied)
+
+
+# -- tools: output taps ----------------------------------------------------------------------------------------
+
+_ARROW_FROM = "←"
+_OUTPUT_SOCKET = {"main": "XLR out", "aux": "rear aux out"}
+
+
+def _tap_text(tap: dict[str, Any]) -> str:
+    """``MixBus 03 'Wedge A' POST`` / ``OFF`` / ``Main L PRE (ignores mute) inverted`` for summaries."""
+    src = tap.get("source") or "?"
+    if src == "OFF":
+        return "OFF" + (" inverted" if tap.get("invert") else "")
+    name = f" '{tap['name']}'" if tap.get("name") else ""
+    mute = " (ignores mute)" if tap.get("follows_mute") is False else ""
+    inv = " inverted" if tap.get("invert") else ""
+    return f"{src}{name} {tap.get('pos') or '?'}{mute}{inv}"
+
+
+def _taps_text(label: str, taps: list[dict[str, Any]]) -> str:
+    if not taps:
+        return f"{label}: none"
+    span = f"{label} {taps[0]['out']}-{taps[-1]['out']}"
+    if all(t.get("source") == "OFF" and not t.get("invert") for t in taps):
+        return f"{span}: all OFF"
+    return f"{span}: " + ", ".join(f"{t['out']} {_ARROW_FROM} {_tap_text(t)}" for t in taps)
+
+
+@server.tool()
+@_tool()
+async def get_outputs() -> dict[str, Any]:
+    """The desk's physical output taps: XLR OUT 1..16 (main) and rear AUX OUT 1..6 (aux), each
+    {out, source, pos, invert, target, name, follows_mute} — source is what feeds the socket ('MixBus 03',
+    'Main L', 'DirectOut Ch 05', 'OFF'), pos the tap point (POST = post-fader; only POST and the +M taps
+    go quiet with the source's mute), target/name the strip it taps — plus the routing blocks that
+    carry them: /config/routing/OUT (which taps reach the XLR sockets; xlr per tap) and
+    /config/routing/AES50A (what goes down the AES50-A snake; aes50a channels per tap). Tier 0."""
+    desk = _desk()
+    res = await desk.get_outputs()
+    out_blocks, aes_blocks = res["routing"]["OUT"], res["routing"]["AES50A"]
+    off_socket = [f"XLR {k} carry {v}" for k, v in out_blocks.items() if v is not None and v != f"OUT{k}"]
+    parts = [
+        _taps_text("XLR OUT", res["main"]),
+        _taps_text("AUX OUT", res["aux"]),
+        ("; ".join(off_socket) + " (not their own taps)") if off_socket else "every XLR socket carries its own tap",
+        "AES50-A " + ", ".join(f"{k} {_ARROW_FROM} {v}" for k, v in aes_blocks.items()),
+    ]
+    return _ok("; ".join(parts), main=res["main"], aux=res["aux"], routing=res["routing"])
+
+
+async def _output_dance(group: str, tool: str, out: Any, source: Any, pos: Any, invert: Any, confirm_token: str | None) -> dict[str, Any]:
+    """The Tier-2 dance shared by set_output / set_aux_output: normalise every argument, read the
+    tap, describe the change, confirm, then write through :meth:`Desk.set_output` and read back."""
+    a = _app()
+    desk = _desk()
+    if source is None and pos is None and invert is None:
+        raise DeskError("BAD_ARGUMENT", "give source, pos and/or invert")
+    src_tok = normalise_output_source(source, a.descriptor.enum("output_src")) if source is not None else None
+    pos_tok = normalise_output_pos(pos, a.descriptor.enum("output_pos")) if pos is not None else None
+    if invert is not None and not isinstance(invert, bool):
+        raise DeskError("BAD_ARGUMENT", f"invert must be true/false, got {invert!r}")
+    cur = await desk.get_output(group, out)  # validates out (BAD_ARGUMENT) and gives the summary its "before"
+    n = cur["out"]
+    parts: list[str] = []
+    if src_tok is not None:
+        new_name = ""
+        t = output_source_target(src_tok)
+        if t is not None:
+            nm = await _name(desk, t)
+            new_name = f" '{nm}'" if nm else ""
+        cur_name = f" '{cur['name']}'" if cur.get("name") else ""
+        parts.append(f"source {cur.get('source')}{cur_name} {_ARROW} {src_tok}{new_name}")
+    if pos_tok is not None:
+        note = "" if pos_tok in ("POST",) or pos_tok.endswith("+M") else " (does not follow the source's mute)"
+        parts.append(f"tap {cur.get('pos')} {_ARROW} {pos_tok}{note}")
+    if invert is not None:
+        parts.append(f"polarity {'inverted' if cur.get('invert') else 'normal'} {_ARROW} {'inverted' if invert else 'normal'}")
+    payload = {"group": group, "out": n, "source": src_tok, "pos": pos_tok, "invert": invert}
+    summary = f"{cur['label']} ({_OUTPUT_SOCKET[group]} {n}): " + ", ".join(parts)
+    pending = _confirm(tool, summary, payload, confirm_token, current=cur)
+    if pending:
+        return pending
+    res = await desk.set_output(group, n, source=src_tok, pos=pos_tok, invert=invert, tool=tool)
+    after = await desk.get_output(group, n)
+    return _ok(f"{cur['label']}: {_applied_text(res['applied'])} — now {_tap_text(after)}", **res, before=cur, after=after)
+
+
+@server.tool()
+@_tool()
+async def set_output(out: int, source: str | None = None, pos: str | None = None, invert: bool | None = None, confirm_token: str | None = None) -> dict[str, Any]:
+    """Patch XLR output tap out (1..16): source = what feeds it ('MixBus 03' / 'bus 3', 'Matrix 2', 'Main L',
+    'Main R', 'M/C', 'DirectOut Ch 05' / 'ch 5', 'DirectOut Aux 2', 'DirectOut FX 1L', 'Monitor L', 'Talkback', 'OFF';
+    any case), pos = tap point (IN/LC, <-EQ, EQ->, PRE, each also as +M = follows the source's mute, POST = post-fader,
+    follows the mute), invert = polarity. TIER 2 confirmation dance (confirm_token) — this changes what comes out
+    of a physical socket. The first call reads the tap and describes the change; nothing is written without a token."""
+    return await _output_dance("main", "set_output", out, source, pos, invert, confirm_token)
+
+
+@server.tool()
+@_tool()
+async def set_aux_output(out: int, source: str | None = None, pos: str | None = None, invert: bool | None = None, confirm_token: str | None = None) -> dict[str, Any]:
+    """Patch rear AUX OUT tap out (1..6): the same source / pos / invert arguments as set_output (sources
+    'MixBus 03', 'Main L', 'DirectOut Ch 05', 'Monitor L', 'OFF' …; taps POST, PRE, PRE+M …). TIER 2
+    confirmation dance (confirm_token) — this changes what comes out of a physical socket."""
+    return await _output_dance("aux", "set_aux_output", out, source, pos, invert, confirm_token)
 
 
 # -- tools: meters ----------------------------------------------------------------------------------------
