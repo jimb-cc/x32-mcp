@@ -343,6 +343,11 @@ alternation on split lines (S10, X9, X23).
    skirts are uniform (order ≈ 5) above ~200 Hz but widen to order ≈ 3 at 100 Hz and ≈ 2 at 50 Hz. Defaults are kept for
    baseline continuity; a corpus revision should adopt attack_k 1.0, a frequency-dependent skirt order, decay 0.25 → 80 dB/s
    and the corrected grid.)*
+   *(2026-09-24, REVIEW_RESPONSE §3 and §4: in the RMS state, which every capture after an arm-time PEAK write is in, the
+   display is one pole on power with T20 = decay, attack and release alike (PEAK attacks within a frame); the
+   baselines ran at decay 1.0 × 60 dB/s, which is 25 % slower than the 80 dB/s the desk shows at the forced 0.25, not 3×
+   faster; the LF attack is a window filling (length ≈ 1.65/Δf), which a one-pole with attack_k 1.0 does not reproduce;
+   the ±2 and ±3 skirt figures need the sweep re-run under verified prefs.)*
    Per-band power one-pole (τ_a = 0.5/Δf), Butterworth-2N skirts, dB-linear
    release, guessed peak-hold/decay/gain semantics. A real X32 may smear an LF tone over ±2–4 bands (FFT), have window-shaped
    rises and different skirts. Any design that normalises growth by *this* τ_a(i) curve, matches *this* N=3 skirt template (P11), or
@@ -369,7 +374,10 @@ alternation on split lines (S10, X9, X23).
    score TP/DUP, and TP timing starts at t_onset (negative latencies happen when the detector fires on programme sharing the band).
    EARLY credit (2 s) rewards cutting programme-excited ringing in feedback_watch scenes (S12, X17, X22): report EARLY separately
    and re-run with `EARLY_CREDIT_S = 0` before claiming watch-mode latencies. HARM/TAIL/DUP cuts cost nothing but budget.
-8. **Closed loop is idealised** — and, measured 2026-09-23, the GEQ model is wrong in *depth*: the desk's Dual Graphic EQ
+8. *(DISPUTED 2026-09-24, docs/REVIEW_RESPONSE_2026-09-24.md item 1: the depth readings below were taken with ONE leg of the
+   stereo Main cut and match a full-depth cut read through a summed tap to 0.1 dB. Do not scale any margin by them until
+   both legs have been cut together.)*
+   **Closed loop is idealised** — and, measured 2026-09-23, the GEQ model is wrong in *depth*: the desk's Dual Graphic EQ
    realises ≈ 0.43× a −6 slider and ≈ 0.35× a −12 slider at an isolated band (2.6 / 4.1 dB at 2 kHz, ±0.09 oct within 0.5 dB),
    whereas the renderer applies the nominal depth with an RBJ Q 3 bell. Every closed-loop kill margin in this document is
    therefore optimistic for the GEQ actuator by ~2.5×; the bus PEQ (RBJ, full depth, measured at 2 and 8 kHz) is not affected.
