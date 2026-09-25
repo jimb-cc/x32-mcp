@@ -934,12 +934,16 @@ async def set_rta_source(
         await conn.set(ag_addr, 0)
         autogain_cleared = True
 
-    # RMS blunts a narrow tone; feedback is exactly that. PEAK tracks the onset.
+    # RMS blunts a narrow tone; feedback is exactly that. PEAK tracks the onset (one frame to the plateau above ~200 Hz
+    # against three for RMS, meters.md 2026-09-25 item 8). The RAW value of PEAK comes from the descriptor's rta_det enum:
+    # on the desk raw 0 = PEAK, raw 1 = RMS (the console's own /node label, item 5). The DOC and X32.c print the enum the
+    # other way round, and so did device.yaml until 2026-09-25 -- every "PEAK" this code wrote before then set RMS.
     detector_set_peak = False
     det_addr = rta.get("det_param", "/-prefs/rta/det")
+    peak_raw = _enum_raw(d, det_addr, "PEAK", default=0)
     det = await _read(det_addr)
-    if isinstance(det, (int, float)) and int(det) != 1:
-        await conn.set(det_addr, 1)
+    if isinstance(det, (int, float)) and int(det) != peak_raw:
+        await conn.set(det_addr, peak_raw)
         detector_set_peak = True
 
     # Ballistics (meters.md §5.1): ``decay`` is the analyser's release (0.25 … 16, log steps, raw 0.0 =
@@ -998,6 +1002,15 @@ async def set_rta_source(
                            autogain_cleared, detector_set_peak, decay_set_min, peakhold_cleared, prefs_before or None, gain_set,
                            settled.attempts, round(settled.elapsed_ms, 1))
 
+
+
+def _enum_raw(d: Descriptor, address: str, token: str, *, default: int) -> int:
+    """The raw int the descriptor maps ``token`` to for the enum parameter at ``address`` (``default`` if unknown)."""
+    try:
+        spec = d.param_for_address(address)
+        return default if spec is None else int(spec[0].to_raw(token))
+    except Exception:  # noqa: BLE001 - a descriptor without the param: the caller's default
+        return default
 
 
 # prefs_before key -> descriptor rta key of the address it came from

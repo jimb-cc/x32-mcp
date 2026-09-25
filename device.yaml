@@ -141,7 +141,8 @@ enums:
   rta_source: ["NONE", "MONITOR", "CH01", "CH02", "CH03", "CH04", "CH05", "CH06", "CH07", "CH08", "CH09", "CH10", "CH11", "CH12", "CH13", "CH14", "CH15", "CH16", "CH17", "CH18", "CH19", "CH20", "CH21", "CH22", "CH23", "CH24", "CH25", "CH26", "CH27", "CH28", "CH29", "CH30", "CH31", "CH32", "AUX1", "AUX2", "AUX3", "AUX4", "AUX5", "AUX6", "AUX7", "AUX8", "FX1L", "FX1R", "FX2L", "FX2R", "FX3L", "FX3R", "FX4L", "FX4R", "BUS01", "BUS02", "BUS03", "BUS04", "BUS05", "BUS06", "BUS07", "BUS08", "BUS09", "BUS10", "BUS11", "BUS12", "BUS13", "BUS14", "BUS15", "BUS16", "MTX1", "MTX2", "MTX3", "MTX4", "MTX5", "MTX6", "MAIN", "MONO"]
   rta_pos: ["PRE", "POST"]
   rta_mode: ["BAR", "SPEC"]
-  rta_det: ["RMS", "PEAK"]
+  rta_det: ["PEAK", "RMS"]      # raw 0 = PEAK, raw 1 = RMS: the console's own /node label (meters.md 2026-09-25 item 5). The DOC and
+                                #   X32.c PRdet[] list RMS first; that order was in this file until 2026-09-25 and made every "PEAK" write RMS.
   rta_visibility: ["OFF", "25%", "30%", "35%", "40%", "45%", "50%", "55%", "60%", "65%", "70%", "75%", "80%"]
   rta_peakhold: ["OFF", "1", "2", "3", "4", "5", "6", "7", "8"]
 
@@ -795,7 +796,7 @@ rta:
   # auto-gain normalises the whole display, so every band drifts together when the overall level
   # moves and the detector reads that as the growth signature of feedback; RMS blunts a narrow tone.
   autogain_param: "/-prefs/rta/autogain" # 0/1 - the detector needs absolute levels, so force 0
-  det_param: "/-prefs/rta/det"           # 0 RMS, 1 PEAK - force PEAK, feedback is a narrow tone
+  det_param: "/-prefs/rta/det"           # raw 0 PEAK, raw 1 RMS (enum rta_det) - force PEAK, feedback is a narrow tone
   # The analyser's ballistics are display preferences too, and just as able to fool the detector: a long
   # release ("decay", 0.25..16 log, raw 0.0 = shortest) makes every note linger after it stops, and peak-hold
   # freezes past maxima into dead-flat prominent bands that look exactly like an established ring.
