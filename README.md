@@ -7,7 +7,7 @@
 An MCP server that lets Claude operate a **live sound mixing console** — safely enough to use at a
 real gig, with the safety rules enforced in code rather than in a prompt.
 
-It talks to a Behringer X32 Rack over the console's own network protocol, exposes 57 tools that
+It talks to a Behringer X32 Rack over the console's own network protocol, exposes 63 tools that
 speak in decibels and channel numbers rather than raw floats, and refuses to do anything
 dangerous without a human saying yes. On top of that sits **CFS²**, a feedback-suppression
 assistant that closes a real-time control loop *inside the server*, because a language model is
