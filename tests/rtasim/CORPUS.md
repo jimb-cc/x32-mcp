@@ -383,14 +383,11 @@ alternation on split lines (S10, X9, X23).
    score TP/DUP, and TP timing starts at t_onset (negative latencies happen when the detector fires on programme sharing the band).
    EARLY credit (2 s) rewards cutting programme-excited ringing in feedback_watch scenes (S12, X17, X22): report EARLY separately
    and re-run with `EARLY_CREDIT_S = 0` before claiming watch-mode latencies. HARM/TAIL/DUP cuts cost nothing but budget.
-8. *(DISPUTED 2026-09-24, docs/REVIEW_RESPONSE_2026-09-24.md item 1: the depth readings below were taken with ONE leg of the
-   stereo Main cut and match a full-depth cut read through a summed tap to 0.1 dB. Do not scale any margin by them until
-   both legs have been cut together.)*
-   **Closed loop is idealised** — and, measured 2026-09-23, the GEQ model is wrong in *depth*: the desk's Dual Graphic EQ
-   realises ≈ 0.43× a −6 slider and ≈ 0.35× a −12 slider at an isolated band (2.6 / 4.1 dB at 2 kHz, ±0.09 oct within 0.5 dB),
-   whereas the renderer applies the nominal depth with an RBJ Q 3 bell. Every closed-loop kill margin in this document is
-   therefore optimistic for the GEQ actuator by ~2.5×; the bus PEQ (RBJ, full depth, measured at 2 and 8 kHz) is not affected.
-   The K series survives this: a −9 GEQ cut (≈3.5 dB real) kills only e ≤ 3.5. RBJ bells of guessed Q on a PRE insert, one-frame actuation, no bus dynamics, VERIFY/deepen/release
+8. *(2026-09-25: the 2026-09-23 "GEQ realises a third of its depth" reading is WITHDRAWN — it was one leg of the stereo Main
+   through the summed tap, as REVIEW_RESPONSE_2026-09-24 item 1 computed. With both legs cut the Dual GEQ delivers 12.0 dB for
+   a −12 slider and 5.5–6.8 dB for −6 (meters.md 2026-09-25 item 13): the renderer's nominal-depth GEQ is right in depth; only
+   its bell Q is a guess (RBJ 3 here; ≈ 4.3 by the 09-23 off-centre fit).)*
+   **Closed loop is idealised** — RBJ bells of guessed Q on a PRE insert, one-frame actuation, no bus dynamics, VERIFY/deepen/release
    logic of cfs.py not exercised, scenarios end at their duration (the next mode after a cut appears only in M2/X23), no operator
    fighting the system. A notch policy cannot be validated here, only a detector — except for the one policy property
    the K series checks: whether the loop is actually dead when the scenario ends (`survived`, §1).

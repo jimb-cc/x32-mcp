@@ -609,7 +609,9 @@ Method as on 2026-09-22 plus `scripts/log_rta_frames.py` (every `/meters/15` fra
    measurement settles it. The detector's centroid interpolation and every "band → Hz" label inherit the offset.
 6. **Main LR PEQ at 8 kHz**: band 5 PEQ 7.87 kHz Q 6.1 −12 on an 8.00 kHz tone (0.024 oct above the centre): **11.7 dB**
    (RBJ prototype 11.4). No bilinear warping visible at this offset; with the 2 kHz readings the PEQ = RBJ, `q_scale` 1.0.
-7. **The Dual Graphic EQ (GEQ2, FX 5 side A, Main LR insert PRE, RTA post-EQ) realises about a third of its slider depth
+7. **WITHDRAWN 2026-09-25 (item 13): these readings are one leg (side A) of the stereo Main through the summed tap —
+   `20·log10((1+g)/2)` = 2.49 / 4.07 dB; with both legs cut the GEQ delivers its full slider depth.** *Original text:*
+   **The Dual Graphic EQ (GEQ2, FX 5 side A, Main LR insert PRE, RTA post-EQ) realises about a third of its slider depth
    at an isolated band**: 2k slider −6 → **2.6 dB** at 2.00 kHz; −12 → **4.1 dB** at 2.00 kHz, 3.8 at 1.88, 3.6 at 2.11 — a
    broad, shallow dip (±0.09 oct within 0.5 dB of the centre). Nominal depths are what NotchController writes and what the
    corpus's closed loop applies; the desk delivers ~0.35× at −12 and ~0.43× at −6. M7's −3/−6/−9 on the 5 kHz howl were
