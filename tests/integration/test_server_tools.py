@@ -475,6 +475,164 @@ async def test_set_channel_config_dance(app, fakedesk):
     assert_err(await srv.set_channel_config(2, source="nope"), "BAD_ARGUMENT")
 
 
+# ---------------------------------------------------------------------------------------- routing, stereo links, solo
+
+
+async def test_get_routing_reads_the_fake(app, fakedesk):
+    r = await srv.get_routing()
+    assert r["ok"] and r["routswitch"] == "REC" and "play_inputs" not in r
+    assert r["inputs"] == {"1-8": "AN1-8", "9-16": "AN9-16", "17-24": "AN17-24", "25-32": "AN25-32", "AUX": "AUX1-4"}
+    assert len(r["user_in"]) == 32
+    assert r["user_in"][0] == {"slot": 1, "number": 0, "source": "OFF", "description": "off", "active": False, "feeds": None}
+    assert r["bus_links"] == {f"{o}-{o + 1}": False for o in range(1, 17, 2)}
+    assert r["solo"] == {"channels": "PFL", "buses": "AFL", "dcas": "AFL"}
+    assert r["summary"] == ("Inputs (REC): 1-8 AN1-8, 9-16 AN9-16, 17-24 AN17-24, 25-32 AN25-32, AUX AUX1-4; User-In slots live: 0; "
+                            "bus links: none; solo channels PFL, buses AFL, DCAs AFL")
+    json.dumps(r)
+    # a User-In slot is live when an IN block in force reads its UIN group: block 1-8 <- UIN9-16 means slot 12 feeds In 4
+    fset(app, fakedesk, "/config/routing/IN/1-8", "UIN9-16")
+    fset(app, fakedesk, "/config/routing/IN/AUX", "UIN1-6")
+    fset(app, fakedesk, "/config/userrout/in/12", 33)
+    fset(app, fakedesk, "/config/userrout/in/02", 168)
+    r = await srv.get_routing()
+    assert r["user_in"][11] == {"slot": 12, "number": 33, "source": "A01", "description": "AES50-A 1", "active": True, "feeds": "In 4"}
+    assert r["user_in"][1] == {"slot": 2, "number": 168, "source": "TBEXT", "description": "talkback external", "active": True, "feeds": "Aux In 2"}
+    assert r["user_in"][8]["active"] is True and r["user_in"][16]["active"] is False
+    assert "User-In slots live: 14" in r["summary"]
+    # PLAY routing: the PLAY table is the one in force
+    fset(app, fakedesk, "/config/routing/routswitch", "PLAY")
+    r = await srv.get_routing()
+    assert r["routswitch"] == "PLAY" and r["play_inputs"]["1-8"] == "AN1-8" and r["inputs"]["1-8"] == "UIN9-16"
+    assert r["user_in"][11]["active"] is False and r["summary"].startswith("Inputs (PLAY):")
+
+
+async def test_set_bus_link_dance(app, fakedesk):
+    first = await srv.set_bus_link(4, True)
+    token = assert_pending(first)
+    assert first["action_summary"] == "Stereo link Bus 3-4 ('Bus03' / 'Bus04'): OFF → ON" and first["current"] is False
+    await settle(app)
+    assert fakedesk.get("/config/buslink/3-4") == 0 and app.desk.write_count == 0 and app.policy.snapshot_before_write is True  # nothing written
+    assert_err(await srv.set_bus_link(4, True, confirm_token="nope"), "BAD_TOKEN")
+    # a token minted for another pair cannot execute this request
+    other = assert_pending(await srv.set_bus_link(4, True))
+    assert_err(await srv.set_bus_link(6, True, confirm_token=other), "BAD_TOKEN")
+    token = assert_pending(await srv.set_bus_link(3, True))  # either bus of the pair is the same request
+    done = await srv.set_bus_link(4, True, confirm_token=token)
+    assert done["ok"] and done["pair"] == "3-4" and done["buses"] == [3, 4] and done["link"] is True and done["was_linked"] is False
+    assert done["summary"] == "Stereo link Bus 3-4 ('Bus03' / 'Bus04') ON"
+    assert_err(await srv.set_bus_link(4, True, confirm_token=token), "BAD_TOKEN")  # single use
+    await settle(app)
+    assert fakedesk.get("/config/buslink/3-4") == 1 and app.policy.snapshot_before_write is False
+    assert (await srv.get_routing())["bus_links"]["3-4"] is True
+    again = await srv.set_bus_link(4, True)
+    assert again["action_summary"].endswith("ON → ON (no change)")
+    # the token binds the state the user was shown: a front-panel change between the calls voids it
+    tok = assert_pending(await srv.set_bus_link(1, True))
+    fset(app, fakedesk, "/config/buslink/1-2", True)
+    assert_err(await srv.set_bus_link(1, True, confirm_token=tok), "BAD_TOKEN")
+    tok = assert_pending(await srv.set_bus_link(1, False))
+    off = await srv.set_bus_link(1, False, confirm_token=tok)
+    assert off["ok"] and off["link"] is False and off["was_linked"] is True
+    await settle(app)
+    assert fakedesk.get("/config/buslink/1-2") == 0
+    assert_err(await srv.set_bus_link(17, True), "BAD_ARGUMENT")
+    assert_err(await srv.set_bus_link(0, False), "BAD_ARGUMENT")
+
+
+async def test_set_input_block_dance(app, fakedesk):
+    first = await srv.set_input_block("ch 17-24", "a17-24")
+    token = assert_pending(first)
+    assert first["action_summary"] == "Input block 17-24 (In 17-24): AN17-24 → A17-24" and first["current"] == "AN17-24"
+    await settle(app)
+    assert fakedesk.value("/config/routing/IN/17-24") == "AN17-24" and app.desk.write_count == 0 and app.policy.snapshot_before_write is True
+    assert_err(await srv.set_input_block("17-24", "A17-24", confirm_token="nope"), "BAD_TOKEN")
+    token = assert_pending(await srv.set_input_block("IN/17-24", "A17-24"))  # spellings normalise to the same request
+    done = await srv.set_input_block("17-24", "A17-24", confirm_token=token)
+    assert done["ok"] and done["block"] == "17-24" and done["before"] == "AN17-24" and done["source"] == "A17-24"
+    assert done["summary"] == "Input block 17-24 (In 17-24) AN17-24 → A17-24" and done["address"] == "/config/routing/IN/17-24"
+    assert_err(await srv.set_input_block("17-24", "A17-24", confirm_token=token), "BAD_TOKEN")  # single use
+    await settle(app)
+    assert fakedesk.value("/config/routing/IN/17-24") == "A17-24" and app.policy.snapshot_before_write is False
+    assert (await srv.get_routing())["inputs"]["17-24"] == "A17-24"
+    # the AUX block has its own source list
+    tok = assert_pending(await srv.set_input_block("aux", "uin1-6"))
+    aux = await srv.set_input_block("aux in", "UIN1-6", confirm_token=tok)
+    assert aux["ok"] and aux["block"] == "AUX" and aux["source"] == "UIN1-6" and aux["summary"] == "Input block AUX (Aux In 1-6) AUX1-4 → UIN1-6"
+    await settle(app)
+    assert fakedesk.value("/config/routing/IN/AUX") == "UIN1-6"
+    assert_err(await srv.set_input_block("aux", "AN9-16"), "BAD_ARGUMENT")  # not an AUX-block source
+    assert_err(await srv.set_input_block("1-8", "AUX1-4"), "BAD_ARGUMENT")  # not an IN-block source
+    assert_err(await srv.set_input_block("33-40", "AN1-8"), "BAD_ARGUMENT")
+    assert_err(await srv.set_input_block("1-8", "nope"), "BAD_ARGUMENT")
+    # a front-panel change between the calls voids the token
+    tok = assert_pending(await srv.set_input_block("1-8", "B1-8"))
+    fset(app, fakedesk, "/config/routing/IN/1-8", "CARD1-8")
+    assert_err(await srv.set_input_block("1-8", "B1-8", confirm_token=tok), "BAD_TOKEN")
+    await settle(app)
+    assert fakedesk.value("/config/routing/IN/1-8") == "CARD1-8"
+    # PLAY routing is flagged in the summary
+    fset(app, fakedesk, "/config/routing/routswitch", "PLAY")
+    pend = await srv.set_input_block("9-16", "A9-16")
+    assert_pending(pend)
+    assert pend["action_summary"].startswith("Input block 9-16 (In 9-16): AN9-16 → A9-16 — note: the desk is in PLAY routing")
+
+
+async def test_set_user_in_dance(app, fakedesk):
+    first = await srv.set_user_in(4, "AES50-A 1")
+    token = assert_pending(first)
+    assert first["action_summary"] == "User-In slot 4: OFF (off) → A01 (AES50-A 1) [not live: no input block reads UIN1-8 now]"
+    assert first["current"]["slot"] == 4 and first["current"]["number"] == 0
+    await settle(app)
+    assert fakedesk.get("/config/userrout/in/04") == 0 and app.desk.write_count == 0 and app.policy.snapshot_before_write is True
+    assert_err(await srv.set_user_in(4, "A01", confirm_token="nope"), "BAD_TOKEN")
+    token = assert_pending(await srv.set_user_in(4, 33))  # the raw number is the same request
+    done = await srv.set_user_in(4, "a01", confirm_token=token)
+    assert done["ok"] and done["slot"] == 4 and done["number"] == 33 and done["source"] == "A01" and done["description"] == "AES50-A 1"
+    assert done["before"] == 0 and done["before_source"] == "OFF" and done["active"] is False and done["address"] == "/config/userrout/in/04"
+    assert done["summary"] == "User-In slot 4 OFF (off) → A01 (AES50-A 1)"
+    assert_err(await srv.set_user_in(4, "a01", confirm_token=token), "BAD_TOKEN")  # single use
+    await settle(app)
+    assert fakedesk.get("/config/userrout/in/04") == 33 and app.policy.snapshot_before_write is False
+    assert (await srv.get_routing())["user_in"][3]["source"] == "A01"
+    # once the block reads UIN1-8 the slot is live, the summary says which In it feeds, and the
+    # head-amp resolution follows the patch (A01 = AES50-A 1 = head amp 032)
+    fset(app, fakedesk, "/config/routing/IN/1-8", "UIN1-8")
+    assert await app.desk.headamp_index_for("ch.4") == 32
+    pend = await srv.set_user_in(4, "card 2")
+    tok = assert_pending(pend)
+    assert pend["action_summary"] == "User-In slot 4: A01 (AES50-A 1) → CARD02 (card/USB 2) [live: feeds In 4]"
+    fset(app, fakedesk, "/config/userrout/in/04", 34)  # a front-panel change between the calls voids the token
+    assert_err(await srv.set_user_in(4, "card 2", confirm_token=tok), "BAD_TOKEN")
+    await settle(app)
+    assert fakedesk.get("/config/userrout/in/04") == 34
+    tok = assert_pending(await srv.set_user_in(4, "CARD02"))
+    card = await srv.set_user_in(4, "CARD02", confirm_token=tok)
+    assert card["ok"] and card["number"] == 130 and card["before_source"] == "A02" and card["feeds"] == "In 4"
+    assert await app.desk.headamp_index_for("ch.4") is None  # a card source has no preamp
+    for bad in ("A49", "nope", 999, -1, "ch 4", "USBL", 4.5):
+        assert_err(await srv.set_user_in(4, bad), "BAD_ARGUMENT")
+    assert_err(await srv.set_user_in(33, "IN01"), "BAD_ARGUMENT")
+    assert_err(await srv.set_user_in(0, "IN01"), "BAD_ARGUMENT")
+
+
+async def test_set_solo_mode_is_tier1(app, fakedesk):
+    res = await srv.set_solo_mode(channels="afl", dcas="PFL")
+    assert res["ok"] and res["applied"] == {"channels": "AFL", "dcas": "PFL"} and res["before"] == {"channels": "PFL", "dcas": "AFL"}
+    assert res["summary"] == "Solo mode: channels PFL → AFL, DCAs AFL → PFL"
+    assert app.policy.snapshot_before_write is False  # a Tier-1 write: auto snapshot taken, no token asked for
+    await settle(app)
+    assert fakedesk.value("/config/solo/chmode") == "AFL" and fakedesk.value("/config/solo/dcamode") == "PFL"
+    assert fakedesk.value("/config/solo/busmode") == "AFL"  # untouched
+    assert (await srv.get_routing())["solo"] == {"channels": "AFL", "buses": "AFL", "dcas": "PFL"}
+    one = await srv.set_solo_mode(buses="pfl")
+    assert one["ok"] and one["applied"] == {"buses": "PFL"} and one["summary"] == "Solo mode: buses AFL → PFL"
+    assert_err(await srv.set_solo_mode(), "BAD_ARGUMENT")
+    assert_err(await srv.set_solo_mode(buses="XFL"), "BAD_ARGUMENT")
+    assert_err(await srv.set_solo_mode(channels=1), "BAD_ARGUMENT")
+    await settle(app)
+    assert fakedesk.value("/config/solo/busmode") == "PFL"
+
+
 async def test_ramp_ms_is_bounded_and_budgeted_for_the_real_cadence(app):
     """ramp_ms is 0..60000 in every docstring — and the budget must outlast the ramp it covers."""
     for call in (

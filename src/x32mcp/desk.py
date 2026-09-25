@@ -54,6 +54,11 @@ Decisions where DESIGN.md is silent (or where verified research overrides it):
 * Extras beyond DESIGN §13: ``set_send_mute``, ``headamp_index_for``, ``invalidate``, ``close``,
   ``pre_write_snapshot``, ``stats``; ``get_sends`` items carry ``to``/``name`` beside
   ``bus``/``bus_name`` (bus → matrix sends).
+* **Routing / links / solo** (``get_routing``, ``set_bus_link``, ``set_input_block``, ``set_user_in``,
+  ``set_solo_mode``): the guarded ``/config/buslink``, ``/config/routing/IN`` and ``/config/userrout/in``
+  writes are Tier-2 executors like ``set_source``; the three PFL/AFL solo modes are Tier 1. The User-In
+  numbering (0 OFF, 1..32 local XLR, 33..80 AES50-A, 81..128 AES50-B, 129..160 card, 161..166 aux in,
+  167/168 talkback — fx_routing_scenes.md §4.8) lives in the module-level ``user_in_*`` helpers.
 
 Errors are :class:`DeskError` (``code`` + ``to_dict()`` for the tool envelope) — ``NOT_CONNECTED``,
 ``TIMEOUT``, ``BAD_ARGUMENT``, ``NOT_SUPPORTED``, ``GUARDED``, ``UNKNOWN_TARGET``, ``AMBIGUOUS_NAME``,
@@ -67,6 +72,7 @@ import contextlib
 import contextvars
 import logging
 import math
+import re
 import time
 from typing import Any, Iterable, Iterator, Literal, Mapping, Sequence
 
@@ -88,7 +94,8 @@ from .settle import read_until
 from .targets import Target, TargetError, parse_target
 
 __all__ = [
-    "priority_writes","DeskError", "Desk", "ALL_FAMILIES"]
+    "priority_writes", "DeskError", "Desk", "ALL_FAMILIES",
+    "IN_BLOCKS", "USER_IN_MAX", "user_in_source", "user_in_token", "user_in_number", "in_block", "bus_link_pair", "routing_token"]
 
 log = logging.getLogger(__name__)
 
@@ -215,6 +222,120 @@ def _insert_side(sel: Any) -> tuple[int | None, str | None]:
     if isinstance(sel, str) and len(sel) == 4 and sel.startswith("FX") and sel[2].isdigit() and sel[3] in "LR":
         return int(sel[2]), "A" if sel[3] == "L" else "B"
     return None, None
+
+
+# -- routing tokens (fx_routing_scenes.md §4.3, §4.8) -----------------------------------------------
+
+IN_BLOCKS: tuple[str, ...] = ("1-8", "9-16", "17-24", "25-32", "AUX")  # /config/routing/IN/<block>
+USER_IN_MAX = 168  # /config/userrout/in/NN is int 0..168 (fx_routing_scenes.md §4.8, DOC p.21)
+# User-In source numbering: (first number, count, token prefix, digits, description) of each range.
+_USER_IN_RANGES: tuple[tuple[int, int, str, int, str], ...] = (
+    (1, 32, "IN", 2, "local XLR"),
+    (33, 48, "A", 2, "AES50-A"),
+    (81, 48, "B", 2, "AES50-B"),
+    (129, 32, "CARD", 2, "card/USB"),
+    (161, 6, "AUX", 1, "Aux In"),
+)
+_USER_IN_FIXED: dict[int, tuple[str, str]] = {0: ("OFF", "off"), 167: ("TBINT", "talkback internal"), 168: ("TBEXT", "talkback external")}
+_USER_IN_BY_TOKEN: dict[str, int] = {"OFF": 0, "TBINT": 167, "TBINTERNAL": 167, "TBEXT": 168, "TBEXTERNAL": 168}
+_USER_IN_SPELLINGS: dict[str, tuple[int, int, str]] = {  # prefix spelling -> (first number, count, description)
+    "IN": (1, 32, "local XLR"), "INPUT": (1, 32, "local XLR"), "LOCAL": (1, 32, "local XLR"), "LOC": (1, 32, "local XLR"), "XLR": (1, 32, "local XLR"),
+    "A": (33, 48, "AES50-A"), "AES50A": (33, 48, "AES50-A"), "AESA": (33, 48, "AES50-A"),
+    "B": (81, 48, "AES50-B"), "AES50B": (81, 48, "AES50-B"), "AESB": (81, 48, "AES50-B"),
+    "CARD": (129, 32, "card/USB"), "USB": (129, 32, "card/USB"),
+    "AUX": (161, 6, "Aux In"), "AUXIN": (161, 6, "Aux In"),
+}
+_USER_IN_RE = re.compile(r"^(AES50A|AES50B|AESA|AESB|AUXIN|AUX|CARD|USB|INPUT|IN|LOCAL|LOC|XLR|A|B)(\d{1,3})$")
+_USER_IN_HELP = f"OFF, IN01..IN32 (local XLR), A01..A48 (AES50-A), B01..B48 (AES50-B), CARD01..CARD32, AUX1..AUX6, TBINT, TBEXT or a number 0..{USER_IN_MAX}"
+_IN_BLOCK_PREFIX_RE = re.compile(r"^(?:INPUTS|INPUT|IN|CHANNELS|CHANNEL|CH)?\s*/?\s*")
+
+
+def user_in_source(n: Any) -> tuple[str, str]:
+    """A ``/config/userrout/in`` number 0..168 → ``(token, description)``: ``0 → ("OFF", "off")``,
+    ``4 → ("IN04", "local XLR 4")``, ``33 → ("A01", "AES50-A 1")``, ``81 → ("B01", "AES50-B 1")``,
+    ``129 → ("CARD01", "card/USB 1")``, ``161 → ("AUX1", "Aux In 1")``, ``167 / 168 → TBINT / TBEXT``
+    (fx_routing_scenes.md §4.8). ``ValueError`` outside 0..168 or for a non-int."""
+    if isinstance(n, bool) or not isinstance(n, int) or not 0 <= n <= USER_IN_MAX:
+        raise ValueError(f"User-In source number must be 0..{USER_IN_MAX}, got {n!r}")
+    if n in _USER_IN_FIXED:
+        return _USER_IN_FIXED[n]
+    for first, count, prefix, digits, what in _USER_IN_RANGES:
+        if first <= n < first + count:
+            k = n - first + 1
+            return f"{prefix}{k:0{digits}d}", f"{what} {k}"
+    raise AssertionError(f"user-in table does not cover {n}")  # unreachable: the ranges tile 0..168
+
+
+def user_in_token(n: Any) -> str:
+    """Token of a User-In source number (see :func:`user_in_source`)."""
+    return user_in_source(n)[0]
+
+
+def user_in_number(source: Any) -> int:
+    """A User-In source in any accepted spelling → the desk's number 0..168: ``'IN04'`` / ``'in 4'`` /
+    ``'local 4'`` / ``'xlr 4'`` → 4; ``'A01'`` / ``'AES50-A 1'`` → 33; ``'B01'`` → 81; ``'CARD01'`` /
+    ``'usb 1'`` → 129; ``'AUX1'`` / ``'aux in 1'`` → 161; ``'TBINT'`` / ``'TBEXT'`` → 167 / 168;
+    ``'OFF'`` → 0; an int or a digit string is the raw number. Case, spaces, ``_`` and ``-`` are
+    ignored. ``ValueError`` otherwise (a bool, a float, ``'ch 4'``, an out-of-range number)."""
+    if isinstance(source, bool) or not isinstance(source, (int, str)):
+        raise ValueError(f"User-In source must be one of {_USER_IN_HELP}, got {source!r}")
+    if isinstance(source, int):
+        n = source
+    else:
+        text = source.strip()
+        if text[:1] in ("-", "+"):  # a signed number is never a source; "-" is only stripped inside spellings (AES50-A 1)
+            raise ValueError(f"User-In source number must be 0..{USER_IN_MAX}, got {source!r}")
+        key = re.sub(r"[\s_\-]+", "", text.upper())
+        if key.isdigit():
+            n = int(key)
+        elif key in _USER_IN_BY_TOKEN:
+            return _USER_IN_BY_TOKEN[key]
+        else:
+            m = _USER_IN_RE.match(key)
+            if not m:
+                raise ValueError(f"unknown User-In source {source!r}; use {_USER_IN_HELP}")
+            first, count, what = _USER_IN_SPELLINGS[m.group(1)]
+            k = int(m.group(2))
+            if not 1 <= k <= count:
+                raise ValueError(f"{what} {k} is out of range 1..{count} ({source!r})")
+            return first + k - 1
+    if not 0 <= n <= USER_IN_MAX:
+        raise ValueError(f"User-In source number must be 0..{USER_IN_MAX}, got {n}")
+    return n
+
+
+def in_block(block: Any) -> str:
+    """An input-block name in any accepted spelling → one of :data:`IN_BLOCKS`: ``'17-24'``,
+    ``'ch 17-24'``, ``'IN/17-24'``, ``'inputs 17–24'`` → ``'17-24'``; ``'aux'`` / ``'aux in'`` → ``'AUX'``.
+    ``ValueError`` otherwise."""
+    if not isinstance(block, str):
+        raise ValueError(f"block must be one of {', '.join(IN_BLOCKS)}, got {block!r}")
+    key = _IN_BLOCK_PREFIX_RE.sub("", block.strip().upper().replace("–", "-").replace("—", "-"), count=1)
+    key = re.sub(r"\s+", "", key)
+    if key in ("AUX", "AUXIN", "AUXINS", "AUXINPUTS"):
+        return "AUX"
+    if key in IN_BLOCKS:
+        return key
+    raise ValueError(f"unknown input block {block!r}; use one of {', '.join(IN_BLOCKS)}")
+
+
+def bus_link_pair(bus: Any) -> tuple[int, int]:
+    """Mix bus 1..16 → its stereo-link pair ``(odd, even)``: ``1 → (1, 2)``, ``4 → (3, 4)``. ``ValueError`` otherwise."""
+    if isinstance(bus, bool) or not isinstance(bus, int) or not 1 <= bus <= 16:
+        raise ValueError(f"bus must be 1..16, got {bus!r}")
+    return (bus, bus + 1) if bus % 2 else (bus - 1, bus)
+
+
+def routing_token(source: Any, tokens: Sequence[str]) -> str:
+    """A routing-block source in any case or spacing (``'an 1-8'``, ``'a17-24'``, ``'UIN 17-24'``) → its
+    enum token; ``ValueError`` when it is not one of ``tokens``."""
+    if not isinstance(source, str):
+        raise ValueError(f"source must be a token such as {tokens[0]!r}, got {source!r}")
+    key = re.sub(r"[\s_]+", "", source.upper().replace("–", "-"))
+    for t in tokens:
+        if t.upper() == key:
+            return t
+    raise ValueError(f"unknown source {source!r}; use one of {', '.join(tokens)}")
 
 
 class Desk:
@@ -1641,6 +1762,129 @@ class Desk:
         address = spec.address(n=idx)
         await self._write(address, spec.to_raw(bool(on)), value={"phantom": bool(on)}, tool="set_phantom", target=target, guarded=True)
         return {"headamp": idx, "address": address, "on": bool(on), "target": target.key if target else None}
+
+    # -- routing / stereo links / solo (server: get_routing, set_bus_link, set_input_block, set_user_in, set_solo_mode)
+
+    def _config_param(self, rel: str) -> tuple[ParamSpec, str]:
+        spec = self._d.param("config", rel)
+        return spec, spec.address()
+
+    @staticmethod
+    def _uin_group(tok: Any) -> tuple[int, int] | None:
+        """``"UIN9-16"`` → (9, 16), ``"UIN1-6"`` → (1, 6); None for any other routing token."""
+        if not isinstance(tok, str) or not tok.upper().startswith("UIN"):
+            return None
+        lo, _, hi = tok[3:].partition("-")
+        return (int(lo), int(hi)) if lo.isdigit() and hi.isdigit() else None
+
+    async def get_routing(self) -> dict[str, Any]:
+        """The input side of the desk in one read: ``routswitch`` (REC/PLAY), the five ``inputs`` blocks of
+        ``/config/routing/IN`` (plus ``play_inputs`` when PLAY is in force), the 32 ``user_in`` slots
+        (``number`` → ``source`` token and ``description``; ``active`` when a block in force reads their
+        UIN group, ``feeds`` naming the In / Aux In they then feed), ``bus_links`` (``"1-2"`` → bool) and
+        the ``solo`` PFL/AFL modes (``channels``, ``buses``, ``dcas``)."""
+        paths = ["/config/routing", "/config/routing/IN", "/config/routing/PLAY", "/config/userrout/in", "/config/buslink", "/config/solo"]
+        secs = await self._read_sections(paths)
+        switch = self._require(secs, "/config/routing").get("routing/routswitch")
+        play = switch == "PLAY"
+        inputs = {k: self._require(secs, "/config/routing/IN").get(f"routing/IN/{k}") for k in IN_BLOCKS}
+        play_inputs = {k: self._require(secs, "/config/routing/PLAY").get(f"routing/PLAY/{k}") for k in IN_BLOCKS}
+        in_force = play_inputs if play else inputs
+        feeds: dict[int, list[str]] = {}
+        for k in IN_BLOCKS[:4]:  # "UIN9-16" read by block "1-8": user-in slots 9..16 feed In 1..8
+            grp = self._uin_group(in_force.get(k))
+            if grp:
+                first_in = int(k.split("-")[0])
+                for i in range(8):
+                    feeds.setdefault(grp[0] + i, []).append(f"In {first_in + i}")
+        grp = self._uin_group(in_force.get("AUX"))  # UIN1-2 / 1-4 / 1-6: slots 1..n feed Aux In 1..n
+        if grp:
+            for i in range(grp[0], grp[1] + 1):
+                feeds.setdefault(i, []).append(f"Aux In {i}")
+        uin = self._require(secs, "/config/userrout/in")
+        user_in: list[dict[str, Any]] = []
+        for slot in range(1, 33):
+            n = uin.get(f"userrout/in/{slot:02d}")
+            try:
+                tok, desc = user_in_source(n)
+            except ValueError:
+                tok = desc = None
+            user_in.append({"slot": slot, "number": n, "source": tok, "description": desc,
+                            "active": slot in feeds, "feeds": " and ".join(feeds[slot]) if slot in feeds else None})
+        links = self._require(secs, "/config/buslink")
+        bus_links = {f"{o}-{o + 1}": links.get(f"buslink/{o}-{o + 1}") for o in range(1, 17, 2)}
+        solo = self._require(secs, "/config/solo")
+        out: dict[str, Any] = {
+            "routswitch": switch, "inputs": inputs, "user_in": user_in, "bus_links": bus_links,
+            "solo": {"channels": solo.get("solo/chmode"), "buses": solo.get("solo/busmode"), "dcas": solo.get("solo/dcamode")},
+        }
+        if play:
+            out["play_inputs"] = play_inputs
+        return out
+
+    async def set_bus_link(self, bus: int, on: bool) -> dict[str, Any]:
+        """Stereo-link (``on``) or unlink the mix-bus pair holding ``bus`` 1..16 — ``/config/buslink/N-M``
+        (guarded; the Tier-2 executor behind ``set_bus_link``: linking re-syncs the pair)."""
+        o, e = bus_link_pair(_int(bus, "bus", 1, 16))
+        spec, address = self._config_param(f"buslink/{o}-{e}")
+        before = await self._leaf(address)
+        await self._write(address, spec.to_raw(bool(on)), value=bool(on), tool="set_bus_link", target=Target("bus", o), guarded=True)
+        return {"pair": f"{o}-{e}", "buses": [o, e], "link": bool(on), "was_linked": before, "address": address}
+
+    async def set_input_block(self, block: str, source: str) -> dict[str, Any]:
+        """Route an 8-channel input block: ``/config/routing/IN/<block>`` (``1-8`` … ``25-32``: enum
+        ``routing_in``; ``AUX``: ``routing_in_aux``) to a source token (guarded; Tier-2 executor)."""
+        try:
+            key = in_block(block)
+            tok = routing_token(source, self._d.enum("routing_in_aux" if key == "AUX" else "routing_in"))
+        except ValueError as ex:
+            raise DeskError("BAD_ARGUMENT", str(ex)) from None
+        spec, address = self._config_param(f"routing/IN/{key}")
+        before = await self._leaf(address)
+        await self._write(address, spec.to_raw(tok), value=tok, tool="set_input_block", guarded=True)
+        return {"block": key, "address": address, "before": before, "source": tok}
+
+    async def set_user_in(self, slot: int, source: str | int) -> dict[str, Any]:
+        """Patch User-In slot 1..32 (``/config/userrout/in/NN``) to a source (:func:`user_in_number`
+        spellings or the raw number 0..168); guarded, the Tier-2 executor behind ``set_user_in``."""
+        s = _int(slot, "slot", 1, 32)
+        try:
+            n = user_in_number(source)
+        except ValueError as ex:
+            raise DeskError("BAD_ARGUMENT", str(ex)) from None
+        spec, address = self._config_param(f"userrout/in/{s:02d}")
+        before = await self._leaf(address)
+        await self._write(address, spec.to_raw(n), value=n, tool="set_user_in", guarded=True)
+        tok, desc = user_in_source(n)
+        try:
+            before_tok: str | None = user_in_token(before)
+        except ValueError:
+            before_tok = None
+        return {"slot": s, "address": address, "before": before, "before_source": before_tok, "number": n, "source": tok, "description": desc}
+
+    async def set_solo_mode(self, *, channels: str | None = None, buses: str | None = None, dcas: str | None = None) -> dict[str, Any]:
+        """PFL/AFL solo mode of the channels, buses and/or DCAs (``/config/solo/chmode|busmode|dcamode``,
+        enum ``pfl_afl``; Tier 1). Returns ``{"applied": {...}, "before": {...}}`` for the values given."""
+        tokens = self._d.enum("pfl_afl")
+        items: list[tuple[str, str, str]] = []
+        for rel, key, val in (("solo/chmode", "channels", channels), ("solo/busmode", "buses", buses), ("solo/dcamode", "dcas", dcas)):
+            if val is None:
+                continue
+            tok = val.strip().upper() if isinstance(val, str) else None
+            if tok not in tokens:
+                raise DeskError("BAD_ARGUMENT", f"{key} must be {' or '.join(tokens)}, got {val!r}")
+            items.append((rel, key, tok))
+        if not items:
+            raise DeskError("BAD_ARGUMENT", f"give channels, buses and/or dcas ({' or '.join(tokens)})")
+        cur = await self._section("/config/solo")
+        applied: dict[str, str] = {}
+        before: dict[str, Any] = {}
+        for rel, key, tok in items:
+            spec, address = self._config_param(rel)
+            before[key] = cur.get(rel)
+            await self._write(address, spec.to_raw(tok), value=tok, tool="set_solo_mode")
+            applied[key] = tok
+        return {"applied": applied, "before": before}
 
     async def set_insert(self, t: Target | str | int, *, sel: str | None = None, on: bool | None = None, pos: str | None = None) -> dict[str, Any]:
         """Insert point (``OFF``, ``FX1L`` … ``FX8R``, ``AUX1``–``AUX6``), on switch and position

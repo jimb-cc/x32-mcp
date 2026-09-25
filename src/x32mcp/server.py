@@ -78,7 +78,7 @@ from .cfs import CfsError, CfsManager, CfsMode, ReportStore
 from .config import Settings
 from .connection import ConnectionError as X32ConnectionError, ConnectionState, NotConnected, RequestTimeout, X32Connection
 from .descriptor import Descriptor
-from .desk import Desk, DeskError
+from .desk import IN_BLOCKS, Desk, DeskError, bus_link_pair, in_block, routing_token, user_in_number, user_in_source
 from .events import EventBus
 from .meters import METER_GROUPS, LiveMeters, RtaSourceError, average_frames, rta_band_hz, set_rta_source
 from .nodes import SnapshotError, SnapshotStore, describe_changes, diff_states
@@ -109,17 +109,17 @@ _ARROW = "→"
 INSTRUCTIONS = """\
 x32-mcp controls one Behringer X32/M32 mixer over OSC. Call connect(host) first (discover_consoles \
 finds desks on the LAN), then read with get_channel/get_bus/get_main/get_strip/get_channel_sends/\
-get_eq/get_dynamics. Units everywhere: dB for levels and gains ("-oo" = fader fully down), Hz, ms, %, \
+get_eq/get_dynamics/get_routing. Units everywhere: dB for levels and gains ("-oo" = fader fully down), Hz, ms, %, \
 pan -100 (L) .. +100 (R), 1-based channel/bus numbers, enum tokens (PEQ, RD, IN05). A target is \
 'ch.5', 'bus.3', 'main.st', 'main.m', 'dca.1', 'mtx.2', 'auxin.1', 'fxrtn.1' or a strip name ('Vox Tony').
 Safety tiers (enforced in code): Tier 0 reads are always allowed. Tier 1 mix moves (set_fader, \
-adjust_fader, mute/unmute, set_send, set_eq_band, set_pan, set_comp, set_gate, label_channel, \
+adjust_fader, mute/unmute, set_send, set_eq_band, set_pan, set_comp, set_gate, label_channel, set_solo_mode, \
 apply_patch_plan names/colours, feedback_watch) are clamped (channels +5 dB, buses/main/sends 0 dB, \
 EQ +-15 dB), ramped (default 300 ms) and limited to +-6 dB per call (+-3 dB in show mode); a larger \
 move needs force=true, which you pass ONLY when the user explicitly asked for a move of that size. \
 get_rta(target) is Tier 1 too: pointing the RTA writes the console's RTA prefs (get_rta() alone only reads). \
 The first write of a session automatically snapshots the whole desk (restore_snapshot undoes). \
-Tier 2 (set_main_fader, set_main_mute, recall_scene, save_scene, restore_snapshot, set_channel_config, \
+Tier 2 (set_main_fader, set_main_mute, recall_scene, save_scene, restore_snapshot, set_channel_config, set_bus_link, set_input_block, set_user_in, \
 apply_patch_plan with include_source, setup_ringout_eqs, ring_out, ring_out_system) uses a confirmation \
 dance: the first call returns requires_confirmation=true with an action_summary and a single-use \
 confirm_token (valid for a few minutes, single use). Show the action_summary to the user; only after they agree, call the SAME tool \
@@ -1568,6 +1568,122 @@ async def set_channel_config(ch: int, source: str | None = None, link: bool | No
         applied["link"] = bool(link)
         applied["link_pair"] = f"{pair[0]}-{pair[1]}"
     return _ok(f"{_who(t, strip.get('name'))}: {_applied_text(applied)}", target=t.key, label=t.label, applied=applied)
+
+
+# -- tools: routing, stereo links, solo --------------------------------------------------------------
+
+
+def _routing_summary(r: dict[str, Any]) -> str:
+    blocks = ", ".join(f"{k} {r['inputs'].get(k)}" for k in IN_BLOCKS)
+    live = sum(1 for u in r["user_in"] if u.get("active"))
+    links = [k for k, v in r["bus_links"].items() if v]
+    s = r["solo"]
+    return (f"Inputs ({r.get('routswitch')}): {blocks}; User-In slots live: {live}; bus links: {', '.join(links) or 'none'}; "
+            f"solo channels {s.get('channels')}, buses {s.get('buses')}, DCAs {s.get('dcas')}")
+
+
+def _onoff(v: Any) -> str:
+    return "ON" if v else "OFF"
+
+
+@server.tool()
+@_tool()
+async def get_routing() -> dict[str, Any]:
+    """The input routing in one read: the five /config/routing/IN blocks (1-8, 9-16, 17-24, 25-32, AUX)
+    and routswitch (REC/PLAY), the 32 User-In slots decoded to tokens (OFF; IN01..IN32 local XLR;
+    A01..A48 AES50-A; B01..B48 AES50-B; CARD01..CARD32; AUX1..AUX6; TBINT/TBEXT) with whether each is
+    live and which In it feeds, the eight bus stereo links and the PFL/AFL solo modes. Tier 0."""
+    desk = _desk()
+    res = await desk.get_routing()
+    return _ok(_routing_summary(res), **res)
+
+
+@server.tool()
+@_tool()
+async def set_bus_link(bus: int, on: bool, confirm_token: str | None = None) -> dict[str, Any]:
+    """Stereo-link (on=true) or unlink the mix-bus pair that contains bus (1..16: pairs 1-2, 3-4 … 15-16).
+    TIER 2 confirmation dance (confirm_token) — linking re-syncs the pair's EQ, dynamics, fader and mute."""
+    desk = _desk()
+    o, e = bus_link_pair(_int_arg(bus, "bus", 1, 16))
+    pair = f"{o}-{e}"
+    cur = (await desk.get_routing())["bus_links"].get(pair)
+    names = [await _name(desk, Target("bus", b)) for b in (o, e)]
+    who = f"Bus {pair}" + (f" ('{names[0]}' / '{names[1]}')" if any(names) else "")
+    new = bool(on)
+    summary = f"Stereo link {who}: {_onoff(cur)} {_ARROW} {_onoff(new)}" + (" (no change)" if cur == new else "")
+    payload = {"pair": pair, "on": new, "before": cur}
+    pending = _confirm("set_bus_link", summary, payload, confirm_token, current=cur)
+    if pending:
+        return pending
+    res = await desk.set_bus_link(o, new)
+    return _ok(f"Stereo link {who} {_onoff(res['link'])}", **res)
+
+
+@server.tool()
+@_tool()
+async def set_input_block(block: str, source: str, confirm_token: str | None = None) -> dict[str, Any]:
+    """Route an input block: block '1-8', '9-16', '17-24', '25-32' (also 'ch 17-24', 'IN/17-24') or 'AUX';
+    source a routing token — AN1-8 … AN25-32 (local XLR), A1-8 … A41-48 (AES50-A), B1-8 … B41-48 (AES50-B),
+    CARD1-8 … CARD25-32, UIN1-8 … UIN25-32 (the User-In patch, see set_user_in); the AUX block takes
+    AUX1-4 (the local aux inputs) or AN/A/B/CARD/UIN 1-2, 1-4, 1-6. Writes /config/routing/IN/<block>
+    (the table in force while routswitch is REC). TIER 2 confirmation dance (confirm_token) — this
+    changes which physical inputs the channels hear."""
+    a = _app()
+    desk = _desk()
+    key = in_block(block)
+    tok = routing_token(source, a.descriptor.enum("routing_in_aux" if key == "AUX" else "routing_in"))
+    r = await desk.get_routing()
+    cur = r["inputs"].get(key)
+    what = f"Input block {key} ({'Aux In 1-6' if key == 'AUX' else f'In {key}'})"
+    summary = f"{what}: {cur} {_ARROW} {tok}" + (" (no change)" if cur == tok else "")
+    if r.get("routswitch") == "PLAY":
+        summary += " — note: the desk is in PLAY routing, so the IN table is not in force until routswitch is REC"
+    payload = {"block": key, "source": tok, "before": cur}
+    pending = _confirm("set_input_block", summary, payload, confirm_token, current=cur)
+    if pending:
+        return pending
+    res = await desk.set_input_block(key, tok)
+    return _ok(f"{what} {res['before']} {_ARROW} {res['source']}", **res)
+
+
+@server.tool()
+@_tool()
+async def set_user_in(slot: int, source: str | int, confirm_token: str | None = None) -> dict[str, Any]:
+    """Patch User-In slot 1..32 (/config/userrout/in/NN — the per-input patch an IN block uses when it
+    reads UIN*). source is a token or the desk's own number 0..168: OFF = 0; IN01..IN32 ('in 4',
+    'local 4', 'xlr 4') = 1..32 local XLR; A01..A48 ('AES50-A 1') = 33..80; B01..B48 = 81..128 AES50-B;
+    CARD01..CARD32 ('usb 1') = 129..160; AUX1..AUX6 ('aux in 2') = 161..166; TBINT = 167, TBEXT = 168
+    (talkback). TIER 2 confirmation dance (confirm_token) — this changes which physical input a channel hears."""
+    desk = _desk()
+    s = _int_arg(slot, "slot", 1, 32)
+    n = user_in_number(source)
+    cur = (await desk.get_routing())["user_in"][s - 1]
+    new_tok, new_desc = user_in_source(n)
+    cur_txt = f"{cur['source']} ({cur['description']})" if cur.get("source") else f"{cur.get('number')!r}"
+    lo = (s - 1) // 8 * 8 + 1
+    live = f"live: feeds {cur['feeds']}" if cur.get("active") else f"not live: no input block reads UIN{lo}-{lo + 7} now"
+    summary = f"User-In slot {s}: {cur_txt} {_ARROW} {new_tok} ({new_desc}) [{live}]" + (" (no change)" if cur.get("number") == n else "")
+    payload = {"slot": s, "number": n, "before": cur.get("number")}
+    pending = _confirm("set_user_in", summary, payload, confirm_token, current=cur)
+    if pending:
+        return pending
+    res = await desk.set_user_in(s, n)
+    return _ok(f"User-In slot {s} {cur_txt} {_ARROW} {res['source']} ({res['description']})", active=cur.get("active"), feeds=cur.get("feeds"), **res)
+
+
+_SOLO_LABELS = {"channels": "channels", "buses": "buses", "dcas": "DCAs"}
+
+
+@server.tool()
+@_tool()
+async def set_solo_mode(channels: str | None = None, buses: str | None = None, dcas: str | None = None) -> dict[str, Any]:
+    """Solo mode of the channels, the mix buses and/or the DCAs: 'PFL' (pre-fader listen) or 'AFL'
+    (after-fader). Writes /config/solo/chmode, busmode, dcamode — give at least one. Tier 1: a
+    monitor-section preference that moves no level on any output."""
+    desk = _desk()
+    res = await desk.set_solo_mode(channels=channels, buses=buses, dcas=dcas)
+    parts = [f"{_SOLO_LABELS[k]} {res['before'].get(k)} {_ARROW} {v}" for k, v in res["applied"].items()]
+    return _ok("Solo mode: " + ", ".join(parts), **res)
 
 
 # -- tools: meters ----------------------------------------------------------------------------------------

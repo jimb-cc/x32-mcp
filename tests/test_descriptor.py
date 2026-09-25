@@ -145,6 +145,7 @@ def test_param_flags_from_yaml(d):
     assert d.param("action", "goscene").clamp_max == 99 and d.param("action", "goscene").tier == 2
     assert d.param("headamp", "gain").tier == 2 and d.param("headamp", "phantom").tier == 2
     assert d.param("config", "solo/level").tier == 0 and d.param("prefs", "rta/source").tier == 1
+    assert all(d.param("config", f"solo/{k}").tier == 1 for k in ("chmode", "busmode", "dcamode"))  # set_solo_mode (Tier 1)
     color = d.param("ch", "config/color")
     assert color.enum == d.enums["color"] and color.enum_name == "color" and color.scale_name is None and color.osc_type == "i"
     assert d.param("fx", "type").enum == d.enums["fx_type_14"] and len(d.param("fx", "type").enum) == 61
@@ -338,6 +339,11 @@ def test_every_param_round_trips_through_reverse_lookup(d):
         ("/config/linkcfg/eq", 2),
         ("/config/mute/6", 2),
         ("/config/solo/level", 0),
+        ("/config/solo/chmode", 1),  # PFL/AFL modes are the only writable solo leaves (set_solo_mode)
+        ("/config/solo/busmode", 1),
+        ("/config/solo/dcamode", 1),
+        ("/config/buslink/3-4", 2),
+        ("/config/userrout/in/04", 2),
         ("/config/talk/A/level", 0),
         ("/config/mono/mode", 0),
         ("/-show/prepos/current", 0),

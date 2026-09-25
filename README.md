@@ -7,7 +7,7 @@
 An MCP server that lets Claude operate a **live sound mixing console** — safely enough to use at a
 real gig, with the safety rules enforced in code rather than in a prompt.
 
-It talks to a Behringer X32 Rack over the console's own network protocol, exposes 51 tools that
+It talks to a Behringer X32 Rack over the console's own network protocol, exposes 57 tools that
 speak in decibels and channel numbers rather than raw floats, and refuses to do anything
 dangerous without a human saying yes. On top of that sits **CFS²**, a feedback-suppression
 assistant that closes a real-time control loop *inside the server*, because a language model is
@@ -176,7 +176,7 @@ in code.
 
 | Module | Responsibility |
 |---|---|
-| `server.py` | 51 MCP tools. Thin — parse arguments, delegate, format the envelope. |
+| `server.py` | 57 MCP tools. Thin — parse arguments, delegate, format the envelope. |
 | `policy.py` | Tiers, clamps, ramps, confirmation tokens, rate limiting, show mode. |
 | `desk.py` | Typed reads and writes in engineering units. Mute inversion lives here. |
 | `connection.py`, `osc.py` | One UDP socket, heartbeat, request/reply matching, reconnect backoff. |
@@ -532,6 +532,11 @@ snapshot-before-first-write) · **T2** guarded (confirmation token, see the safe
 | `apply_patch_plan(file, include_source=False, confirm_token=None)` | T1 / T2 | Names and colours from a plan (T1, writes only what differs); `include_source=true` also patches input sources (T2) |
 | `export_patch_plan(file)` | T0 | Write the desk's names/colours/sources to `patches/<file>.yaml|.csv`, keeping mic/owner/monitor_bus metadata of an existing file |
 | `set_channel_config(ch, source=, link=, confirm_token=None)` | T2 | Input source (`IN05`, `AUX1`, `USBL`, `FX1L`, `BUS03`, `OFF`) and/or stereo link of the channel pair |
+| `get_routing()` | T0 | The input routing in one read: the five `IN` blocks and `routswitch`, the 32 User-In slots decoded to tokens (`OFF`, `IN04`, `A01`, `B01`, `CARD01`, `AUX1`, `TBINT`/`TBEXT`) with whether each is live and which In it feeds, the eight bus stereo links, the PFL/AFL solo modes |
+| `set_bus_link(bus, on, confirm_token=None)` | T2 | Stereo-link or unlink the mix-bus pair containing `bus` (1-2, 3-4 … 15-16) — `/config/buslink/N-M` |
+| `set_input_block(block, source, confirm_token=None)` | T2 | Route an input block (`1-8`, `9-16`, `17-24`, `25-32`, `AUX`; also `ch 17-24`, `IN/17-24`) to a source (`AN1-8`, `A17-24`, `B1-8`, `CARD1-8`, `UIN17-24`; the AUX block takes `AUX1-4`, `AN1-6`, `A1-6`, `UIN1-6` …) — `/config/routing/IN/<block>`; the summary shows current → new |
+| `set_user_in(slot, source, confirm_token=None)` | T2 | Patch User-In slot 1..32 (`/config/userrout/in/NN`, used when an `IN` block reads `UIN*`): `OFF`, `IN01..IN32` / `local 4` (local XLR), `A01..A48` (AES50-A), `B01..B48` (AES50-B), `CARD01..CARD32`, `AUX1..AUX6`, `TBINT`, `TBEXT` or the desk's own number 0..168 |
+| `set_solo_mode(channels=, buses=, dcas=)` | T1 | `PFL` or `AFL` solo mode of the channels, the mix buses and/or the DCAs (`/config/solo/chmode`, `busmode`, `dcamode`) |
 
 ### Phase 5 — meters and CFS²
 
@@ -579,7 +584,7 @@ Enforced by [`policy.py`](src/x32mcp/policy.py) on every write path; the limits 
 
 **Tier 0 — read.** Always allowed, including while the connection is degraded.
 
-**Tier 1 — mix moves.** Faders, sends, mutes, pan, EQ, dynamics, labels, feedback watch.
+**Tier 1 — mix moves.** Faders, sends, mutes, pan, EQ, dynamics, labels, solo PFL/AFL modes, feedback watch.
 - Clamps (reported, never silently applied): channel/aux/FX-return/DCA faders ≤ +5 dB, bus
   and matrix masters ≤ 0 dB, sends ≤ 0 dB, EQ gain ±15 dB. Anything below −90 dB is −∞.
 - Relative limit: **`adjust_fader` / `adjust_send` only** — one call may move a level at most
@@ -599,7 +604,8 @@ Enforced by [`policy.py`](src/x32mcp/policy.py) on every write path; the limits 
   refused by Tier-1 tools with `GUARDED` even if a target sneaks one in.
 
 **Tier 2 — guarded.** `set_main_fader`, `set_main_mute`, `recall_scene`, `save_scene`,
-`restore_snapshot`, `set_channel_config`, `apply_patch_plan(include_source=true)`,
+`restore_snapshot`, `set_channel_config`, `set_bus_link`, `set_input_block`, `set_user_in`,
+`apply_patch_plan(include_source=true)`,
 `setup_ringout_eqs` (when it must change something), `ring_out`, `ring_out_system`. These use
 the **confirmation dance**: the first call does nothing on the desk and returns
 

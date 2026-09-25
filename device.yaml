@@ -384,10 +384,13 @@ params:
     routing/IN/25-32:   {osc: i, enum: routing_in, node: enum, tier: 2}
     routing/IN/AUX:     {osc: i, enum: routing_in_aux, node: enum, tier: 2}
     # Firmware-4.x USER routing. When a /config/routing/IN block reads UIN*, the real per-input
-    # patch lives here: one 1-based source number per user input (1..32 local XLR, 33..80 AES50-A,
-    # 81..128 AES50-B, >128 card/USB). Resolving a channel to its head amp needs it, and both
-    # set_phantom and CFS² mic discovery depend on that. Seen on X32RACK-Jim (FW 4.13) at M5:
-    # "/config/userrout/in 1 129 130 33 34 ..." — ch 4 -> 33 -> head amp 032, where its SM58 gain is.
+    # patch lives here: one source number per user input, int 0..168 (fx_routing_scenes.md §4.8, DOC p.21):
+    #   0 OFF · 1..32 local XLR 1..32 (IN01..IN32) · 33..80 AES50-A 1..48 (A01..A48) · 81..128 AES50-B 1..48
+    #   (B01..B48) · 129..160 card/USB 1..32 (CARD01..CARD32) · 161..166 Aux In 1..6 (AUX1..AUX6) · 167 TB
+    #   internal (TBINT) · 168 TB external (TBEXT). The tokens are ours (desk.user_in_source); the desk prints
+    #   the int. Resolving a channel to its head amp needs it, and both set_phantom and CFS² mic discovery
+    # depend on that. Seen on X32RACK-Jim (FW 4.13) at M5: "/config/userrout/in 1 129 130 33 34 ..." —
+    # ch 4 -> 33 -> head amp 032, where its SM58 gain is. Written by set_user_in (Tier 2).
     userrout/in/01:   {osc: i, scale: int, node: int, tier: 2}
     userrout/in/02:   {osc: i, scale: int, node: int, tier: 2}
     userrout/in/03:   {osc: i, scale: int, node: int, tier: 2}
@@ -510,13 +513,14 @@ params:
     mute/4: {osc: i, scale: bool, node: onoff, tier: 2}
     mute/5: {osc: i, scale: bool, node: onoff, tier: 2}
     mute/6: {osc: i, scale: bool, node: onoff, tier: 2}
-    # solo / monitor section — read-only in v1 (BRIEF §8). Node order §10 (17 values).
+    # solo / monitor section — read-only (BRIEF §8) except the three PFL/AFL mode switches, which are
+    # Tier 1 (set_solo_mode): a monitor-bus preference that moves no level on any output. Node order §10 (17 values).
     solo/level:      {osc: f, scale: send, node: db1, tier: 0}
     solo/source:     {osc: i, enum: solo_source, node: enum, tier: 0}
     solo/sourcetrim: {osc: f, scale: solo_trim, node: float1, tier: 0}
-    solo/chmode:     {osc: i, enum: pfl_afl, node: enum, tier: 0}
-    solo/busmode:    {osc: i, enum: pfl_afl, node: enum, tier: 0}
-    solo/dcamode:    {osc: i, enum: pfl_afl, node: enum, tier: 0}
+    solo/chmode:     {osc: i, enum: pfl_afl, node: enum, tier: 1}
+    solo/busmode:    {osc: i, enum: pfl_afl, node: enum, tier: 1}
+    solo/dcamode:    {osc: i, enum: pfl_afl, node: enum, tier: 1}
     solo/exclusive:  {osc: i, scale: bool, node: onoff, tier: 0}
     solo/followsel:  {osc: i, scale: bool, node: onoff, tier: 0}
     solo/followsolo: {osc: i, scale: bool, node: onoff, tier: 0}
