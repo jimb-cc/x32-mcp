@@ -342,3 +342,6 @@ semitone sweep ran at decay 1.0 in the −97-floor state, not at PEAK / 0.25. It
   frames flow: a stream that is one static flat frame (the console's analyser has not been started since power-up) makes
   it show the METERS/RTA page (`/-stat/screen/screen 1`, `/-stat/screen/METER/page 4`) for a moment and restore the screen;
   the result is `rta_wake` in the arm result, the `cfs.state` event and the report. `FakeDesk(rta_dormant=True)` models it.
+* **2026-09-25 afternoon (reviewer, studio)**: the Dual GEQ delivers full slider depth when both legs are cut (12.0 dB for −12,
+  meters.md item 13) — the 09-23 "one-third depth" reading is withdrawn; the bus RTA post tap is after the bus EQ (item 12);
+  a PEAK programme log gives 4 false STRONG emissions in 180 s against 20 under RMS (item 11). All PRs through #23 merged.

@@ -157,5 +157,6 @@ verdict; against `7444c16`'s `tier_b_eligible` it never is. Two things the test 
 Done at −26 dB while Jim was on a call (`scripts/measure_rta_det_rise.py`, log `rta_det_rise_frozen_2026-09-25.jsonl.gz`):
 det read-back and the switch transient, the frozen-line check at 4 decimals, 40 / 63 / 100 / 2000 Hz rise under both
 detectors (items 5–9). The semitone sweep under real PEAK / 0.25 at −40 dB ran at 12:15 (item 10): grid and skirts identical to the RMS run
-(they are the filter bank); attack ≥ 320 Hz 0 / 1 frames to −3 / −1 dB, 40–80 Hz 2 / 3. Still to run: the GEQ both-legs test
-and the bus tap-order check (Jim's hands, a channel-fed tone).
+(they are the filter bank); attack ≥ 320 Hz 0 / 1 frames to −3 / −1 dB, 40–80 Hz 2 / 3. Both remaining hand tests ran at 12:25–12:40 (items 12 and 13): the bus RTA post tap is after the bus EQ (−15 dB @ 1.02 kHz
+on bus 6 shows as a 13–17 dB net dip on the bus's RTA), and the Dual GEQ with BOTH legs at −12 attenuates the 2 kHz tone by
+12.0 dB (−6 → 5.5–6.8 dB) against the flat-in-insert reference: full depth, `REVIEW_REQUEST_2026-09-23.md` §1 withdrawn.
