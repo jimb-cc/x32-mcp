@@ -428,3 +428,120 @@ def test_kill_scenarios_are_survival_cases_by_construction():
         assert e + peaking_gain_db(ring.freq_hz, centre, -3.0, scene.geq_q) > 0.3, name     # survives one -3
         assert e + peaking_gain_db(ring.freq_hz, centre, depth, scene.geq_q) < -0.3, name    # dies at the named depth
         assert gt["events"][0]["t_onset"] == pytest.approx(0.0 if ring.established else 3.0, abs=0.1), name
+
+
+# -- bus PEQ actuator (docs/PEQ_ACTUATOR_DESIGN.md, step 2: prove it offline first) ----------------------
+def test_peq_grids_match_the_desk():
+    from rtasim.physics import peq_grid_hz, peq_grid_q
+    assert peq_grid_q(6.0) == pytest.approx(6.103, abs=0.002)
+    assert peq_grid_q(4.0) == pytest.approx(3.913, abs=0.002)
+    assert peq_grid_q(8.0) == pytest.approx(7.812, abs=0.002)
+    assert peq_grid_q(10.0) == pytest.approx(10.0) and peq_grid_q(0.3) == pytest.approx(0.3)
+    assert peq_grid_hz(2331.0) == pytest.approx(2349.8, abs=0.3)      # the design's worked offsets (S2.1)
+    assert peq_grid_hz(525.4) == pytest.approx(532.1, abs=0.3)
+    assert peq_grid_hz(2588.0) == pytest.approx(2606.3, abs=0.3)
+    assert peq_grid_hz(1788.9) == pytest.approx(1782.5, abs=0.3)
+    assert peq_grid_hz(20.0) == pytest.approx(20.0) and peq_grid_hz(20000.0) == pytest.approx(20000.0)
+
+
+def test_peq_notch_in_the_renderer_is_narrow_and_stacks_with_the_geq():
+    sc = Scene(2.0, sources=[PinkBed(level_1k_db=-75.0, tilt_db_per_oct=0.0)], rings=[], analyser=FLAT)
+    r = Renderer(sc, 1)
+    r.set_peq_notch(2, 2349.8, 6.103, -6.0)
+    assert r.geq_gain_at(2349.8) == pytest.approx(-6.0, abs=0.01)
+    assert r.geq_gain_at(2349.8 * 2 ** 0.03) == pytest.approx(-5.62, abs=0.1)     # design S2.1: -6, Q 6, 0.03 oct off
+    assert r.geq_gain_at(2349.8 * 2 ** 0.167) == pytest.approx(-2.07, abs=0.15)   # 1/6 oct off
+    assert abs(r.geq_gain_at(2349.8 * 2 ** 0.5)) < 0.5                              # half an octave away: gone
+    assert r._geq_band_gain[nearest_band(2349.8)] < -5.0                            # the RTA band cache sees it
+    r.set_geq_gain(22, -3.0)                                                          # GEQ 2.5 kHz on top
+    assert r.geq_gain_at(2349.8) == pytest.approx(-6.0 + peaking_gain_db(2349.8, 2500.0, -3.0, sc.geq_q), abs=0.01)
+    r.set_peq_notch(2, 2349.8, 6.103, 0.0)                                            # freed
+    assert 2 not in r.peq and r.geq_gain_at(2349.8) == pytest.approx(peaking_gain_db(2349.8, 2500.0, -3.0, sc.geq_q), abs=0.01)
+    with pytest.raises(ValueError):
+        r.set_peq_notch(2, 1000.0, 6.0, +3.0)
+    with pytest.raises(ValueError):
+        r.set_peq_notch(7, 1000.0, 6.0, -3.0)
+
+
+def test_peq_actuator_closed_loop_notches_the_ring_itself_and_kills_the_midpoint_case():
+    from rtasim.harness import Det, run_one
+    from x32mcp.detector import DetectorConfig
+    name = "K6_limiter_held_howl_e3p5_midpoint_1k8"       # 1788.9 Hz: between GEQ 1.6 k and 2 k, RTA band 65
+
+    class Oracle:
+        def __init__(self, band_hz, *, one_shot: bool):
+            self.one_shot, self.last = one_shot, None
+
+        def feed(self, values, ts):
+            if ts < 3.0 or values[65] < -30.0 or (self.last is not None and (self.one_shot or ts - self.last < 1.1)):
+                return []
+            self.last = ts
+            return [Det(ts=ts, band=65, freq_hz=1788.9, confidence=1.0)]
+
+    cfg = DetectorConfig()
+    rr = run_one(lambda bh: Oracle(bh, one_shot=False), name, 1, closed_loop=True, notch_cfg=cfg, actuator="peq")
+    assert rr.notches and rr.notches[0]["actuator"] == "peq" and rr.notches[0]["band"] == 2
+    assert rr.notches[0]["notch_hz"] == pytest.approx(1782.5, abs=0.3) and rr.notches[0]["q"] == pytest.approx(6.103, abs=0.002)
+    assert [n["gain_db"] for n in rr.notches][:2] == [-3.0, -6.0]                  # -3 leaves e 3.5 - 3.0 alive; -6 kills
+    assert rr.survived == [] and rr.passed
+    assert [b for _, b, _ in rr.cuts] == [20] * len(rr.cuts)                         # reported as the nearest GEQ band (1.6 k = 20)
+    one = run_one(lambda bh: Oracle(bh, one_shot=True), name, 1, closed_loop=True, notch_cfg=cfg, actuator="peq")
+    assert one.survived == [0] and not one.passed
+    geq = run_one(lambda bh: Oracle(bh, one_shot=False), name, 1, closed_loop=True, notch_cfg=cfg)
+    assert geq.notches[0]["actuator"] == "geq" and geq.survived == []               # the GEQ path is byte-identical to before
+    with pytest.raises(ValueError):
+        run_one(lambda bh: Oracle(bh, one_shot=True), name, 1, closed_loop=True, notch_cfg=cfg, actuator="deq")
+
+
+def test_hop_scenarios_are_one_episode_through_the_hop():
+    for name, cents in (("K7_limiter_howl_hops_100c_after_first_cut_e3p5", 100.0), ("K8_limiter_howl_hops_200c_after_first_cut_e4", 200.0)):
+        sc = SCENARIOS[name]
+        ring = sc.build(1).rings[0]
+        assert ring.hop_at_s == 4.6 and ring.hop_cents == cents
+        gt = ground_truth(name, 1)
+        assert len(gt["events"]) == 1 and gt["events"][0]["visible"], (name, gt["events"])
+        assert gt["events"][0]["t_onset"] == pytest.approx(3.0, abs=0.1)
+        assert ring.current_hz(5.0) == pytest.approx(2500.0 * 2 ** (cents / 1200.0), rel=1e-3)
+
+
+def test_k8_is_a_policy_layer_case_and_dies_with_tier_b_under_both_actuators():
+    """K8: the howl hops 200 cents after the first cut and ARRIVES at its plateau within one frame (the simulator's hop is an
+    instantaneous retune). Nothing was seen to grow, so the detector classes the new line MODERATE and leaves it to the policy
+    layer by design -- the same class as the fast-howl-to-a-quiet-plateau breakers. The detector alone therefore never kills it;
+    with the policy layer's tier B (stand-in: rtasim.policy) it is dead at the end under both actuators, on six seeds -- including
+    PEQ seed 5, on which the deepen meant for the old line files a bystander 'held' on the hopped one (without the bystander
+    rule in cfs_policy.tier_b_eligible that line is barred from tier B for good and howls at -13 dBFS to the end of the scene)."""
+    from rtasim.harness import run_one
+    from x32mcp.descriptor import Descriptor
+    from x32mcp.detector import DetectorConfig, FeedbackDetector
+    cfg = DetectorConfig.from_descriptor(Descriptor.load())
+    fac = lambda bh: FeedbackDetector(cfg, bh, mode="watch")  # noqa: E731
+    name = "K8_limiter_howl_hops_200c_after_first_cut_e4"
+    alone = run_one(fac, name, 1, closed_loop=True, notch_cfg=cfg)
+    assert alone.survived == [0] and len(alone.notches) == 1 and alone.policy_log == []
+    for actuator in ("geq", "peq"):
+        for seed in (1, 2, 3, 4, 5, 6):
+            rr = run_one(fac, name, seed, closed_loop=True, notch_cfg=cfg, actuator=actuator, policy="tier_b")
+            assert rr.survived == [], (actuator, seed, rr.notches, rr.policy_log)
+            assert rr.policy_log and rr.policy_log[0]["rule"] == "tier_b", (actuator, seed)
+            assert 0.55 <= rr.policy_log[0]["ts"] - 4.6 <= 1.8, (actuator, seed, rr.policy_log)     # min_age_s after the hop; later only
+                                                                                                    # behind a bystander verdict
+            assert sum(1 for d in rr.detections if d.verdict == "FP") == 0
+    with pytest.raises(ValueError):
+        run_one(fac, name, 1, closed_loop=True, notch_cfg=cfg, policy="tier_c")
+
+
+def test_k8r_a_hop_that_regrows_is_the_detectors_own_catch():
+    """K8r: the same event with the new mode regrowing from its seed at e/tau. The detector re-detects it on its own evidence
+    (RISE / FAST-RISE), no policy cut needed; under the PEQ the second notch lands on the new mode and both are dead at the end."""
+    from rtasim.harness import run_one
+    from x32mcp.descriptor import Descriptor
+    from x32mcp.detector import DetectorConfig, FeedbackDetector
+    cfg = DetectorConfig.from_descriptor(Descriptor.load())
+    fac = lambda bh: FeedbackDetector(cfg, bh, mode="watch")  # noqa: E731
+    name = "K8r_limiter_howl_hop_200c_regrows_e4"
+    for seed in (1, 2, 3):
+        rr = run_one(fac, name, seed, closed_loop=True, notch_cfg=cfg, actuator="peq")
+        new_mode = [d for d in rr.detections if d.verdict == "TP" and d.ts > 4.6]
+        assert new_mode and new_mode[0].klass == "STRONG" and new_mode[0].ts - 4.6 <= 1.0, (seed, rr.detections)
+        assert rr.survived == [] and len({n["band"] for n in rr.notches}) == 2, (seed, rr.notches)
