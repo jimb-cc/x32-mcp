@@ -217,6 +217,47 @@ def _insert_side(sel: Any) -> tuple[int | None, str | None]:
     return None, None
 
 
+_SEND_TAP_ALIASES: dict[str, str] = {
+    # scales_params.md §4.9: 0 input/low-cut, 1 pre-EQ, 2 post-EQ (pre-fader), 3 pre-fader, 4 post-fader, 5 subgroup
+    "in": "IN/LC", "in/lc": "IN/LC", "input": "IN/LC", "lc": "IN/LC", "lowcut": "IN/LC", "low-cut": "IN/LC",
+    "pre-eq": "<-EQ", "pre eq": "<-EQ", "pre_eq": "<-EQ", "preeq": "<-EQ",
+    "post-eq": "EQ->", "post eq": "EQ->", "post_eq": "EQ->", "posteq": "EQ->",
+    "pre": "PRE", "pre-fader": "PRE", "pre fader": "PRE", "pre_fader": "PRE", "prefader": "PRE",
+    "post": "POST", "post-fader": "POST", "post fader": "POST", "post_fader": "POST", "postfader": "POST",
+    "grp": "GRP", "group": "GRP", "sub": "GRP", "subgroup": "GRP",
+}
+_SEND_TAP_HINT = "in, pre-eq, post-eq, pre, post or grp"
+
+
+def send_pair(send: Any, count: int = 16) -> tuple[int, int]:
+    """The odd/even pair a send number belongs to: the X32 keeps ONE tap point (``mix/NN/type``) and
+    one pan per pair, on the odd send (scales_params.md §4.9), so 3 → (3, 4) and 4 → (3, 4).
+    ``send`` must be an integer 1..``count`` (BAD_ARGUMENT otherwise)."""
+    n = _int(send, "bus", 1, count)
+    lo = n if n % 2 else n - 1
+    return lo, min(lo + 1, count)
+
+
+def normalise_send_tap(tap: Any, tokens: Sequence[str]) -> str:
+    """A tap point in any accepted spelling → the ``send_type`` token: the tokens themselves
+    (``IN/LC``, ``<-EQ``, ``EQ->``, ``PRE``, ``POST``, ``GRP``; any case) or the aliases ``in``,
+    ``pre-eq``, ``post-eq``, ``pre``, ``post``, ``grp`` (``pre-fader``, ``subgroup`` … too). ``tokens`` is
+    the enum of the send being written — bus → matrix sends have no GRP — and a token outside it is
+    BAD_ARGUMENT, as is anything unrecognised."""
+    if isinstance(tap, bool) or not isinstance(tap, str):
+        raise DeskError("BAD_ARGUMENT", f"tap must be one of {', '.join(tokens)} ({_SEND_TAP_HINT}), got {tap!r}")
+    text = tap.strip()
+    token = _SEND_TAP_ALIASES.get(" ".join(text.lower().split()))
+    if token is None:
+        try:
+            token = tokens[enum_to_index(text, tokens)]
+        except ScaleError:
+            raise DeskError("BAD_ARGUMENT", f"unknown tap {tap!r}; expected one of {', '.join(tokens)} ({_SEND_TAP_HINT})") from None
+    if token not in tokens:
+        raise DeskError("BAD_ARGUMENT", f"tap {token} is not available on this send; expected one of {', '.join(tokens)}")
+    return token
+
+
 class Desk:
     """High-level, policy-enforced view of one console (see module doc).
 
@@ -1076,15 +1117,17 @@ class Desk:
 
     async def set_level(
         self, t: Target | str | int, db: float, *, ramp_ms: int | None = None, send_to: int | None = None,
-        force: bool = False, kind: Literal["fader", "send", "mlevel"] = "fader",
+        force: bool = False, kind: Literal["fader", "send", "mlevel"] = "fader", tool: str | None = None,
     ) -> dict[str, Any]:
         """Fader (``kind="fader"``), send level (``send_to`` = destination number) or M/C level
         (``kind="mlevel"``) to ``db`` with a ramp (``ramp_ms`` None → policy default). Clamped to the
-        family ceiling (reported), relative limit unless ``force`` (see module doc)."""
+        family ceiling (reported), relative limit unless ``force`` (see module doc). ``tool`` names
+        the caller in the ``desk.write`` events (default: set_send / set_fader)."""
         t = self._target(t)
         spec, address, pk = self._level_param(t, kind, send_to)
         before = await self._leaf(address)
-        res = await self._move_level(t, spec, address, before, _num(db, "db"), ramp_ms=ramp_ms, force=force, policy_kind=pk, tool="set_send" if pk == "send" and send_to else "set_fader")
+        res = await self._move_level(t, spec, address, before, _num(db, "db"), ramp_ms=ramp_ms, force=force, policy_kind=pk,
+                                     tool=tool or ("set_send" if pk == "send" and send_to else "set_fader"))
         if send_to is not None:
             res["send_to"] = int(send_to)
         return res
@@ -1126,16 +1169,66 @@ class Desk:
     async def adjust_send(self, ch: Target | str | int, bus: int, delta_db: float, *, ramp_ms: int | None = None, force: bool = False) -> dict[str, Any]:
         return await self.adjust_level(ch, delta_db, ramp_ms=ramp_ms, send_to=bus, force=force, kind="send")
 
-    async def set_send_mute(self, ch: Target | str | int, bus: int, muted: bool) -> dict[str, Any]:
-        """Send on/off (``mix/NN/on``, inverted like a strip mute)."""
+    async def set_send_mute(self, ch: Target | str | int, bus: int, muted: bool, *, tool: str = "set_send_mute") -> dict[str, Any]:
+        """Send on/off (``mix/NN/on``, inverted like a strip mute); ``was_muted`` is the state before."""
         t = self._target(ch)
         st = self._d.strips[t.family]
         if not st.sends:
             raise DeskError("NOT_SUPPORTED", f"{t.label} has no sends")
         n = _int(bus, "bus", 1, st.sends)
         spec, address = self._param(t, "mix/{send:02d}/on", send=n)
-        await self._write(address, spec.to_raw(not bool(muted)), value={"muted": bool(muted)}, tool="set_send_mute", target=t)
-        return {"target": t.key, "send_to": n, "muted": bool(muted)}
+        was = await self._leaf(address)
+        await self._write(address, spec.to_raw(not bool(muted)), value={"muted": bool(muted)}, tool=tool, target=t)
+        return {"target": t.key, "label": t.label, "send_to": n, "muted": bool(muted), "was_muted": (not was) if was is not None else None}
+
+    async def set_send_tap(self, ch: Target | str | int, bus: int, tap: str) -> dict[str, Any]:
+        """Tap point of the send from ``ch`` to ``bus`` (``mix/NN/type``: IN/LC, <-EQ, EQ->, PRE, POST,
+        GRP — see :func:`normalise_send_tap` for the spellings; bus → matrix sends have no GRP). The
+        desk keeps one type per odd/even send pair, on the odd send (scales_params.md §4.9), so the
+        write goes to the odd partner and ``pair`` says which two destinations it changed."""
+        t = self._target(ch)
+        st = self._d.strips[t.family]
+        if not st.sends:
+            raise DeskError("NOT_SUPPORTED", f"{t.label} has no sends")
+        n = _int(bus, "bus", 1, st.sends)
+        lo, hi = send_pair(n, st.sends)
+        spec, address = self._param(t, "mix/{send:02d}/type", send=lo)
+        token = normalise_send_tap(tap, spec.enum or ())
+        before = await self._leaf(address)
+        await self._write(address, spec.to_raw(token), value=token, tool="set_send_tap", target=t)
+        return {"target": t.key, "label": t.label, "send_to": n, "pair": [lo, hi], "type_send": lo, "address": address, "tap": token, "before": before}
+
+    async def set_main_assign(
+        self, t: Target | str | int, *, lr: bool | None = None, mono: bool | None = None, mono_level_db: float | None = None,
+        ramp_ms: int | None = None,
+    ) -> dict[str, Any]:
+        """Main L/R assign (``mix/st``), M/C assign (``mix/mono``) and M/C level (``mix/mlevel``: a
+        ramped level move with the send ceiling, ``ramp_ms`` None → policy default) of a channel,
+        aux-in, FX return or bus. An assign being switched OFF is written before the level, one being
+        switched ON after it, so the level never jumps through an open path. ``before`` is the state read
+        first; ``mono_level`` is the level move's own result when one was made."""
+        t = self._target(t)
+        try:
+            self._d.param(t.family, "mix/st")
+        except DescriptorError:
+            raise DeskError("NOT_SUPPORTED", f"{t.label} has no main assign (channels, aux-ins, FX returns and buses only)") from None
+        if lr is None and mono is None and mono_level_db is None:
+            raise DeskError("BAD_ARGUMENT", "nothing to set: give lr, mono and/or mono_level_db")
+        mix = await self._section(f"{t.osc_prefix}/mix")
+        before = {"lr": mix.get("mix/st"), "mono": mix.get("mix/mono"), "mono_level_db": _db1(mix.get("mix/mlevel")), "mono_level": _db_text(mix.get("mix/mlevel"))}
+        switches = (("lr", "mix/st", lr), ("mono", "mix/mono", mono))
+        applied: dict[str, Any] = {}
+        out: dict[str, Any] = {"target": t.key, "label": t.label, "applied": applied, "before": before}
+        for phase in (False, True):  # OFF first, ON last
+            if phase and mono_level_db is not None:
+                lvl = await self.set_level(t, mono_level_db, ramp_ms=ramp_ms, kind="mlevel", tool="set_main_assign")
+                applied["mono_level_db"] = lvl["after_db"]
+                out["mono_level"] = lvl
+            for key, rel, val in switches:
+                if val is not None and bool(val) is phase:
+                    _a, applied[key] = await self._write_value(t, rel, bool(val), tool="set_main_assign")
+        out["applied"] = {k: applied[k] for k in ("lr", "mono", "mono_level_db") if k in applied}
+        return out
 
     async def set_pan(self, t: Target | str | int, pan: int) -> dict[str, Any]:
         """Pan −100 (left) .. +100 (right); the desk keeps 101 values (scales_params.md §3)."""

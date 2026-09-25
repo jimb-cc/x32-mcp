@@ -496,8 +496,10 @@ snapshot-before-first-write) · **T2** guarded (confirmation token, see the safe
 | `set_fader(target, db, ramp_ms=300, force=False)` | T1 | Fader to an absolute `db` (channels/aux/FX rtn/DCA cap +5 dB, buses/matrices 0 dB; ≤ −90 = −∞), ramped. The move size is not limited — the ceiling bounds it — so a fader can come up from silence directly; `force` is accepted but unnecessary |
 | `adjust_fader(target, delta_db, ramp_ms=300, force=False)` | T1 | Relative move ("2 dB down" = −2) with the same clamps and limit |
 | `mute(target)` / `unmute(target)` | T1 | Mute/unmute a channel, bus, matrix, DCA … (mains: `set_main_mute`) |
-| `set_send(ch, bus, db, ramp_ms=300, force=False)` | T1 | Send from an input strip to bus 1..16 (cap 0 dB), ramped |
+| `set_send(ch, bus, db=None, ramp_ms=300, force=False, on=None)` | T1 | Send from an input strip to bus 1..16: the level (cap 0 dB, ramped) and/or the send's on/off switch — give `db` and/or `on` |
 | `adjust_send(ch, bus, delta_db, ramp_ms=300, force=False)` | T1 | "More kick in Tony's ears" = `adjust_send("Kick", tonys_bus, +2)` |
+| `set_send_tap(ch, bus, tap)` | T1 | Tap point of a send: `IN/LC <-EQ EQ-> PRE POST GRP` (or `in`, `pre-eq`, `post-eq`, `pre`, `post`, `grp`, any case). The X32 keeps one tap per odd/even bus pair on the odd send, so bus 4 sets buses 3-4 — the summary names the pair. From a mix bus the sends go to matrices 1..6 (no `GRP`) |
+| `set_main_assign(target, lr=, mono=, mono_level_db=)` | T1 | Main L/R assign, Main M/C assign and the M/C send level (cap 0 dB, ramped) of a channel, aux-in, FX return or bus; give at least one |
 | `set_eq_band(target, band, freq_hz=, gain_db=, q=, type=, on=)` | T1 | One EQ band: 20..20 kHz, ±15 dB (clamped), Q 0.3..10, `LCut LShv PEQ VEQ HShv HCut`; `on` switches the whole EQ |
 | `set_pan(target, pan)` | T1 | −100 (L) .. 0 .. +100 (R) |
 | `set_comp(target, on=, threshold_db=, ratio=, attack_ms=, release_ms=, knee=, makeup_db=, mix_pct=)` | T1 | Compressor; only the values given are written; make-up gain clamped to `policy.dyn_makeup_max_db` (6 dB). Main LR/M-C EQ and dynamics are guarded (refused here — change them on the console) |
@@ -529,6 +531,7 @@ snapshot-before-first-write) · **T2** guarded (confirmation token, see the safe
 | Tool | Tier | What it does |
 |---|---|---|
 | `label_channel(ch, name=, color=, icon=)` | T1 | Name (≤ 12 chars), colour token or friendly name, icon 1..74 |
+| `label_bus(bus, name=, color=, icon=)` | T1 | The same for mix bus 1..16 (`/bus/NN/config/*`) — "Tony IEM" on the scribble strip |
 | `apply_patch_plan(file, include_source=False, confirm_token=None)` | T1 / T2 | Names and colours from a plan (T1, writes only what differs); `include_source=true` also patches input sources (T2) |
 | `export_patch_plan(file)` | T0 | Write the desk's names/colours/sources to `patches/<file>.yaml|.csv`, keeping mic/owner/monitor_bus metadata of an existing file |
 | `set_channel_config(ch, source=, link=, confirm_token=None)` | T2 | Input source (`IN05`, `AUX1`, `USBL`, `FX1L`, `BUS03`, `OFF`) and/or stereo link of the channel pair |

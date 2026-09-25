@@ -113,8 +113,8 @@ get_eq/get_dynamics. Units everywhere: dB for levels and gains ("-oo" = fader fu
 pan -100 (L) .. +100 (R), 1-based channel/bus numbers, enum tokens (PEQ, RD, IN05). A target is \
 'ch.5', 'bus.3', 'main.st', 'main.m', 'dca.1', 'mtx.2', 'auxin.1', 'fxrtn.1' or a strip name ('Vox Tony').
 Safety tiers (enforced in code): Tier 0 reads are always allowed. Tier 1 mix moves (set_fader, \
-adjust_fader, mute/unmute, set_send, set_eq_band, set_pan, set_comp, set_gate, label_channel, \
-apply_patch_plan names/colours, feedback_watch) are clamped (channels +5 dB, buses/main/sends 0 dB, \
+adjust_fader, mute/unmute, set_send, set_send_tap, set_main_assign, set_eq_band, set_pan, set_comp, set_gate, \
+label_channel, label_bus, apply_patch_plan names/colours, feedback_watch) are clamped (channels +5 dB, buses/main/sends 0 dB, \
 EQ +-15 dB), ramped (default 300 ms) and limited to +-6 dB per call (+-3 dB in show mode); a larger \
 move needs force=true, which you pass ONLY when the user explicitly asked for a move of that size. \
 get_rta(target) is Tier 1 too: pointing the RTA writes the console's RTA prefs (get_rta() alone only reads). \
@@ -1005,28 +1005,57 @@ async def unmute(target: str) -> dict[str, Any]:
     return _ok(f"{_who(t, name)} unmuted" + (" (was not muted)" if res.get("was_muted") is False else ""), name=name, **res)
 
 
+def _send_dest(t: Target, send_to: int) -> Target:
+    """The strip a send number of ``t`` feeds: a mix bus from an input strip, a matrix from a bus/main."""
+    dest_fam = _app().descriptor.strips[t.family].send_target or "bus"
+    return Target(dest_fam, int(send_to))
+
+
+async def _send_head(desk: Desk, t: Target, send_to: int) -> str:
+    """``Bus 3 'Bus03' send from Ch 1 'Ch01'`` — the subject of every send summary."""
+    dest = _send_dest(t, send_to)
+    return f"{_who(dest, await _name(desk, dest))} send from {_who(t, await _name(desk, t))}"
+
+
 async def _send_summary(desk: Desk, t: Target, res: dict[str, Any]) -> str:
-    dest_fam = _app().descriptor.strips[t.family].send_target or "bus"  # bus/main send to matrices
-    dest = Target(dest_fam, int(res["send_to"]))
-    dest_name = await _name(desk, dest)
-    name = await _name(desk, t)
-    return _level_summary(f"{_who(dest, dest_name)} send from {_who(t, name)}", res, kind="")
+    return _level_summary(await _send_head(desk, t, int(res["send_to"])), res, kind="")
 
 
 @server.tool()
 @_tool(timeout=None)
-async def set_send(ch: str, bus: int, db: float, ramp_ms: int = 300, force: bool = False) -> dict[str, Any]:
-    """Set channel ch's send to bus (1..16) to an absolute level in dB (-90 = -oo, ceiling 0 dB).
-    Ramped over ramp_ms. The size of the move is NOT limited — a send sitting at -oo can be
-    brought straight up to a working level ("more kick in Tony's ears"); force is accepted but not
-    needed. Use adjust_send for relative moves, where the ±6 dB guard applies. Tier 1."""
+async def set_send(ch: str, bus: int, db: float | None = None, ramp_ms: int = 300, force: bool = False, on: bool | None = None) -> dict[str, Any]:
+    """Channel ch's send to bus (1..16): db = an absolute level in dB (-90 = -oo, ceiling 0 dB),
+    ramped over ramp_ms; on = the send's on/off switch. Give db and/or on (a send being switched
+    off is muted before the level moves, one being switched on after it). The size of the move is
+    NOT limited — a send sitting at -oo can be brought straight up to a working level ("more kick
+    in Tony's ears"); force is accepted but not needed. Use adjust_send for relative moves, where
+    the ±6 dB guard applies; set_send_tap for pre/post. Tier 1."""
+    if db is None and on is None:
+        raise DeskError("BAD_ARGUMENT", "nothing to set: give db (the send level) and/or on (the send switch)")
     desk = _desk()
     ms = _int_arg(ramp_ms, "ramp_ms", 0, 60_000)
 
     async def body() -> dict[str, Any]:
         t = await desk.resolve(ch)
-        res = await desk.set_send(t, int(bus), float(db), ramp_ms=ms, force=bool(force))
-        return _ok(await _send_summary(desk, t, res), **res)
+        out: dict[str, Any] = {}
+        sw: dict[str, Any] | None = None
+        if on is not None and not on:
+            sw = await desk.set_send_mute(t, int(bus), True, tool="set_send")
+        if db is not None:
+            res = await desk.set_send(t, int(bus), float(db), ramp_ms=ms, force=bool(force))
+            out.update(res)
+            summary = await _send_summary(desk, t, res)
+        if on is not None and on:
+            sw = await desk.set_send_mute(t, int(bus), False, tool="set_send")
+        if sw is not None:
+            if db is None:
+                out.update({"target": t.key, "label": t.label, "send_to": sw["send_to"], "kind": "send"})
+                summary = await _send_head(desk, t, sw["send_to"])
+            out["on"] = bool(on)
+            out["was_on"] = None if sw["was_muted"] is None else not sw["was_muted"]
+            state = "ON" if on else "OFF"
+            summary += (", " if db is not None else " ") + f"switched {state}" + (f" (was already {state})" if out["was_on"] is bool(on) else "")
+        return _ok(summary, **out)
 
     return await _bounded_level(body(), ms, "set_send")
 
@@ -1046,6 +1075,59 @@ async def adjust_send(ch: str, bus: int, delta_db: float, ramp_ms: int = 300, fo
         return _ok(await _send_summary(desk, t, res), **res)
 
     return await _bounded_level(body(), ms, "adjust_send")
+
+
+_DEST_PLURAL = {"bus": "buses", "mtx": "matrices"}
+
+
+@server.tool()
+@_tool()
+async def set_send_tap(ch: str, bus: int, tap: str) -> dict[str, Any]:
+    """Tap point of the send from ch (an input strip: 'ch.5', 'auxin.1', 'fxrtn.2' or a name) to
+    bus 1..16: IN/LC (input, before the low-cut), <-EQ (pre-EQ), EQ-> (post-EQ, pre-fader), PRE
+    (pre-fader), POST (post-fader) or GRP (subgroup: the send follows the fader at 0 dB); also 'in',
+    'pre-eq', 'post-eq', 'pre', 'post', 'grp', any case. The X32 keeps ONE tap per odd/even bus pair
+    (on the odd send), so setting bus 4 changes buses 3-4 — the summary says which pair. From a mix
+    bus the sends go to matrices 1..6 (no GRP there). Tier 1."""
+    desk = _desk()
+    t = await desk.resolve(ch)
+    res = await desk.set_send_tap(t, bus, tap)
+    head = await _send_head(desk, t, res["send_to"])
+    lo, hi = res["pair"]
+    plural = _DEST_PLURAL.get(_send_dest(t, res["send_to"]).family, "buses")
+    summary = f"{head} tap {res.get('before') or '?'} {_ARROW} {res['tap']} ({plural} {lo}-{hi} share the tap point)"
+    if res.get("before") == res["tap"]:
+        summary += " (unchanged)"
+    return _ok(summary, **res)
+
+
+@server.tool()
+@_tool(timeout=None)
+async def set_main_assign(target: str, lr: bool | None = None, mono: bool | None = None, mono_level_db: float | None = None) -> dict[str, Any]:
+    """Main assigns of a channel, aux-in, FX return or bus: lr = feed Main L/R, mono = feed Main
+    M/C, mono_level_db = the M/C send level (-90 = -oo, ceiling 0 dB, ramped over the policy
+    default; written before M/C is switched on / after it is switched off when both are given).
+    Give at least one. Tier 1 — the mains' own faders and mutes are set_main_fader / set_main_mute."""
+    if lr is None and mono is None and mono_level_db is None:
+        raise DeskError("BAD_ARGUMENT", "nothing to set: give lr, mono and/or mono_level_db")
+    desk = _desk()
+    ms = int(_app().policy.ramp_default_ms)
+
+    async def body() -> dict[str, Any]:
+        t = await desk.resolve(target)
+        res = await desk.set_main_assign(t, lr=lr, mono=mono, mono_level_db=mono_level_db, ramp_ms=ms)
+        name = await _name(desk, t)
+        ap = res["applied"]
+        parts = []
+        if "lr" in ap:
+            parts.append(f"Main L/R {'ON' if ap['lr'] else 'OFF'}")
+        if "mono" in ap:
+            parts.append(f"M/C {'ON' if ap['mono'] else 'OFF'}")
+        if res.get("mono_level"):
+            parts.append(_level_summary("M/C level", res["mono_level"], kind=""))
+        return _ok(f"{_who(t, name)}: " + ", ".join(parts), name=name, **res)
+
+    return await _bounded_level(body(), ms, "set_main_assign")
 
 
 @server.tool()
@@ -1446,14 +1528,11 @@ async def show_mode(on: bool, confirm_token: str | None = None) -> dict[str, Any
 # -- tools: labels, patches, config ------------------------------------------------------------------------
 
 
-@server.tool()
-@_tool()
-async def label_channel(ch: int, name: str | None = None, color: str | None = None, icon: int | None = None) -> dict[str, Any]:
-    """Name (≤ 12 characters, longer is truncated), colour (RD GN YE BL MG CY WH OFF, +i for inverted,
-    or red/green/…/'blue inverted') and icon number (1..74) of channel ch. Tier 1."""
+async def _label_strip(t: Target, name: str | None, color: str | None, icon: int | None) -> dict[str, Any]:
+    """The label tools' shared body: colour in any spelling → token, ``Desk.label`` (which truncates
+    the name to 12 characters and says so), one summary line."""
     a = _app()
     desk = _desk()
-    t = Target("ch", _int_arg(ch, "ch", 1, 32))
     tok: str | None = None
     if color is not None:
         try:
@@ -1470,6 +1549,23 @@ async def label_channel(ch: int, name: str | None = None, color: str | None = No
     if "icon" in ap:
         parts.append(f"icon {ap['icon']}")
     return _ok(f"{t.label} " + ", ".join(parts), **res)
+
+
+@server.tool()
+@_tool()
+async def label_channel(ch: int, name: str | None = None, color: str | None = None, icon: int | None = None) -> dict[str, Any]:
+    """Name (≤ 12 characters, longer is truncated), colour (RD GN YE BL MG CY WH OFF, +i for inverted,
+    or red/green/…/'blue inverted') and icon number (1..74) of channel ch. Tier 1."""
+    return await _label_strip(Target("ch", _int_arg(ch, "ch", 1, 32)), name, color, icon)
+
+
+@server.tool()
+@_tool()
+async def label_bus(bus: int, name: str | None = None, color: str | None = None, icon: int | None = None) -> dict[str, Any]:
+    """Name (≤ 12 characters, longer is truncated), colour (RD GN YE BL MG CY WH OFF, +i for inverted,
+    or red/green/…/'blue inverted') and icon number (1..74) of mix bus 1..16 — "Tony IEM" on the
+    scribble strip. Tier 1."""
+    return await _label_strip(Target("bus", _int_arg(bus, "bus", 1, 16)), name, color, icon)
 
 
 @server.tool()

@@ -24,6 +24,7 @@ from x32mcp import server as srv
 from x32mcp.config import Settings
 from x32mcp.descriptor import Descriptor
 from x32mcp.meters import SyntheticRta, rta_band_hz
+from x32mcp.scales import NEG_INF_DB
 from x32mcp.patches import load_patch_plan
 from x32mcp.server import App
 
@@ -416,6 +417,143 @@ async def test_label_channel(app, fakedesk):
     assert_err(await srv.label_channel(8), "BAD_ARGUMENT")
     assert_err(await srv.label_channel(40, name="x"), "BAD_ARGUMENT")
     assert (await srv.get_strip("kick in"))["target"] == "ch.7"
+
+
+async def test_label_bus_shares_label_channel_rules(app, fakedesk):
+    res = await srv.label_bus(3, name="Tony IEM", color="green", icon=5)
+    assert res["ok"] and res["applied"] == {"name": "Tony IEM", "color": "GN", "icon": 5} and res["target"] == "bus.3"
+    assert res["summary"] == "Bus 3 named 'Tony IEM', colour GN, icon 5"
+    assert app.policy.snapshot_before_write is False and app.desk.pre_write_snapshot is not None  # first write took the auto snapshot
+    await settle(app)
+    assert fakedesk.get("/bus/03/config/name") == "Tony IEM" and fakedesk.value("/bus/03/config/color") == "GN" and fakedesk.get("/bus/03/config/icon") == 5
+    long = await srv.label_bus(4, name="Guitarist wedge left")
+    assert long["ok"] and long["truncated"] is True and long["applied"]["name"] == "Guitarist we" and "truncated to 12 characters" in long["summary"]
+    inv = await srv.label_bus(4, color="blue inverted")
+    assert inv["ok"] and inv["applied"] == {"color": "BLi"} and inv["summary"] == "Bus 4 colour BLi"
+    assert_err(await srv.label_bus(4, color="pink"), "BAD_ARGUMENT")
+    assert_err(await srv.label_bus(4), "BAD_ARGUMENT")
+    assert_err(await srv.label_bus(17, name="x"), "BAD_ARGUMENT")
+    assert_err(await srv.label_bus(0, name="x"), "BAD_ARGUMENT")
+    assert_err(await srv.label_bus(4, icon=75), "BAD_ARGUMENT")
+    assert (await srv.get_strip("tony iem"))["target"] == "bus.3"  # the new name resolves
+    assert (await srv.set_send("ch.1", 3, -12.0, ramp_ms=0))["summary"].startswith("Bus 3 'Tony IEM' send from Ch 1 'Ch01'")
+    lab = await srv.label_channel(7, name="Kick In", color="red")  # the shared body did not change the channel tool
+    assert lab["ok"] and lab["summary"] == "Ch 7 named 'Kick In', colour RD" and lab["target"] == "ch.7"
+
+
+# ---------------------------------------------------------------------------------------- send taps, send switch, main assigns
+
+
+async def test_set_send_tap_writes_the_odd_send_of_the_pair(app, fakedesk):
+    assert app.policy.snapshot_before_write is True and app.desk.pre_write_snapshot is None
+    res = await srv.set_send_tap("ch.1", 4, "pre")
+    assert res["ok"] and res["tap"] == "PRE" and res["before"] == "POST" and res["send_to"] == 4 and res["pair"] == [3, 4]
+    assert res["type_send"] == 3 and res["address"] == "/ch/01/mix/03/type" and res["target"] == "ch.1" and res["label"] == "Ch 1"
+    assert res["summary"] == "Bus 4 'Bus04' send from Ch 1 'Ch01' tap POST → PRE (buses 3-4 share the tap point)"
+    assert app.policy.snapshot_before_write is False and app.desk.pre_write_snapshot is not None  # first write took the auto snapshot
+    assert app.desk.pre_write_snapshot.label == "auto-pre-write"
+    await settle(app)
+    assert fakedesk.value("/ch/01/mix/03/type") == "PRE" and fakedesk.value("/ch/01/mix/01/type") == "POST" and fakedesk.value("/ch/01/mix/05/type") == "POST"
+    sends = (await srv.get_channel_sends(1))["sends"]
+    assert sends[2]["type"] == "PRE" and sends[3]["type"] == "PRE" and sends[1]["type"] == "POST"  # both of the pair read it back
+    # the odd bus of a pair writes the same send; the enum tokens, the aliases and any case are accepted
+    for bus, tap, token in ((3, "Post-EQ", "EQ->"), (1, "IN", "IN/LC"), (2, "pre-eq", "<-EQ"), (16, "grp", "GRP"), (6, "<-eq", "<-EQ"), (4, "post", "POST")):
+        r = await srv.set_send_tap("ch.2", bus, tap)
+        assert r["ok"] and r["tap"] == token and r["type_send"] % 2 == 1, (bus, tap, r)
+    await settle(app)
+    assert fakedesk.value("/ch/02/mix/01/type") == "<-EQ" and fakedesk.value("/ch/02/mix/03/type") == "POST"
+    assert fakedesk.value("/ch/02/mix/05/type") == "<-EQ" and fakedesk.value("/ch/02/mix/15/type") == "GRP"
+    same = await srv.set_send_tap("ch.2", 4, "POST")
+    assert same["ok"] and same["before"] == "POST" and same["summary"].endswith("tap POST → POST (buses 3-4 share the tap point) (unchanged)")
+    # every input strip family, by number or by name
+    assert (await srv.label_channel(5, name="Vox Tony"))["ok"]
+    named = await srv.set_send_tap("tony", 1, "pre")
+    assert named["ok"] and named["target"] == "ch.5" and named["address"] == "/ch/05/mix/01/type" and named["summary"].startswith("Bus 1 'Bus01' send from Ch 5 'Vox Tony' tap")
+    aux = await srv.set_send_tap("auxin.1", 2, "post-eq")
+    assert aux["ok"] and aux["address"] == "/auxin/01/mix/01/type" and aux["pair"] == [1, 2]
+    fx = await srv.set_send_tap("fxrtn.2", 5, "in")
+    assert fx["ok"] and fx["address"] == "/fxrtn/02/mix/05/type" and fx["pair"] == [5, 6] and "(buses 5-6 share" in fx["summary"]
+    await settle(app)
+    assert fakedesk.value("/auxin/01/mix/01/type") == "EQ->" and fakedesk.value("/fxrtn/02/mix/05/type") == "IN/LC"
+    # a mix bus sends to matrices 1..6 (no GRP there); the mains' sends are guarded; DCAs/matrices have none
+    mtx = await srv.set_send_tap("bus.1", 2, "pre")
+    assert mtx["ok"] and mtx["address"] == "/bus/01/mix/01/type" and mtx["summary"] == "Matrix 2 'Mtx2' send from Bus 1 'Bus01' tap POST → PRE (matrices 1-2 share the tap point)"
+    assert_err(await srv.set_send_tap("bus.1", 1, "grp"), "BAD_ARGUMENT")
+    assert_err(await srv.set_send_tap("bus.1", 7, "pre"), "BAD_ARGUMENT")
+    assert_err(await srv.set_send_tap("main.st", 1, "pre"), "GUARDED")
+    assert_err(await srv.set_send_tap("dca.1", 1, "pre"), "NOT_SUPPORTED")
+    assert_err(await srv.set_send_tap("mtx.1", 1, "pre"), "NOT_SUPPORTED")
+    # argument checks
+    assert_err(await srv.set_send_tap("ch.1", 17, "pre"), "BAD_ARGUMENT")
+    assert_err(await srv.set_send_tap("ch.1", 0, "pre"), "BAD_ARGUMENT")
+    assert_err(await srv.set_send_tap("ch.1", 4, "bogus"), "BAD_ARGUMENT")
+    assert_err(await srv.set_send_tap("ch.1", 4, 3), "BAD_ARGUMENT")
+    await settle(app)
+    assert fakedesk.value("/ch/01/mix/03/type") == "PRE"  # the refusals wrote nothing
+
+
+async def test_set_send_on_switch_alone_and_with_a_level(app, fakedesk):
+    off = await srv.set_send("ch.1", 3, on=False)
+    assert off["ok"] and off["on"] is False and off["was_on"] is True and off["send_to"] == 3 and off["kind"] == "send" and off["target"] == "ch.1"
+    assert off["summary"] == "Bus 3 'Bus03' send from Ch 1 'Ch01' switched OFF"
+    assert "after_db" not in off  # the level was left alone
+    await settle(app)
+    assert fakedesk.get("/ch/01/mix/03/on") == 0 and fakedesk.value("/ch/01/mix/03/level") == NEG_INF_DB
+    again = await srv.set_send("ch.1", 3, on=False)
+    assert again["ok"] and again["was_on"] is False and again["summary"].endswith("switched OFF (was already OFF)")
+    writes: list[str] = []
+    app.events.subscribe(lambda ev: writes.append(ev.data["address"]), types={"desk.write"})
+    both = await srv.set_send("ch.1", 3, -10.0, ramp_ms=0, on=True)
+    assert both["ok"] and both["after_db"] == -10.0 and both["on"] is True and both["was_on"] is False and both["send_to"] == 3
+    assert both["summary"] == "Bus 3 'Bus03' send from Ch 1 'Ch01' -oo dB → −10.0 dB, switched ON"
+    assert writes == ["/ch/01/mix/03/level", "/ch/01/mix/03/on"]  # the level lands while the send is still off
+    await settle(app)
+    assert fakedesk.get("/ch/01/mix/03/on") == 1 and fakedesk.value("/ch/01/mix/03/level") == pytest.approx(-10.0, abs=0.05)
+    assert (await srv.get_channel_sends(1))["sends"][2]["muted"] is False
+    writes.clear()
+    down = await srv.set_send("ch.1", 3, -20.0, ramp_ms=0, on=False)
+    assert down["ok"] and down["after_db"] == -20.0 and down["summary"].endswith("−10.0 dB → −20.0 dB, switched OFF")
+    assert writes == ["/ch/01/mix/03/on", "/ch/01/mix/03/level"]  # muted first, then moved
+    legacy = await srv.set_send("ch.1", 3, -6.0, ramp_ms=0)  # the call shape from before the switch still works
+    assert legacy["ok"] and legacy["after_db"] == -6.0 and "on" not in legacy and legacy["summary"].endswith("−20.0 dB → −6.0 dB")
+    assert_err(await srv.set_send("ch.1", 3), "BAD_ARGUMENT")
+    assert_err(await srv.set_send("ch.1", 17, on=True), "BAD_ARGUMENT")
+    assert_err(await srv.set_send("ch.1", 3, on=True, ramp_ms=-1), "BAD_ARGUMENT")
+
+
+async def test_set_main_assign(app, fakedesk):
+    ch = await srv.get_channel(1)
+    assert ch["lr_assigned"] is True and ch["mono_assigned"] is False and ch["mono_level"] == "-oo"
+    writes: list[str] = []
+    app.events.subscribe(lambda ev: writes.append(ev.data["address"]), types={"desk.write"})
+    res = await srv.set_main_assign("ch.1", lr=False, mono=True, mono_level_db=-6.0)
+    assert res["ok"] and res["applied"] == {"lr": False, "mono": True, "mono_level_db": -6.0} and res["target"] == "ch.1"
+    assert res["before"] == {"lr": True, "mono": False, "mono_level_db": "-oo", "mono_level": "-oo"}
+    assert res["mono_level"]["kind"] == "send" and res["mono_level"]["ramp_ms"] == 300 and res["mono_level"]["after_db"] == -6.0
+    assert res["summary"] == "Ch 1 'Ch01': Main L/R OFF, M/C ON, M/C level -oo dB → −6.0 dB (ramped 300 ms)"
+    assert app.policy.snapshot_before_write is False and app.desk.pre_write_snapshot is not None  # first write took the auto snapshot
+    # L/R dropped first, the level ramped while M/C was still off, M/C opened last
+    assert writes[0] == "/ch/01/mix/st" and writes[-1] == "/ch/01/mix/mono" and set(writes[1:-1]) == {"/ch/01/mix/mlevel"}
+    await settle(app)
+    assert fakedesk.get("/ch/01/mix/st") == 0 and fakedesk.get("/ch/01/mix/mono") == 1 and fakedesk.value("/ch/01/mix/mlevel") == pytest.approx(-6.0, abs=0.05)
+    ch = await srv.get_channel(1)
+    assert ch["lr_assigned"] is False and ch["mono_assigned"] is True and ch["mono_level_db"] == -6.0
+    one = await srv.set_main_assign("ch.1", lr=True)
+    assert one["ok"] and one["applied"] == {"lr": True} and "mono_level" not in one and one["summary"] == "Ch 1 'Ch01': Main L/R ON"
+    hot = await srv.set_main_assign("bus.2", mono_level_db=+3.0)  # the M/C level has the send ceiling
+    assert hot["ok"] and hot["applied"] == {"mono_level_db": 0.0} and hot["mono_level"]["clamped"]["limit"] == 0.0 and "clamped" in hot["summary"]
+    assert hot["summary"].startswith("Bus 2 'Bus02': M/C level -oo dB → 0.0 dB")
+    aux = await srv.set_main_assign("auxin.1", lr=False)
+    fx = await srv.set_main_assign("fxrtn.1", mono=True)
+    await settle(app)
+    assert aux["ok"] and fx["ok"] and fakedesk.get("/auxin/01/mix/st") == 0 and fakedesk.get("/fxrtn/01/mix/mono") == 1
+    assert fakedesk.value("/bus/02/mix/mlevel") == 0.0
+    assert_err(await srv.set_main_assign("ch.1"), "BAD_ARGUMENT")
+    assert_err(await srv.set_main_assign("ch.1", mono_level_db="loud"), "BAD_ARGUMENT")
+    assert_err(await srv.set_main_assign("mtx.1", lr=True), "NOT_SUPPORTED")
+    assert_err(await srv.set_main_assign("main.st", lr=True), "NOT_SUPPORTED")
+    assert_err(await srv.set_main_assign("dca.1", mono=True), "NOT_SUPPORTED")
+    assert_err(await srv.set_main_assign("ch.99", lr=True), "UNKNOWN_TARGET")
 
 
 async def test_apply_and_export_patch_plan(app, fakedesk, tmp_path):
