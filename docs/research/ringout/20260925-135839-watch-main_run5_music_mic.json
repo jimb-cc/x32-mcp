@@ -1,0 +1,3250 @@
+{
+ "session_id": "20260925-135839-watch-main",
+ "system_id": null,
+ "mode": "watch",
+ "bus": "main",
+ "target": "main.st",
+ "bus_name": "",
+ "started": "2026-09-25T13:58:39",
+ "ended": "2026-09-25T14:01:40",
+ "duration_s": 180.9,
+ "start_master_db": -21.1,
+ "start_master": "-21.1",
+ "end_master_db": -21.1,
+ "end_master": "-21.1",
+ "max_master_db": -21.1,
+ "max_master": "-21.1",
+ "gain_before_feedback_db": -21.1,
+ "gain_before_feedback": "-21.1",
+ "target_db": null,
+ "step_db": 1.0,
+ "dwell_ms": 1500,
+ "notch_budget": 6,
+ "budget_left": 0,
+ "geq": {
+  "fx_slot": 5,
+  "side": "A",
+  "sel": "FX5L"
+ },
+ "rta": {
+  "target": "main.st",
+  "source_index": 72,
+  "post_eq": true,
+  "stat_expected": 168,
+  "stat_actual": 168,
+  "verified": true,
+  "options_cleared": false,
+  "autogain_cleared": false,
+  "detector_set_peak": false,
+  "decay_set_min": false,
+  "peakhold_cleared": false,
+  "gain_set": false,
+  "prefs_before": {
+   "source": 72,
+   "pos": 1,
+   "autogain": 0,
+   "det": 0,
+   "decay": 0.0,
+   "peakhold": 0,
+   "options": 0,
+   "gain": 0.0
+  },
+  "settle_attempts": 1,
+  "settle_ms": 0.0
+ },
+ "rta_wake": {
+  "dormant": false,
+  "woken": false,
+  "probe_frames": 12
+ },
+ "rta_restored": {
+  "restored": [
+   "source",
+   "pos",
+   "autogain",
+   "det",
+   "decay",
+   "peakhold",
+   "gain"
+  ],
+  "failed": []
+ },
+ "snapshot": null,
+ "notches": [
+  {
+   "bus": "main",
+   "band": 7,
+   "freq_hz": 80.0,
+   "depth_db": -9.0,
+   "session_id": "20260925-135839-watch-main",
+   "ts": 1790341227.8179736,
+   "detections": 3,
+   "confidence": 0.4907154292647835,
+   "fx_slot": 5,
+   "side": "A",
+   "tiers": [
+    "B"
+   ]
+  },
+  {
+   "bus": "main",
+   "band": 9,
+   "freq_hz": 125.0,
+   "depth_db": -9.0,
+   "session_id": "20260925-135839-watch-main",
+   "ts": 1790341162.0762541,
+   "detections": 3,
+   "confidence": 0.8608168497948214,
+   "fx_slot": 5,
+   "side": "A",
+   "tiers": [
+    "A",
+    "B"
+   ]
+  },
+  {
+   "bus": "main",
+   "band": 10,
+   "freq_hz": 160.0,
+   "depth_db": -9.0,
+   "session_id": "20260925-135839-watch-main",
+   "ts": 1790341191.5118015,
+   "detections": 3,
+   "confidence": 0.5075284830729166,
+   "fx_slot": 5,
+   "side": "A",
+   "tiers": [
+    "B"
+   ]
+  },
+  {
+   "bus": "main",
+   "band": 12,
+   "freq_hz": 250.0,
+   "depth_db": -9.0,
+   "session_id": "20260925-135839-watch-main",
+   "ts": 1790341222.1535118,
+   "detections": 3,
+   "confidence": 0.46744520399305556,
+   "fx_slot": 5,
+   "side": "A",
+   "tiers": [
+    "B"
+   ]
+  },
+  {
+   "bus": "main",
+   "band": 18,
+   "freq_hz": 1000.0,
+   "depth_db": -6.0,
+   "session_id": "20260925-135839-watch-main",
+   "ts": 1790341242.4189174,
+   "detections": 2,
+   "confidence": 0.8910712471808113,
+   "fx_slot": 5,
+   "side": "A",
+   "tiers": [
+    "A",
+    "B"
+   ]
+  },
+  {
+   "bus": "main",
+   "band": 20,
+   "freq_hz": 1600.0,
+   "depth_db": -3.0,
+   "session_id": "20260925-135839-watch-main",
+   "ts": 1790341143.574323,
+   "detections": 1,
+   "confidence": 0.8255501418151121,
+   "fx_slot": 5,
+   "side": "A",
+   "tiers": [
+    "A"
+   ]
+  }
+ ],
+ "existing_cuts": [],
+ "detections": 7,
+ "detection_log": [
+  {
+   "ts": 1790341143.574323,
+   "band": 62,
+   "freq_hz": 1480.5315444641299,
+   "level_db": -20.3125,
+   "prominence_db": 12.62890625,
+   "slope_db_per_s": 4.610332916230985,
+   "frames": 14,
+   "confidence": 0.8255501418151121,
+   "reasons": [
+    "narrow",
+    "no_family",
+    "stable",
+    "sustained",
+    "new_energy",
+    "in_window",
+    "rise7dB"
+   ],
+   "class": "STRONG",
+   "centroid_band": 62.1,
+   "narrow_db": 13.8,
+   "rise_db": 7.1,
+   "excess_db": 15.7,
+   "master_db": -21.1
+  },
+  {
+   "ts": 1790341162.0762541,
+   "band": 31,
+   "freq_hz": 173.20335001819464,
+   "level_db": -25.5078125,
+   "prominence_db": 18.8828125,
+   "slope_db_per_s": 3.898052954950031,
+   "frames": 45,
+   "confidence": 0.8608168497948214,
+   "reasons": [
+    "narrow",
+    "no_family",
+    "stable",
+    "sustained",
+    "new_energy",
+    "in_window",
+    "rise6dB"
+   ],
+   "class": "STRONG",
+   "centroid_band": 31.14,
+   "narrow_db": 18.9,
+   "rise_db": 6.3,
+   "excess_db": 20.5,
+   "master_db": -21.1
+  },
+  {
+   "ts": 1790341185.124705,
+   "band": 45,
+   "freq_hz": 451.602159088351,
+   "level_db": -20.0078125,
+   "prominence_db": 13.4140625,
+   "slope_db_per_s": 5.049133651801819,
+   "frames": 89,
+   "confidence": 0.8440619030700974,
+   "reasons": [
+    "narrow",
+    "no_family",
+    "stable",
+    "sustained",
+    "new_energy",
+    "in_window",
+    "rise8dB"
+   ],
+   "class": "STRONG",
+   "centroid_band": 44.97,
+   "narrow_db": 16.9,
+   "rise_db": 8.4,
+   "excess_db": 22.0,
+   "master_db": -21.1
+  },
+  {
+   "ts": 1790341222.2046173,
+   "band": 40,
+   "freq_hz": 327.5649057523575,
+   "level_db": -21.6640625,
+   "prominence_db": 24.82421875,
+   "slope_db_per_s": 16.435948415691882,
+   "frames": 10,
+   "confidence": 0.8449060712541556,
+   "reasons": [
+    "narrow",
+    "no_family",
+    "stable",
+    "sustained",
+    "new_energy",
+    "in_window",
+    "rise8dB"
+   ],
+   "class": "STRONG",
+   "centroid_band": 40.34,
+   "narrow_db": 11.3,
+   "rise_db": 8.0,
+   "excess_db": 27.9,
+   "master_db": -21.1
+  },
+  {
+   "ts": 1790341234.4183803,
+   "band": 39,
+   "freq_hz": 297.95579536177144,
+   "level_db": -20.90625,
+   "prominence_db": 22.9609375,
+   "slope_db_per_s": 15.39071784161641,
+   "frames": 59,
+   "confidence": 0.8597786908868869,
+   "reasons": [
+    "narrow",
+    "no_family",
+    "stable",
+    "sustained",
+    "new_energy",
+    "in_window",
+    "rise8dB"
+   ],
+   "class": "STRONG",
+   "centroid_band": 38.97,
+   "narrow_db": 13.9,
+   "rise_db": 7.5,
+   "excess_db": 30.5,
+   "master_db": -21.1
+  },
+  {
+   "ts": 1790341242.4189174,
+   "band": 55,
+   "freq_hz": 903.9780433387585,
+   "level_db": -12.3203125,
+   "prominence_db": 23.3203125,
+   "slope_db_per_s": 7.462888436161409,
+   "frames": 73,
+   "confidence": 0.8910712471808113,
+   "reasons": [
+    "narrow",
+    "no_family",
+    "stable",
+    "sustained",
+    "new_energy",
+    "in_window",
+    "glided_in",
+    "rise8dB"
+   ],
+   "class": "STRONG",
+   "centroid_band": 54.98,
+   "narrow_db": 21.6,
+   "rise_db": 7.9,
+   "excess_db": 21.7,
+   "master_db": -21.1
+  },
+  {
+   "ts": 1790341252.862814,
+   "band": 39,
+   "freq_hz": 298.7885103640869,
+   "level_db": -36.2109375,
+   "prominence_db": 16.88671875,
+   "slope_db_per_s": -8.224294834755908,
+   "frames": 6,
+   "confidence": 0.8040358326133574,
+   "reasons": [
+    "narrow",
+    "no_family",
+    "stable",
+    "sustained",
+    "new_energy",
+    "in_window",
+    "glided_in",
+    "rise7dB"
+   ],
+   "class": "STRONG",
+   "centroid_band": 39.01,
+   "narrow_db": 15.0,
+   "rise_db": 6.6,
+   "excess_db": 18.8,
+   "master_db": -21.1
+  }
+ ],
+ "notch_log": [
+  {
+   "bus": "main",
+   "band": 7,
+   "freq_hz": 80.0,
+   "depth_db": -3.0,
+   "session_id": "20260925-135839-watch-main",
+   "ts": 1790341122.5806656,
+   "detections": 1,
+   "confidence": 0.4610486594071921,
+   "fx_slot": 5,
+   "side": "A",
+   "rta_band": 19,
+   "rta_freq_hz": 73.26087038748858,
+   "level_db": -20.1640625,
+   "master_db": -21.1,
+   "tier": "B",
+   "policy": "tier_b",
+   "reasons": [
+    "narrow",
+    "no_family",
+    "stable",
+    "sustained",
+    "new_energy",
+    "in_window",
+    "tier_b"
+   ]
+  },
+  {
+   "bus": "main",
+   "band": 18,
+   "freq_hz": 1000.0,
+   "depth_db": -3.0,
+   "session_id": "20260925-135839-watch-main",
+   "ts": 1790341127.1052148,
+   "detections": 1,
+   "confidence": 0.4807464192708333,
+   "fx_slot": 5,
+   "side": "A",
+   "rta_band": 55,
+   "rta_freq_hz": 903.1060840864561,
+   "level_db": -17.21875,
+   "master_db": -21.1,
+   "tier": "B",
+   "policy": "tier_b",
+   "reasons": [
+    "narrow",
+    "no_family",
+    "stable",
+    "sustained",
+    "new_energy",
+    "in_window",
+    "tier_b"
+   ]
+  },
+  {
+   "bus": "main",
+   "band": 12,
+   "freq_hz": 250.0,
+   "depth_db": -3.0,
+   "session_id": "20260925-135839-watch-main",
+   "ts": 1790341130.9491944,
+   "detections": 1,
+   "confidence": 0.46542746310763883,
+   "fx_slot": 5,
+   "side": "A",
+   "rta_band": 35,
+   "rta_freq_hz": 226.27,
+   "level_db": -25.484375,
+   "master_db": -21.1,
+   "tier": "B",
+   "policy": "tier_b",
+   "reasons": [
+    "narrow",
+    "no_family",
+    "stable",
+    "sustained",
+    "new_energy",
+    "in_window",
+    "tier_b"
+   ]
+  },
+  {
+   "bus": "main",
+   "band": 9,
+   "freq_hz": 125.0,
+   "depth_db": -3.0,
+   "session_id": "20260925-135839-watch-main",
+   "ts": 1790341142.9505699,
+   "detections": 1,
+   "confidence": 0.5832543402777778,
+   "fx_slot": 5,
+   "side": "A",
+   "rta_band": 26,
+   "rta_freq_hz": 122.5789169829333,
+   "level_db": -24.34375,
+   "master_db": -21.1,
+   "tier": "B",
+   "policy": "tier_b",
+   "reasons": [
+    "narrow",
+    "no_family",
+    "stable",
+    "sustained",
+    "new_energy",
+    "in_window",
+    "tier_b"
+   ]
+  },
+  {
+   "bus": "main",
+   "band": 20,
+   "freq_hz": 1600.0,
+   "depth_db": -3.0,
+   "session_id": "20260925-135839-watch-main",
+   "ts": 1790341143.574323,
+   "detections": 1,
+   "confidence": 0.8255501418151121,
+   "fx_slot": 5,
+   "side": "A",
+   "rta_band": 62,
+   "rta_freq_hz": 1480.5315444641299,
+   "level_db": -20.3125,
+   "master_db": -21.1,
+   "tier": "A",
+   "policy": null,
+   "reasons": [
+    "narrow",
+    "no_family",
+    "stable",
+    "sustained",
+    "new_energy",
+    "in_window",
+    "rise7dB"
+   ]
+  },
+  {
+   "bus": "main",
+   "band": 9,
+   "freq_hz": 125.0,
+   "depth_db": -6.0,
+   "session_id": "20260925-135839-watch-main",
+   "ts": 1790341150.2774594,
+   "detections": 2,
+   "confidence": 0.5832543402777778,
+   "fx_slot": 5,
+   "side": "A",
+   "tiers": [
+    "B"
+   ],
+   "rta_band": 30,
+   "rta_freq_hz": 162.20423341066854,
+   "level_db": -23.71875,
+   "master_db": -21.1,
+   "tier": "B",
+   "policy": "tier_b",
+   "reasons": [
+    "narrow",
+    "no_family",
+    "stable",
+    "sustained",
+    "new_energy",
+    "in_window",
+    "glided_in",
+    "tier_b"
+   ]
+  },
+  {
+   "bus": "main",
+   "band": 12,
+   "freq_hz": 250.0,
+   "depth_db": -6.0,
+   "session_id": "20260925-135839-watch-main",
+   "ts": 1790341152.3054285,
+   "detections": 2,
+   "confidence": 0.46744520399305556,
+   "fx_slot": 5,
+   "side": "A",
+   "tiers": [
+    "B"
+   ],
+   "rta_band": 35,
+   "rta_freq_hz": 226.01086005158186,
+   "level_db": -21.578125,
+   "master_db": -21.1,
+   "tier": "B",
+   "policy": "tier_b",
+   "reasons": [
+    "narrow",
+    "no_family",
+    "stable",
+    "sustained",
+    "new_energy",
+    "in_window",
+    "glided_in",
+    "tier_b"
+   ]
+  },
+  {
+   "bus": "main",
+   "band": 9,
+   "freq_hz": 125.0,
+   "depth_db": -9.0,
+   "session_id": "20260925-135839-watch-main",
+   "ts": 1790341162.0762541,
+   "detections": 3,
+   "confidence": 0.8608168497948214,
+   "fx_slot": 5,
+   "side": "A",
+   "tiers": [
+    "B"
+   ],
+   "rta_band": 31,
+   "rta_freq_hz": 173.20335001819464,
+   "level_db": -25.5078125,
+   "master_db": -21.1,
+   "tier": "A",
+   "policy": null,
+   "reasons": [
+    "narrow",
+    "no_family",
+    "stable",
+    "sustained",
+    "new_energy",
+    "in_window",
+    "rise6dB"
+   ]
+  },
+  {
+   "bus": "main",
+   "band": 10,
+   "freq_hz": 160.0,
+   "depth_db": -3.0,
+   "session_id": "20260925-135839-watch-main",
+   "ts": 1790341162.1283016,
+   "detections": 1,
+   "confidence": 0.5075284830729166,
+   "fx_slot": 5,
+   "side": "A",
+   "rta_band": 31,
+   "rta_freq_hz": 171.57871431473282,
+   "level_db": -25.5859375,
+   "master_db": -21.1,
+   "tier": "B",
+   "policy": "tier_b",
+   "reasons": [
+    "narrow",
+    "no_family",
+    "stable",
+    "sustained",
+    "new_energy",
+    "in_window",
+    "tier_b"
+   ]
+  },
+  {
+   "bus": "main",
+   "band": 10,
+   "freq_hz": 160.0,
+   "depth_db": -6.0,
+   "session_id": "20260925-135839-watch-main",
+   "ts": 1790341184.4492784,
+   "detections": 2,
+   "confidence": 0.5075284830729166,
+   "fx_slot": 5,
+   "side": "A",
+   "tiers": [
+    "B"
+   ],
+   "rta_band": 31,
+   "rta_freq_hz": 167.80006535691237,
+   "level_db": -29.4140625,
+   "master_db": -21.1,
+   "tier": "B",
+   "policy": "tier_b",
+   "reasons": [
+    "narrow",
+    "no_family",
+    "stable",
+    "sustained",
+    "new_energy",
+    "in_window",
+    "tier_b"
+   ]
+  },
+  {
+   "bus": "main",
+   "band": 10,
+   "freq_hz": 160.0,
+   "depth_db": -9.0,
+   "session_id": "20260925-135839-watch-main",
+   "ts": 1790341191.5118015,
+   "detections": 3,
+   "confidence": 0.5075284830729166,
+   "fx_slot": 5,
+   "side": "A",
+   "tiers": [
+    "B"
+   ],
+   "rta_band": 30,
+   "rta_freq_hz": 165.2253792680745,
+   "level_db": -34.296875,
+   "master_db": -21.1,
+   "tier": "B",
+   "policy": "tier_b",
+   "reasons": [
+    "narrow",
+    "no_family",
+    "stable",
+    "sustained",
+    "new_energy",
+    "in_window",
+    "tier_b"
+   ]
+  },
+  {
+   "bus": "main",
+   "band": 7,
+   "freq_hz": 80.0,
+   "depth_db": -6.0,
+   "session_id": "20260925-135839-watch-main",
+   "ts": 1790341218.8282301,
+   "detections": 2,
+   "confidence": 0.4907154292647835,
+   "fx_slot": 5,
+   "side": "A",
+   "tiers": [
+    "B"
+   ],
+   "rta_band": 18,
+   "rta_freq_hz": 71.27603590755722,
+   "level_db": -25.421875,
+   "master_db": -21.1,
+   "tier": "B",
+   "policy": "tier_b",
+   "reasons": [
+    "narrow",
+    "no_family",
+    "stable",
+    "sustained",
+    "new_energy",
+    "in_window",
+    "tier_b"
+   ]
+  },
+  {
+   "bus": "main",
+   "band": 12,
+   "freq_hz": 250.0,
+   "depth_db": -9.0,
+   "session_id": "20260925-135839-watch-main",
+   "ts": 1790341222.1535118,
+   "detections": 3,
+   "confidence": 0.46744520399305556,
+   "fx_slot": 5,
+   "side": "A",
+   "tiers": [
+    "B"
+   ],
+   "rta_band": 35,
+   "rta_freq_hz": 224.9941349046061,
+   "level_db": -30.84375,
+   "master_db": -21.1,
+   "tier": "B",
+   "policy": "tier_b",
+   "reasons": [
+    "narrow",
+    "no_family",
+    "stable",
+    "sustained",
+    "new_energy",
+    "in_window",
+    "tier_b"
+   ]
+  },
+  {
+   "bus": "main",
+   "band": 7,
+   "freq_hz": 80.0,
+   "depth_db": -9.0,
+   "session_id": "20260925-135839-watch-main",
+   "ts": 1790341227.8179736,
+   "detections": 3,
+   "confidence": 0.4907154292647835,
+   "fx_slot": 5,
+   "side": "A",
+   "tiers": [
+    "B"
+   ],
+   "rta_band": 19,
+   "rta_freq_hz": 73.69594554713372,
+   "level_db": -23.796875,
+   "master_db": -21.1,
+   "tier": "B",
+   "policy": "tier_b",
+   "reasons": [
+    "narrow",
+    "no_family",
+    "stable",
+    "sustained",
+    "new_energy",
+    "in_window",
+    "tier_b"
+   ]
+  },
+  {
+   "bus": "main",
+   "band": 18,
+   "freq_hz": 1000.0,
+   "depth_db": -6.0,
+   "session_id": "20260925-135839-watch-main",
+   "ts": 1790341242.4189174,
+   "detections": 2,
+   "confidence": 0.8910712471808113,
+   "fx_slot": 5,
+   "side": "A",
+   "tiers": [
+    "B"
+   ],
+   "rta_band": 55,
+   "rta_freq_hz": 903.9780433387585,
+   "level_db": -12.3203125,
+   "master_db": -21.1,
+   "tier": "A",
+   "policy": null,
+   "reasons": [
+    "narrow",
+    "no_family",
+    "stable",
+    "sustained",
+    "new_energy",
+    "in_window",
+    "glided_in",
+    "rise8dB"
+   ]
+  }
+ ],
+ "stages": [],
+ "frames": 3477,
+ "detector": {
+  "flags": [
+   "PROGRAMME_PRESENT"
+  ],
+  "release_db_per_s": 108.4375,
+  "arm_p95_db": -23.8359375,
+  "loud_threshold_db": -6.0,
+  "loudish_threshold_db": -13.8359375,
+  "window_low_hz": 70.7,
+  "cut_verdicts": [
+   {
+    "ts": 1790341123.048,
+    "freq_hz": 74.2,
+    "band": 19,
+    "step_db": -3.0,
+    "depth_db": -3.0,
+    "bell_db": [
+     1.9,
+     2.66
+    ],
+    "drop_db": 6.23,
+    "verdict": "confirmed",
+    "deepen": false,
+    "emitted": true
+   },
+   {
+    "ts": 1790341127.313,
+    "freq_hz": 906.7,
+    "band": 55,
+    "step_db": -3.0,
+    "depth_db": -3.0,
+    "bell_db": [
+     1.69,
+     2.57
+    ],
+    "drop_db": 11.14,
+    "verdict": "confirmed",
+    "deepen": false,
+    "emitted": true
+   },
+   {
+    "ts": 1790341131.261,
+    "freq_hz": 226.3,
+    "band": 35,
+    "step_db": -3.0,
+    "depth_db": -3.0,
+    "bell_db": [
+     1.72,
+     2.58
+    ],
+    "drop_db": 6.98,
+    "verdict": "confirmed",
+    "deepen": false,
+    "emitted": true
+   },
+   {
+    "ts": 1790341143.783,
+    "freq_hz": 1470.3,
+    "band": 62,
+    "step_db": -3.0,
+    "depth_db": -3.0,
+    "bell_db": [
+     2.07,
+     2.73
+    ],
+    "drop_db": 7.9,
+    "verdict": "confirmed",
+    "deepen": false,
+    "emitted": true
+   },
+   {
+    "ts": 1790341143.887,
+    "freq_hz": 122.6,
+    "band": 26,
+    "step_db": -3.0,
+    "depth_db": -3.0,
+    "bell_db": [
+     2.92,
+     2.98
+    ],
+    "drop_db": 2.01,
+    "verdict": "false_cut",
+    "deepen": false,
+    "emitted": true
+   },
+   {
+    "ts": 1790341152.514,
+    "freq_hz": 302.1,
+    "band": 39,
+    "step_db": -3.0,
+    "depth_db": -6.0,
+    "bell_db": [
+     0.0,
+     3.0
+    ],
+    "drop_db": 6.12,
+    "verdict": "confirmed",
+    "deepen": false,
+    "emitted": false
+   },
+   {
+    "ts": 1790341152.565,
+    "freq_hz": 226.3,
+    "band": 35,
+    "step_db": -3.0,
+    "depth_db": -6.0,
+    "bell_db": [
+     0.83,
+     3.41
+    ],
+    "drop_db": 6.67,
+    "verdict": "confirmed",
+    "deepen": false,
+    "emitted": true
+   },
+   {
+    "ts": 1790341162.493,
+    "freq_hz": 171.5,
+    "band": 31,
+    "step_db": -3.0,
+    "depth_db": -3.0,
+    "bell_db": [
+     2.2,
+     2.78
+    ],
+    "drop_db": 1.53,
+    "verdict": "confirmed",
+    "deepen": false,
+    "emitted": true
+   },
+   {
+    "ts": 1790341184.761,
+    "freq_hz": 160.0,
+    "band": 30,
+    "step_db": -3.0,
+    "depth_db": -6.0,
+    "bell_db": [
+     2.2,
+     3.21
+    ],
+    "drop_db": 2.06,
+    "verdict": "confirmed",
+    "deepen": false,
+    "emitted": true
+   },
+   {
+    "ts": 1790341191.824,
+    "freq_hz": 163.6,
+    "band": 30,
+    "step_db": -3.0,
+    "depth_db": -9.0,
+    "bell_db": [
+     2.37,
+     3.28
+    ],
+    "drop_db": 0.25,
+    "verdict": "confirmed",
+    "deepen": false,
+    "emitted": true
+   },
+   {
+    "ts": 1790341219.399,
+    "freq_hz": 71.4,
+    "band": 18,
+    "step_db": -3.0,
+    "depth_db": -6.0,
+    "bell_db": [
+     0.55,
+     3.39
+    ],
+    "drop_db": 7.38,
+    "verdict": "confirmed",
+    "deepen": false,
+    "emitted": true
+   },
+   {
+    "ts": 1790341222.413,
+    "freq_hz": 223.2,
+    "band": 35,
+    "step_db": -3.0,
+    "depth_db": -9.0,
+    "bell_db": [
+     0.0,
+     4.22
+    ],
+    "drop_db": 10.03,
+    "verdict": "confirmed",
+    "deepen": false,
+    "emitted": true
+   },
+   {
+    "ts": 1790341228.286,
+    "freq_hz": 74.3,
+    "band": 19,
+    "step_db": -3.0,
+    "depth_db": -9.0,
+    "bell_db": [
+     0.51,
+     4.04
+    ],
+    "drop_db": 6.27,
+    "verdict": "confirmed",
+    "deepen": false,
+    "emitted": true
+   },
+   {
+    "ts": 1790341242.939,
+    "freq_hz": 900.4,
+    "band": 55,
+    "step_db": -3.0,
+    "depth_db": -6.0,
+    "bell_db": [
+     0.83,
+     3.41
+    ],
+    "drop_db": -1.26,
+    "verdict": "insufficient",
+    "deepen": false,
+    "emitted": true
+   }
+  ]
+ },
+ "policy": {
+  "config": {
+   "lf_edge": {
+    "hpf_factor": 0.7,
+    "no_hpf_hz": 100.0,
+    "floor_hz": 60.0
+   },
+   "programme_check_s": 5.0,
+   "refresh_arm_reference_on_programme": true,
+   "tier_b": {
+    "enabled": true,
+    "min_excess_db": 20.0,
+    "min_age_s": 0.6,
+    "cooldown_s": 2.0,
+    "held_deepen_s": 3.0,
+    "verdict_timeout_s": 4.0,
+    "ringout_probe_wait_dwells": 2.0,
+    "ringout_hold_raise": true,
+    "ended_drop_db": 6.0
+   },
+   "alerts": {
+    "events": true,
+    "scribble_strip": true,
+    "color": "RDi",
+    "clear_s": 2.0,
+    "min_write_interval_s": 1.0,
+    "hold_s": 0.5
+   },
+   "at_arm_watch_min_prominence_db": 30.0,
+   "reforce_ballistics_on_freeze": true,
+   "frozen_reforce_s": 1.0,
+   "frozen_abort_s": 5.0,
+   "backoff_probe": {
+    "enabled": true,
+    "drop_db": 3.0,
+    "min_response_db": 4.5,
+    "settle_s": 0.3
+   }
+  },
+  "lf_edge": {
+   "lf_edge_hz": 70.7,
+   "from": "ch 4 HPF 101 Hz",
+   "mics": [
+    {
+     "ch": 4,
+     "hpf_on": true,
+     "hpf_hz": 101.0,
+     "edge_hz": 70.7
+    }
+   ],
+   "lf_feedback_possible": false,
+   "window_low_hz": 70.7
+  },
+  "lf_feedback_possible": false,
+  "programme_present": {
+   "detected": true,
+   "first_seen_s": 0.42,
+   "armed_in_silence": false,
+   "arm_reference_refreshed_s": null,
+   "emit_moderate_forced_off": false
+  },
+  "tier_b": [
+   {
+    "t": 3.12,
+    "freq_hz": 73.3,
+    "rta_band": 19,
+    "band": 7,
+    "depth_db": -3.0,
+    "action": "tier_b",
+    "verdict": null,
+    "next_action": "await the detector's verdict",
+    "tier": "B",
+    "reason": "tier_b"
+   },
+   {
+    "t": 3.59,
+    "freq_hz": 73.3,
+    "rta_band": 19,
+    "band": 7,
+    "depth_db": -3.0,
+    "action": "verdict",
+    "verdict": "confirmed",
+    "next_action": "none (confirmed)",
+    "tier": "B",
+    "reason": "tier_b"
+   },
+   {
+    "t": 3.59,
+    "freq_hz": 73.3,
+    "rta_band": 19,
+    "band": 7,
+    "depth_db": -3.0,
+    "action": "end",
+    "verdict": "confirmed",
+    "next_action": "none: the cut removed the line (regrowth is the detector's business)",
+    "tier": "B",
+    "reason": "tier_b"
+   },
+   {
+    "t": 7.65,
+    "freq_hz": 903.1,
+    "rta_band": 55,
+    "band": 18,
+    "depth_db": -3.0,
+    "action": "tier_b",
+    "verdict": null,
+    "next_action": "await the detector's verdict",
+    "tier": "B",
+    "reason": "tier_b"
+   },
+   {
+    "t": 7.85,
+    "freq_hz": 903.1,
+    "rta_band": 55,
+    "band": 18,
+    "depth_db": -3.0,
+    "action": "verdict",
+    "verdict": "confirmed",
+    "next_action": "none (confirmed)",
+    "tier": "B",
+    "reason": "tier_b"
+   },
+   {
+    "t": 7.85,
+    "freq_hz": 903.1,
+    "rta_band": 55,
+    "band": 18,
+    "depth_db": -3.0,
+    "action": "end",
+    "verdict": "confirmed",
+    "next_action": "none: the cut removed the line (regrowth is the detector's business)",
+    "tier": "B",
+    "reason": "tier_b"
+   },
+   {
+    "t": 11.49,
+    "freq_hz": 226.3,
+    "rta_band": 35,
+    "band": 12,
+    "depth_db": -3.0,
+    "action": "tier_b",
+    "verdict": null,
+    "next_action": "await the detector's verdict",
+    "tier": "B",
+    "reason": "tier_b"
+   },
+   {
+    "t": 11.8,
+    "freq_hz": 226.3,
+    "rta_band": 35,
+    "band": 12,
+    "depth_db": -3.0,
+    "action": "verdict",
+    "verdict": "confirmed",
+    "next_action": "none (confirmed)",
+    "tier": "B",
+    "reason": "tier_b"
+   },
+   {
+    "t": 11.8,
+    "freq_hz": 226.3,
+    "rta_band": 35,
+    "band": 12,
+    "depth_db": -3.0,
+    "action": "end",
+    "verdict": "confirmed",
+    "next_action": "none: the cut removed the line (regrowth is the detector's business)",
+    "tier": "B",
+    "reason": "tier_b"
+   },
+   {
+    "t": 23.49,
+    "freq_hz": 122.6,
+    "rta_band": 26,
+    "band": 9,
+    "depth_db": -3.0,
+    "action": "tier_b",
+    "verdict": null,
+    "next_action": "await the detector's verdict",
+    "tier": "B",
+    "reason": "tier_b"
+   },
+   {
+    "t": 24.43,
+    "freq_hz": 122.6,
+    "rta_band": 26,
+    "band": 9,
+    "depth_db": -3.0,
+    "action": "verdict",
+    "verdict": "false_cut",
+    "next_action": "ignore-list; no further cuts",
+    "tier": "B",
+    "reason": "tier_b"
+   },
+   {
+    "t": 24.43,
+    "freq_hz": 122.6,
+    "rta_band": 26,
+    "band": 9,
+    "depth_db": -3.0,
+    "action": "end",
+    "verdict": "false_cut",
+    "next_action": "ignore-listed: the line ended by itself; the cut stays (never written shallower)",
+    "tier": "B",
+    "reason": "tier_b"
+   },
+   {
+    "t": 30.82,
+    "freq_hz": 162.2,
+    "rta_band": 30,
+    "band": 9,
+    "depth_db": -6.0,
+    "action": "tier_b",
+    "verdict": null,
+    "next_action": "await the detector's verdict",
+    "tier": "B",
+    "reason": "tier_b"
+   },
+   {
+    "t": 32.22,
+    "freq_hz": 162.2,
+    "rta_band": 30,
+    "band": 9,
+    "depth_db": -6.0,
+    "action": "end",
+    "verdict": null,
+    "next_action": "none: the line is gone",
+    "tier": "B",
+    "reason": "tier_b"
+   },
+   {
+    "t": 32.85,
+    "freq_hz": 226.0,
+    "rta_band": 35,
+    "band": 12,
+    "depth_db": -6.0,
+    "action": "tier_b",
+    "verdict": null,
+    "next_action": "await the detector's verdict",
+    "tier": "B",
+    "reason": "tier_b"
+   },
+   {
+    "t": 33.11,
+    "freq_hz": 226.0,
+    "rta_band": 35,
+    "band": 12,
+    "depth_db": -6.0,
+    "action": "verdict",
+    "verdict": "confirmed",
+    "next_action": "none (confirmed)",
+    "tier": "B",
+    "reason": "tier_b"
+   },
+   {
+    "t": 33.11,
+    "freq_hz": 226.0,
+    "rta_band": 35,
+    "band": 12,
+    "depth_db": -6.0,
+    "action": "end",
+    "verdict": "confirmed",
+    "next_action": "none: the cut removed the line (regrowth is the detector's business)",
+    "tier": "B",
+    "reason": "tier_b"
+   },
+   {
+    "t": 42.67,
+    "freq_hz": 171.6,
+    "rta_band": 31,
+    "band": 10,
+    "depth_db": -3.0,
+    "action": "tier_b",
+    "verdict": null,
+    "next_action": "await the detector's verdict",
+    "tier": "B",
+    "reason": "tier_b"
+   },
+   {
+    "t": 43.03,
+    "freq_hz": 171.6,
+    "rta_band": 31,
+    "band": 10,
+    "depth_db": -3.0,
+    "action": "verdict",
+    "verdict": "confirmed",
+    "next_action": "none (confirmed)",
+    "tier": "B",
+    "reason": "tier_b"
+   },
+   {
+    "t": 43.03,
+    "freq_hz": 171.6,
+    "rta_band": 31,
+    "band": 10,
+    "depth_db": -3.0,
+    "action": "end",
+    "verdict": "confirmed",
+    "next_action": "none: the cut removed the line (regrowth is the detector's business)",
+    "tier": "B",
+    "reason": "tier_b"
+   },
+   {
+    "t": 64.99,
+    "freq_hz": 167.8,
+    "rta_band": 31,
+    "band": 10,
+    "depth_db": -6.0,
+    "action": "tier_b",
+    "verdict": null,
+    "next_action": "await the detector's verdict",
+    "tier": "B",
+    "reason": "tier_b"
+   },
+   {
+    "t": 65.3,
+    "freq_hz": 167.8,
+    "rta_band": 31,
+    "band": 10,
+    "depth_db": -6.0,
+    "action": "verdict",
+    "verdict": "confirmed",
+    "next_action": "none (confirmed)",
+    "tier": "B",
+    "reason": "tier_b"
+   },
+   {
+    "t": 65.3,
+    "freq_hz": 167.8,
+    "rta_band": 31,
+    "band": 10,
+    "depth_db": -6.0,
+    "action": "end",
+    "verdict": "confirmed",
+    "next_action": "none: the cut removed the line (regrowth is the detector's business)",
+    "tier": "B",
+    "reason": "tier_b"
+   },
+   {
+    "t": 72.05,
+    "freq_hz": 165.2,
+    "rta_band": 30,
+    "band": 10,
+    "depth_db": -9.0,
+    "action": "tier_b",
+    "verdict": null,
+    "next_action": "await the detector's verdict",
+    "tier": "B",
+    "reason": "tier_b"
+   },
+   {
+    "t": 72.36,
+    "freq_hz": 165.2,
+    "rta_band": 30,
+    "band": 10,
+    "depth_db": -9.0,
+    "action": "verdict",
+    "verdict": "confirmed",
+    "next_action": "none (confirmed)",
+    "tier": "B",
+    "reason": "tier_b"
+   },
+   {
+    "t": 72.36,
+    "freq_hz": 165.2,
+    "rta_band": 30,
+    "band": 10,
+    "depth_db": -9.0,
+    "action": "end",
+    "verdict": "confirmed",
+    "next_action": "none: the cut removed the line (regrowth is the detector's business)",
+    "tier": "B",
+    "reason": "tier_b"
+   },
+   {
+    "t": 99.37,
+    "freq_hz": 71.3,
+    "rta_band": 18,
+    "band": 7,
+    "depth_db": -6.0,
+    "action": "tier_b",
+    "verdict": null,
+    "next_action": "await the detector's verdict",
+    "tier": "B",
+    "reason": "tier_b"
+   },
+   {
+    "t": 99.94,
+    "freq_hz": 71.3,
+    "rta_band": 18,
+    "band": 7,
+    "depth_db": -6.0,
+    "action": "verdict",
+    "verdict": "confirmed",
+    "next_action": "none (confirmed)",
+    "tier": "B",
+    "reason": "tier_b"
+   },
+   {
+    "t": 99.94,
+    "freq_hz": 71.3,
+    "rta_band": 18,
+    "band": 7,
+    "depth_db": -6.0,
+    "action": "end",
+    "verdict": "confirmed",
+    "next_action": "none: the cut removed the line (regrowth is the detector's business)",
+    "tier": "B",
+    "reason": "tier_b"
+   },
+   {
+    "t": 102.69,
+    "freq_hz": 225.0,
+    "rta_band": 35,
+    "band": 12,
+    "depth_db": -9.0,
+    "action": "tier_b",
+    "verdict": null,
+    "next_action": "await the detector's verdict",
+    "tier": "B",
+    "reason": "tier_b"
+   },
+   {
+    "t": 102.95,
+    "freq_hz": 225.0,
+    "rta_band": 35,
+    "band": 12,
+    "depth_db": -9.0,
+    "action": "verdict",
+    "verdict": "confirmed",
+    "next_action": "none (confirmed)",
+    "tier": "B",
+    "reason": "tier_b"
+   },
+   {
+    "t": 102.95,
+    "freq_hz": 225.0,
+    "rta_band": 35,
+    "band": 12,
+    "depth_db": -9.0,
+    "action": "end",
+    "verdict": "confirmed",
+    "next_action": "none: the cut removed the line (regrowth is the detector's business)",
+    "tier": "B",
+    "reason": "tier_b"
+   },
+   {
+    "t": 108.36,
+    "freq_hz": 73.7,
+    "rta_band": 19,
+    "band": 7,
+    "depth_db": -9.0,
+    "action": "tier_b",
+    "verdict": null,
+    "next_action": "await the detector's verdict",
+    "tier": "B",
+    "reason": "tier_b"
+   },
+   {
+    "t": 108.83,
+    "freq_hz": 73.7,
+    "rta_band": 19,
+    "band": 7,
+    "depth_db": -9.0,
+    "action": "verdict",
+    "verdict": "confirmed",
+    "next_action": "none (confirmed)",
+    "tier": "B",
+    "reason": "tier_b"
+   },
+   {
+    "t": 108.83,
+    "freq_hz": 73.7,
+    "rta_band": 19,
+    "band": 7,
+    "depth_db": -9.0,
+    "action": "end",
+    "verdict": "confirmed",
+    "next_action": "none: the cut removed the line (regrowth is the detector's business)",
+    "tier": "B",
+    "reason": "tier_b"
+   }
+  ],
+  "ignore": [
+   {
+    "t": 24.43,
+    "freq_hz": 122.6,
+    "rta_band": 26,
+    "band": 9,
+    "depth_db": -3.0,
+    "why": "false_cut: the line ended by itself after the cut (a note through the EQ)"
+   }
+  ],
+  "alerts": [
+   {
+    "t": 2.6,
+    "freq_hz": 74.1,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 3.12,
+    "freq_hz": 74.1,
+    "klass": "TIER_B",
+    "alert": "on"
+   },
+   {
+    "t": 4.06,
+    "freq_hz": 74.1,
+    "klass": "TIER_B",
+    "alert": "off"
+   },
+   {
+    "t": 4.11,
+    "freq_hz": 74.4,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 5.04,
+    "freq_hz": 74.4,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 6.66,
+    "freq_hz": 165.8,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 6.76,
+    "freq_hz": 1797.1,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 6.92,
+    "freq_hz": 225.8,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 7.18,
+    "freq_hz": 165.8,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 7.23,
+    "freq_hz": 891.9,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 7.28,
+    "freq_hz": 1797.1,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 7.33,
+    "freq_hz": 1817.4,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 7.44,
+    "freq_hz": 225.8,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 7.65,
+    "freq_hz": 891.9,
+    "klass": "TIER_B",
+    "alert": "on"
+   },
+   {
+    "t": 7.85,
+    "freq_hz": 1817.4,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 8.32,
+    "freq_hz": 891.9,
+    "klass": "TIER_B",
+    "alert": "off"
+   },
+   {
+    "t": 11.39,
+    "freq_hz": 225.3,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 11.49,
+    "freq_hz": 225.3,
+    "klass": "TIER_B",
+    "alert": "on"
+   },
+   {
+    "t": 11.65,
+    "freq_hz": 163.6,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 12.17,
+    "freq_hz": 163.6,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 12.27,
+    "freq_hz": 225.3,
+    "klass": "TIER_B",
+    "alert": "off"
+   },
+   {
+    "t": 16.84,
+    "freq_hz": 736.6,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 17.36,
+    "freq_hz": 736.6,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 23.49,
+    "freq_hz": 122.6,
+    "klass": "TIER_B",
+    "alert": "on"
+   },
+   {
+    "t": 24.06,
+    "freq_hz": 738.5,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 24.63,
+    "freq_hz": 738.5,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 24.84,
+    "freq_hz": 122.6,
+    "klass": "TIER_B",
+    "alert": "off"
+   },
+   {
+    "t": 25.31,
+    "freq_hz": 226.3,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 25.88,
+    "freq_hz": 226.3,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 27.7,
+    "freq_hz": 149.3,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 28.32,
+    "freq_hz": 149.3,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 28.43,
+    "freq_hz": 74.1,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 28.95,
+    "freq_hz": 74.1,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 29.93,
+    "freq_hz": 111.9,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 30.45,
+    "freq_hz": 111.9,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 30.71,
+    "freq_hz": 161.4,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 30.82,
+    "freq_hz": 161.4,
+    "klass": "TIER_B",
+    "alert": "on"
+   },
+   {
+    "t": 31.75,
+    "freq_hz": 110.2,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 32.27,
+    "freq_hz": 225.4,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 32.69,
+    "freq_hz": 161.4,
+    "klass": "TIER_B",
+    "alert": "off"
+   },
+   {
+    "t": 32.85,
+    "freq_hz": 225.4,
+    "klass": "TIER_B",
+    "alert": "on"
+   },
+   {
+    "t": 33.26,
+    "freq_hz": 110.2,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 33.57,
+    "freq_hz": 225.4,
+    "klass": "TIER_B",
+    "alert": "off"
+   },
+   {
+    "t": 34.2,
+    "freq_hz": 112.2,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 34.87,
+    "freq_hz": 112.2,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 36.79,
+    "freq_hz": 893.9,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 36.85,
+    "freq_hz": 1782.2,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 37.47,
+    "freq_hz": 893.9,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 37.47,
+    "freq_hz": 1782.2,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 37.94,
+    "freq_hz": 112.3,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 38.46,
+    "freq_hz": 112.3,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 40.95,
+    "freq_hz": 693.6,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 41.58,
+    "freq_hz": 693.6,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 41.63,
+    "freq_hz": 86.0,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 42.15,
+    "freq_hz": 86.0,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 42.25,
+    "freq_hz": 350.7,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 42.36,
+    "freq_hz": 173.4,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 42.67,
+    "freq_hz": 173.4,
+    "klass": "TIER_B",
+    "alert": "on"
+   },
+   {
+    "t": 42.77,
+    "freq_hz": 350.7,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 43.45,
+    "freq_hz": 173.4,
+    "klass": "TIER_B",
+    "alert": "off"
+   },
+   {
+    "t": 44.44,
+    "freq_hz": 197.0,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 45.01,
+    "freq_hz": 197.0,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 45.32,
+    "freq_hz": 2085.7,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 45.84,
+    "freq_hz": 2085.7,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 47.45,
+    "freq_hz": 86.9,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 48.02,
+    "freq_hz": 86.9,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 50.51,
+    "freq_hz": 787.5,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 51.08,
+    "freq_hz": 787.5,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 51.23,
+    "freq_hz": 1583.5,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 51.75,
+    "freq_hz": 1583.5,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 52.17,
+    "freq_hz": 1576.9,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 52.22,
+    "freq_hz": 791.3,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 53.41,
+    "freq_hz": 791.3,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 53.47,
+    "freq_hz": 1576.9,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 54.25,
+    "freq_hz": 183.8,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 55.23,
+    "freq_hz": 183.8,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 55.29,
+    "freq_hz": 183.8,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 57.41,
+    "freq_hz": 183.8,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 57.51,
+    "freq_hz": 163.5,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 58.14,
+    "freq_hz": 163.5,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 61.1,
+    "freq_hz": 183.8,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 62.08,
+    "freq_hz": 183.8,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 62.13,
+    "freq_hz": 183.8,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 64.05,
+    "freq_hz": 183.8,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 64.31,
+    "freq_hz": 224.3,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 64.57,
+    "freq_hz": 165.2,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 64.99,
+    "freq_hz": 165.2,
+    "klass": "TIER_B",
+    "alert": "on"
+   },
+   {
+    "t": 65.04,
+    "freq_hz": 224.3,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 65.41,
+    "freq_hz": 330.2,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 65.41,
+    "freq_hz": 457.1,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 65.67,
+    "freq_hz": 165.2,
+    "klass": "TIER_B",
+    "alert": "off"
+   },
+   {
+    "t": 66.03,
+    "freq_hz": 457.1,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 67.12,
+    "freq_hz": 330.2,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 67.38,
+    "freq_hz": 323.8,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 68.06,
+    "freq_hz": 323.8,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 70.55,
+    "freq_hz": 346.5,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 71.07,
+    "freq_hz": 346.5,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 72.05,
+    "freq_hz": 165.2,
+    "klass": "TIER_B",
+    "alert": "on"
+   },
+   {
+    "t": 72.78,
+    "freq_hz": 165.2,
+    "klass": "TIER_B",
+    "alert": "off"
+   },
+   {
+    "t": 73.04,
+    "freq_hz": 163.0,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 73.61,
+    "freq_hz": 163.0,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 74.28,
+    "freq_hz": 162.7,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 74.85,
+    "freq_hz": 162.7,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 75.32,
+    "freq_hz": 1192.5,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 75.84,
+    "freq_hz": 1192.5,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 76.05,
+    "freq_hz": 149.3,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 76.57,
+    "freq_hz": 149.3,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 76.78,
+    "freq_hz": 299.3,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 77.3,
+    "freq_hz": 299.3,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 81.14,
+    "freq_hz": 111.1,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 81.76,
+    "freq_hz": 111.1,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 84.88,
+    "freq_hz": 905.1,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 85.4,
+    "freq_hz": 905.1,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 87.53,
+    "freq_hz": 97.8,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 88.05,
+    "freq_hz": 97.8,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 88.1,
+    "freq_hz": 394.0,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 88.46,
+    "freq_hz": 485.0,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 88.62,
+    "freq_hz": 394.0,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 88.98,
+    "freq_hz": 485.0,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 92.62,
+    "freq_hz": 452.5,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 93.13,
+    "freq_hz": 452.5,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 98.85,
+    "freq_hz": 1797.2,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 99.26,
+    "freq_hz": 71.0,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 99.37,
+    "freq_hz": 71.0,
+    "klass": "TIER_B",
+    "alert": "on"
+   },
+   {
+    "t": 99.37,
+    "freq_hz": 1797.2,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 99.52,
+    "freq_hz": 1192.4,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 100.04,
+    "freq_hz": 1192.4,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 100.41,
+    "freq_hz": 71.0,
+    "klass": "TIER_B",
+    "alert": "off"
+   },
+   {
+    "t": 101.08,
+    "freq_hz": 72.8,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 101.6,
+    "freq_hz": 72.8,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 102.12,
+    "freq_hz": 223.5,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 102.69,
+    "freq_hz": 223.5,
+    "klass": "TIER_B",
+    "alert": "on"
+   },
+   {
+    "t": 103.42,
+    "freq_hz": 223.5,
+    "klass": "TIER_B",
+    "alert": "off"
+   },
+   {
+    "t": 103.84,
+    "freq_hz": 324.0,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 104.41,
+    "freq_hz": 324.0,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 106.59,
+    "freq_hz": 73.2,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 107.01,
+    "freq_hz": 1194.3,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 107.11,
+    "freq_hz": 73.2,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 107.53,
+    "freq_hz": 1194.3,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 108.36,
+    "freq_hz": 73.7,
+    "klass": "TIER_B",
+    "alert": "on"
+   },
+   {
+    "t": 108.83,
+    "freq_hz": 452.5,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 108.98,
+    "freq_hz": 73.7,
+    "klass": "TIER_B",
+    "alert": "off"
+   },
+   {
+    "t": 109.35,
+    "freq_hz": 452.5,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 109.81,
+    "freq_hz": 894.0,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 110.33,
+    "freq_hz": 894.0,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 111.16,
+    "freq_hz": 452.0,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 111.79,
+    "freq_hz": 452.0,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 112.62,
+    "freq_hz": 1194.3,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 113.14,
+    "freq_hz": 1194.3,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 116.1,
+    "freq_hz": 684.2,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 116.62,
+    "freq_hz": 684.2,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 116.94,
+    "freq_hz": 330.8,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 116.99,
+    "freq_hz": 161.0,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 117.56,
+    "freq_hz": 161.0,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 117.82,
+    "freq_hz": 330.8,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 118.18,
+    "freq_hz": 329.2,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 118.7,
+    "freq_hz": 326.7,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 119.07,
+    "freq_hz": 329.2,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 119.12,
+    "freq_hz": 788.9,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 119.22,
+    "freq_hz": 326.7,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 119.64,
+    "freq_hz": 183.8,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 119.74,
+    "freq_hz": 788.9,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 119.85,
+    "freq_hz": 750.6,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 120.16,
+    "freq_hz": 183.8,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 120.68,
+    "freq_hz": 369.6,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 120.94,
+    "freq_hz": 2228.6,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 121.35,
+    "freq_hz": 750.6,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 121.41,
+    "freq_hz": 901.7,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 121.46,
+    "freq_hz": 369.6,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 121.46,
+    "freq_hz": 2228.6,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 121.82,
+    "freq_hz": 72.6,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 122.34,
+    "freq_hz": 72.6,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 122.96,
+    "freq_hz": 1813.2,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 123.12,
+    "freq_hz": 226.1,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 123.22,
+    "freq_hz": 1337.6,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 123.48,
+    "freq_hz": 1813.2,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 123.64,
+    "freq_hz": 226.1,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 123.74,
+    "freq_hz": 1337.6,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 123.9,
+    "freq_hz": 901.7,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 124.0,
+    "freq_hz": 899.8,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 124.99,
+    "freq_hz": 186.8,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 124.99,
+    "freq_hz": 899.8,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 125.92,
+    "freq_hz": 186.8,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 126.23,
+    "freq_hz": 1201.2,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 127.12,
+    "freq_hz": 1201.2,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 127.48,
+    "freq_hz": 2388.6,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 128.26,
+    "freq_hz": 2388.6,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 130.13,
+    "freq_hz": 1331.3,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 130.65,
+    "freq_hz": 225.0,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 130.65,
+    "freq_hz": 3345.0,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 130.65,
+    "freq_hz": 1331.3,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 131.17,
+    "freq_hz": 3345.0,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 131.22,
+    "freq_hz": 225.0,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 131.27,
+    "freq_hz": 325.1,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 131.79,
+    "freq_hz": 325.1,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 132.41,
+    "freq_hz": 455.1,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 132.83,
+    "freq_hz": 787.9,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 133.09,
+    "freq_hz": 455.1,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 133.45,
+    "freq_hz": 298.6,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 133.97,
+    "freq_hz": 298.6,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 134.03,
+    "freq_hz": 787.9,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 134.34,
+    "freq_hz": 218.9,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 134.91,
+    "freq_hz": 218.9,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 136.89,
+    "freq_hz": 146.3,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 136.94,
+    "freq_hz": 111.7,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 137.56,
+    "freq_hz": 111.7,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 137.61,
+    "freq_hz": 111.1,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 137.77,
+    "freq_hz": 146.3,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 138.39,
+    "freq_hz": 111.1,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 140.15,
+    "freq_hz": 108.6,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 141.34,
+    "freq_hz": 108.6,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 146.07,
+    "freq_hz": 74.0,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 146.7,
+    "freq_hz": 74.0,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 148.41,
+    "freq_hz": 587.8,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 148.93,
+    "freq_hz": 587.8,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 149.29,
+    "freq_hz": 183.8,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 149.81,
+    "freq_hz": 183.8,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 151.32,
+    "freq_hz": 110.1,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 151.58,
+    "freq_hz": 224.6,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 151.84,
+    "freq_hz": 110.1,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 152.2,
+    "freq_hz": 224.6,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 152.36,
+    "freq_hz": 452.5,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 152.88,
+    "freq_hz": 452.5,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 153.5,
+    "freq_hz": 757.2,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 154.23,
+    "freq_hz": 298.6,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 154.38,
+    "freq_hz": 757.2,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 154.75,
+    "freq_hz": 298.6,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 155.69,
+    "freq_hz": 671.1,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 156.21,
+    "freq_hz": 671.1,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 159.17,
+    "freq_hz": 112.0,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 159.79,
+    "freq_hz": 112.0,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 160.89,
+    "freq_hz": 149.3,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 161.15,
+    "freq_hz": 653.0,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 161.51,
+    "freq_hz": 109.5,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 161.51,
+    "freq_hz": 149.3,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 161.67,
+    "freq_hz": 653.0,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 162.29,
+    "freq_hz": 109.5,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 163.23,
+    "freq_hz": 111.0,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 163.75,
+    "freq_hz": 1119.5,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 163.75,
+    "freq_hz": 111.0,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 164.27,
+    "freq_hz": 1119.5,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 164.42,
+    "freq_hz": 1203.3,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 164.94,
+    "freq_hz": 1203.3,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 166.61,
+    "freq_hz": 183.8,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 166.81,
+    "freq_hz": 71.5,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 167.13,
+    "freq_hz": 183.8,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 167.44,
+    "freq_hz": 111.3,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 167.54,
+    "freq_hz": 71.5,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 168.27,
+    "freq_hz": 111.3,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 168.79,
+    "freq_hz": 113.4,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 169.72,
+    "freq_hz": 113.4,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 171.49,
+    "freq_hz": 224.5,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 171.86,
+    "freq_hz": 111.6,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 172.43,
+    "freq_hz": 164.5,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 172.48,
+    "freq_hz": 111.6,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 172.89,
+    "freq_hz": 112.0,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 173.0,
+    "freq_hz": 224.5,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 173.1,
+    "freq_hz": 164.5,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 173.21,
+    "freq_hz": 451.1,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 173.52,
+    "freq_hz": 112.0,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 173.72,
+    "freq_hz": 451.1,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 174.61,
+    "freq_hz": 74.0,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 175.13,
+    "freq_hz": 74.0,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 177.0,
+    "freq_hz": 112.3,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 178.19,
+    "freq_hz": 112.3,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 178.45,
+    "freq_hz": 1806.3,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 178.97,
+    "freq_hz": 1806.3,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 179.13,
+    "freq_hz": 222.7,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 179.55,
+    "freq_hz": 112.8,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 179.65,
+    "freq_hz": 222.7,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 180.22,
+    "freq_hz": 112.8,
+    "klass": "MODERATE",
+    "alert": "off"
+   }
+  ],
+  "strip_color": {
+   "original": "WH",
+   "alert": "RDi",
+   "writes": 34,
+   "restored": true
+  },
+  "at_arm_suppressed": [],
+  "flags_seen": [
+   {
+    "flag": "PROGRAMME_PRESENT",
+    "first_seen_s": 0.47
+   }
+  ],
+  "ballistics_reforced": null,
+  "backoff_probes": [],
+  "errors": {}
+ },
+ "final_stage": "DONE",
+ "aborted": false,
+ "abort_reason": null,
+ "connection_lost": false,
+ "restored": null,
+ "preflight": {
+  "warnings": [
+   "ch.2 'DJ L': source IN02 has no preamp (not a physical input)",
+   "ch.3 'DJ (R)': source IN03 has no preamp (not a physical input)",
+   "ch.15 'Drum OH2': sends to Main LR but is muted",
+   "ch.16 'Drum FX': sends to Main LR but is muted"
+  ],
+  "mics": [
+   {
+    "ch": 2,
+    "target": "ch.2",
+    "name": "DJ L",
+    "muted": false,
+    "send_db": -7.5,
+    "send": "-7.5",
+    "source": "IN02",
+    "physical_input": false,
+    "in_mute_group": false,
+    "patch_mic": null,
+    "owner": null,
+    "include": false,
+    "notes": [
+     "source IN02 has no preamp (not a physical input)"
+    ]
+   },
+   {
+    "ch": 3,
+    "target": "ch.3",
+    "name": "DJ (R)",
+    "muted": false,
+    "send_db": -7.5,
+    "send": "-7.5",
+    "source": "IN03",
+    "physical_input": false,
+    "in_mute_group": false,
+    "patch_mic": null,
+    "owner": null,
+    "include": false,
+    "notes": [
+     "source IN03 has no preamp (not a physical input)"
+    ]
+   },
+   {
+    "ch": 4,
+    "target": "ch.4",
+    "name": "Lead Vox",
+    "muted": false,
+    "send_db": 0.0,
+    "send": "0.0",
+    "source": "IN04",
+    "physical_input": true,
+    "in_mute_group": false,
+    "patch_mic": null,
+    "owner": null,
+    "include": true,
+    "notes": []
+   },
+   {
+    "ch": 15,
+    "target": "ch.15",
+    "name": "Drum OH2",
+    "muted": true,
+    "send_db": -1.0,
+    "send": "-1.0",
+    "source": "IN15",
+    "physical_input": true,
+    "in_mute_group": false,
+    "patch_mic": null,
+    "owner": null,
+    "include": false,
+    "notes": [
+     "sends to Main LR but is muted"
+    ]
+   },
+   {
+    "ch": 16,
+    "target": "ch.16",
+    "name": "Drum FX",
+    "muted": true,
+    "send_db": -1.5,
+    "send": "-1.5",
+    "source": "IN16",
+    "physical_input": true,
+    "in_mute_group": false,
+    "patch_mic": null,
+    "owner": null,
+    "include": false,
+    "notes": [
+     "sends to Main LR but is muted"
+    ]
+   }
+  ],
+  "included": [
+   4
+  ]
+ },
+ "expected_mics": null,
+ "summary": "watch on Main LR: 6 notch(es) from 7 detection(s) in 180.9 s"
+}
