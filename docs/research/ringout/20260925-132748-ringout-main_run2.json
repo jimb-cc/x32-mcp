@@ -1,0 +1,836 @@
+{
+ "session_id": "20260925-132748-ringout-main",
+ "system_id": null,
+ "mode": "ringout",
+ "bus": "main",
+ "target": "main.st",
+ "bus_name": "",
+ "started": "2026-09-25T13:27:48",
+ "ended": "2026-09-25T13:28:15",
+ "duration_s": 26.9,
+ "start_master_db": -25.1,
+ "start_master": "-25.1",
+ "end_master_db": -11.1,
+ "end_master": "-11.1",
+ "max_master_db": -5.1,
+ "max_master": "-5.1",
+ "gain_before_feedback_db": -9.1,
+ "gain_before_feedback": "-9.1",
+ "target_db": 0.0,
+ "step_db": 1.0,
+ "dwell_ms": 1500,
+ "notch_budget": 6,
+ "budget_left": 4,
+ "geq": {
+  "fx_slot": 5,
+  "side": "A",
+  "sel": "FX5L"
+ },
+ "rta": {
+  "target": "main.st",
+  "source_index": 72,
+  "post_eq": true,
+  "stat_expected": 168,
+  "stat_actual": 168,
+  "verified": true,
+  "options_cleared": false,
+  "autogain_cleared": false,
+  "detector_set_peak": false,
+  "decay_set_min": true,
+  "peakhold_cleared": false,
+  "gain_set": false,
+  "prefs_before": {
+   "source": 72,
+   "pos": 1,
+   "autogain": 0,
+   "det": 1,
+   "decay": 0.3333333432674408,
+   "peakhold": 0,
+   "options": 0,
+   "gain": 0.0
+  },
+  "settle_attempts": 1,
+  "settle_ms": 0.0
+ },
+ "rta_restored": {
+  "restored": [
+   "source",
+   "pos",
+   "autogain",
+   "det",
+   "decay",
+   "peakhold",
+   "gain"
+  ],
+  "failed": []
+ },
+ "snapshot": "20260925-132748-ringout-pre-main-st",
+ "notches": [
+  {
+   "bus": "main",
+   "band": 25,
+   "freq_hz": 5000.0,
+   "depth_db": -3.0,
+   "session_id": "20260925-132748-ringout-main",
+   "ts": 1790339293.0700889,
+   "detections": 1,
+   "confidence": 0.8412171507191778,
+   "fx_slot": 5,
+   "side": "A",
+   "tiers": [
+    "A"
+   ]
+  },
+  {
+   "bus": "main",
+   "band": 27,
+   "freq_hz": 8000.0,
+   "depth_db": -9.0,
+   "session_id": "20260925-132748-ringout-main",
+   "ts": 1790339294.5664036,
+   "detections": 3,
+   "confidence": 0.9663644126684552,
+   "fx_slot": 5,
+   "side": "A",
+   "tiers": [
+    "A"
+   ]
+  }
+ ],
+ "existing_cuts": [],
+ "detections": 5,
+ "detection_log": [
+  {
+   "ts": 1790339292.3499286,
+   "band": 88,
+   "freq_hz": 8823.500800760627,
+   "level_db": -74.578125,
+   "prominence_db": 22.42578125,
+   "slope_db_per_s": 0.24482480013757904,
+   "frames": 70,
+   "confidence": 0.8857855204431686,
+   "reasons": [
+    "narrow",
+    "no_family",
+    "stable",
+    "sustained",
+    "new_energy",
+    "in_window",
+    "rise6dB"
+   ],
+   "class": "STRONG",
+   "centroid_band": 88.19,
+   "narrow_db": 22.4,
+   "rise_db": 6.4,
+   "excess_db": 19.6,
+   "master_db": -9.1
+  },
+  {
+   "ts": 1790339293.0700889,
+   "band": 80,
+   "freq_hz": 5029.969057155199,
+   "level_db": -80.7890625,
+   "prominence_db": 16.21484375,
+   "slope_db_per_s": 7.518322587213043,
+   "frames": 31,
+   "confidence": 0.8412171507191778,
+   "reasons": [
+    "narrow",
+    "no_family",
+    "stable",
+    "sustained",
+    "new_energy",
+    "in_window",
+    "rise7dB"
+   ],
+   "class": "STRONG",
+   "centroid_band": 80.09,
+   "narrow_db": 15.3,
+   "rise_db": 6.8,
+   "excess_db": 15.0,
+   "master_db": -8.1
+  },
+  {
+   "ts": 1790339293.5344539,
+   "band": 88,
+   "freq_hz": 8843.89284829782,
+   "level_db": -67.4765625,
+   "prominence_db": 30.651159240298696,
+   "slope_db_per_s": 19.374578877521866,
+   "frames": 93,
+   "confidence": 0.9663644126684552,
+   "reasons": [
+    "narrow",
+    "no_family",
+    "stable",
+    "sustained",
+    "new_energy",
+    "in_window",
+    "rise16dB",
+    "fastrise19dB@77dB/s"
+   ],
+   "class": "STRONG",
+   "centroid_band": 88.23,
+   "narrow_db": 27.2,
+   "rise_db": 16.3,
+   "excess_db": 26.4,
+   "master_db": -7.1
+  },
+  {
+   "ts": 1790339294.5664036,
+   "band": 88,
+   "freq_hz": 8863.591292461106,
+   "level_db": -42.8046875,
+   "prominence_db": 55.504771682345165,
+   "slope_db_per_s": 53.65053939604689,
+   "frames": 113,
+   "confidence": 0.9625,
+   "reasons": [
+    "narrow",
+    "no_family",
+    "stable",
+    "sustained",
+    "new_energy",
+    "in_window",
+    "rise21dB",
+    "fastrise23dB@93dB/s"
+   ],
+   "class": "STRONG",
+   "centroid_band": 88.26,
+   "narrow_db": 48.7,
+   "rise_db": 20.5,
+   "excess_db": 50.2,
+   "master_db": -6.1
+  },
+  {
+   "ts": 1790339295.59568,
+   "band": 88,
+   "freq_hz": 8884.034726587028,
+   "level_db": -27.109375,
+   "prominence_db": 71.39957340390256,
+   "slope_db_per_s": 40.328106828003406,
+   "frames": 133,
+   "confidence": 0.9426858966708905,
+   "reasons": [
+    "narrow",
+    "no_family",
+    "stable",
+    "sustained",
+    "new_energy",
+    "in_window",
+    "rise15dB",
+    "fastrise16dB@86dB/s"
+   ],
+   "class": "STRONG",
+   "centroid_band": 88.29,
+   "narrow_db": 59.0,
+   "rise_db": 14.7,
+   "excess_db": 64.6,
+   "master_db": -5.1
+  }
+ ],
+ "notch_log": [
+  {
+   "bus": "main",
+   "band": 27,
+   "freq_hz": 8000.0,
+   "depth_db": -3.0,
+   "session_id": "20260925-132748-ringout-main",
+   "ts": 1790339292.3499286,
+   "detections": 1,
+   "confidence": 0.8857855204431686,
+   "fx_slot": 5,
+   "side": "A",
+   "rta_band": 88,
+   "rta_freq_hz": 8823.500800760627,
+   "level_db": -74.578125,
+   "master_db": -9.1,
+   "tier": "A",
+   "policy": null,
+   "reasons": [
+    "narrow",
+    "no_family",
+    "stable",
+    "sustained",
+    "new_energy",
+    "in_window",
+    "rise6dB"
+   ]
+  },
+  {
+   "bus": "main",
+   "band": 25,
+   "freq_hz": 5000.0,
+   "depth_db": -3.0,
+   "session_id": "20260925-132748-ringout-main",
+   "ts": 1790339293.0700889,
+   "detections": 1,
+   "confidence": 0.8412171507191778,
+   "fx_slot": 5,
+   "side": "A",
+   "rta_band": 80,
+   "rta_freq_hz": 5029.969057155199,
+   "level_db": -80.7890625,
+   "master_db": -8.1,
+   "tier": "A",
+   "policy": null,
+   "reasons": [
+    "narrow",
+    "no_family",
+    "stable",
+    "sustained",
+    "new_energy",
+    "in_window",
+    "rise7dB"
+   ]
+  },
+  {
+   "bus": "main",
+   "band": 27,
+   "freq_hz": 8000.0,
+   "depth_db": -6.0,
+   "session_id": "20260925-132748-ringout-main",
+   "ts": 1790339293.5344539,
+   "detections": 2,
+   "confidence": 0.9663644126684552,
+   "fx_slot": 5,
+   "side": "A",
+   "tiers": [
+    "A"
+   ],
+   "rta_band": 88,
+   "rta_freq_hz": 8843.89284829782,
+   "level_db": -67.4765625,
+   "master_db": -7.1,
+   "tier": "A",
+   "policy": null,
+   "reasons": [
+    "narrow",
+    "no_family",
+    "stable",
+    "sustained",
+    "new_energy",
+    "in_window",
+    "rise16dB",
+    "fastrise19dB@77dB/s"
+   ]
+  },
+  {
+   "bus": "main",
+   "band": 27,
+   "freq_hz": 8000.0,
+   "depth_db": -9.0,
+   "session_id": "20260925-132748-ringout-main",
+   "ts": 1790339294.5664036,
+   "detections": 3,
+   "confidence": 0.9663644126684552,
+   "fx_slot": 5,
+   "side": "A",
+   "tiers": [
+    "A"
+   ],
+   "rta_band": 88,
+   "rta_freq_hz": 8863.591292461106,
+   "level_db": -42.8046875,
+   "master_db": -6.1,
+   "tier": "A",
+   "policy": null,
+   "reasons": [
+    "narrow",
+    "no_family",
+    "stable",
+    "sustained",
+    "new_energy",
+    "in_window",
+    "rise21dB",
+    "fastrise23dB@93dB/s"
+   ]
+  }
+ ],
+ "stages": [
+  {
+   "stage": "PREFLIGHT",
+   "ts": 1790339268.665071,
+   "master_db": -25.1
+  },
+  {
+   "stage": "SNAPSHOT",
+   "ts": 1790339268.665071,
+   "master_db": -25.1
+  },
+  {
+   "stage": "ARM",
+   "ts": 1790339268.672077,
+   "master_db": -25.1,
+   "target_db": 0.0,
+   "step_db": 1.0,
+   "dwell_ms": 1500
+  },
+  {
+   "stage": "RAISE",
+   "ts": 1790339268.7201216,
+   "master_db": -24.1
+  },
+  {
+   "stage": "RAISE",
+   "ts": 1790339270.226489,
+   "master_db": -23.1
+  },
+  {
+   "stage": "RAISE",
+   "ts": 1790339271.7390296,
+   "master_db": -22.1
+  },
+  {
+   "stage": "RAISE",
+   "ts": 1790339273.2313845,
+   "master_db": -21.1
+  },
+  {
+   "stage": "RAISE",
+   "ts": 1790339274.7390053,
+   "master_db": -20.1
+  },
+  {
+   "stage": "RAISE",
+   "ts": 1790339276.2346582,
+   "master_db": -19.1
+  },
+  {
+   "stage": "RAISE",
+   "ts": 1790339277.733028,
+   "master_db": -18.1
+  },
+  {
+   "stage": "RAISE",
+   "ts": 1790339279.2483878,
+   "master_db": -17.1
+  },
+  {
+   "stage": "RAISE",
+   "ts": 1790339280.7507756,
+   "master_db": -16.1
+  },
+  {
+   "stage": "RAISE",
+   "ts": 1790339282.2535024,
+   "master_db": -15.1
+  },
+  {
+   "stage": "RAISE",
+   "ts": 1790339283.7717047,
+   "master_db": -14.1
+  },
+  {
+   "stage": "RAISE",
+   "ts": 1790339285.2727356,
+   "master_db": -13.1
+  },
+  {
+   "stage": "RAISE",
+   "ts": 1790339286.7804732,
+   "master_db": -12.1
+  },
+  {
+   "stage": "RAISE",
+   "ts": 1790339288.296566,
+   "master_db": -11.1
+  },
+  {
+   "stage": "RAISE",
+   "ts": 1790339289.820306,
+   "master_db": -10.1
+  },
+  {
+   "stage": "RAISE",
+   "ts": 1790339291.3237317,
+   "master_db": -9.1
+  },
+  {
+   "stage": "HOLD",
+   "ts": 1790339292.3509295,
+   "master_db": -9.1,
+   "freq_hz": 8823.5,
+   "rta_band": 88,
+   "confidence": 0.886
+  },
+  {
+   "stage": "NOTCH",
+   "ts": 1790339292.3519318,
+   "master_db": -9.1,
+   "freq_hz": 8823.5,
+   "rta_band": 88,
+   "level_db": -74.6,
+   "band": 27,
+   "depth_db": -3.0
+  },
+  {
+   "stage": "VERIFY",
+   "ts": 1790339292.6066685,
+   "master_db": -9.1,
+   "band": 27,
+   "depth_db": -3.0,
+   "ok": true,
+   "drop_db": 8.0,
+   "required_db": 6.0
+  },
+  {
+   "stage": "RAISE",
+   "ts": 1790339292.6086707,
+   "master_db": -8.1
+  },
+  {
+   "stage": "HOLD",
+   "ts": 1790339293.0710902,
+   "master_db": -8.1,
+   "freq_hz": 5030.0,
+   "rta_band": 80,
+   "confidence": 0.841
+  },
+  {
+   "stage": "NOTCH",
+   "ts": 1790339293.0720916,
+   "master_db": -8.1,
+   "freq_hz": 5030.0,
+   "rta_band": 80,
+   "level_db": -80.8,
+   "band": 25,
+   "depth_db": -3.0
+  },
+  {
+   "stage": "VERIFY",
+   "ts": 1790339293.2752767,
+   "master_db": -8.1,
+   "band": 25,
+   "depth_db": -3.0,
+   "ok": true,
+   "drop_db": 9.8,
+   "required_db": 6.0
+  },
+  {
+   "stage": "RAISE",
+   "ts": 1790339293.2772768,
+   "master_db": -7.1
+  },
+  {
+   "stage": "HOLD",
+   "ts": 1790339293.5354548,
+   "master_db": -7.1,
+   "freq_hz": 8843.9,
+   "rta_band": 88,
+   "confidence": 0.966
+  },
+  {
+   "stage": "NOTCH",
+   "ts": 1790339293.5372355,
+   "master_db": -7.1,
+   "freq_hz": 8843.9,
+   "rta_band": 88,
+   "level_db": -67.5,
+   "band": 27,
+   "depth_db": -6.0
+  },
+  {
+   "stage": "VERIFY",
+   "ts": 1790339294.154623,
+   "master_db": -7.1,
+   "band": 27,
+   "depth_db": -6.0,
+   "ok": true,
+   "drop_db": 8.0,
+   "required_db": 6.0
+  },
+  {
+   "stage": "RAISE",
+   "ts": 1790339294.1576264,
+   "master_db": -6.1
+  },
+  {
+   "stage": "HOLD",
+   "ts": 1790339294.5674047,
+   "master_db": -6.1,
+   "freq_hz": 8863.6,
+   "rta_band": 88,
+   "confidence": 0.963
+  },
+  {
+   "stage": "NOTCH",
+   "ts": 1790339294.5684052,
+   "master_db": -6.1,
+   "freq_hz": 8863.6,
+   "rta_band": 88,
+   "level_db": -42.8,
+   "band": 27,
+   "depth_db": -9.0
+  },
+  {
+   "stage": "VERIFY",
+   "ts": 1790339295.1872563,
+   "master_db": -6.1,
+   "band": 27,
+   "depth_db": -9.0,
+   "ok": true,
+   "drop_db": 8.8,
+   "required_db": 6.0
+  },
+  {
+   "stage": "RAISE",
+   "ts": 1790339295.1882572,
+   "master_db": -5.1
+  },
+  {
+   "stage": "HOLD",
+   "ts": 1790339295.597683,
+   "master_db": -5.1,
+   "freq_hz": 8884.0,
+   "rta_band": 88,
+   "confidence": 0.943
+  },
+  {
+   "stage": "BACKOFF",
+   "ts": 1790339295.597683,
+   "master_db": -5.1,
+   "to_db": -11.1,
+   "backoff_db": 6.0
+  },
+  {
+   "stage": "ABORT",
+   "ts": 1790339295.598683,
+   "master_db": -11.1,
+   "reason": "ring at 8884 Hz not tamed: GEQ band cannot cut deeper than -9 dB or the notch budget is spent"
+  }
+ ],
+ "frames": 524,
+ "detector": {
+  "flags": [],
+  "release_db_per_s": null,
+  "arm_p95_db": -95.9453125,
+  "loud_threshold_db": -10.0,
+  "loudish_threshold_db": -20.0,
+  "window_low_hz": 70.7,
+  "cut_verdicts": [
+   {
+    "ts": 1790339292.554,
+    "freq_hz": 8855.5,
+    "band": 88,
+    "step_db": -3.0,
+    "depth_db": -3.0,
+    "bell_db": [
+     1.75,
+     2.59
+    ],
+    "drop_db": 5.88,
+    "verdict": "confirmed",
+    "deepen": false,
+    "emitted": true
+   },
+   {
+    "ts": 1790339293.274,
+    "freq_hz": 5049.7,
+    "band": 80,
+    "step_db": -3.0,
+    "depth_db": -3.0,
+    "bell_db": [
+     2.99,
+     3.0
+    ],
+    "drop_db": 8.37,
+    "verdict": "confirmed",
+    "deepen": false,
+    "emitted": true
+   },
+   {
+    "ts": 1790339294.102,
+    "freq_hz": 8867.7,
+    "band": 88,
+    "step_db": -3.0,
+    "depth_db": -6.0,
+    "bell_db": [
+     0.84,
+     3.41
+    ],
+    "drop_db": 6.77,
+    "verdict": "confirmed",
+    "deepen": false,
+    "emitted": true
+   },
+   {
+    "ts": 1790339295.186,
+    "freq_hz": 8884.8,
+    "band": 88,
+    "step_db": -3.0,
+    "depth_db": -9.0,
+    "bell_db": [
+     0.0,
+     4.21
+    ],
+    "drop_db": 8.62,
+    "verdict": "confirmed",
+    "deepen": false,
+    "emitted": true
+   }
+  ]
+ },
+ "policy": {
+  "config": {
+   "lf_edge": {
+    "hpf_factor": 0.7,
+    "no_hpf_hz": 100.0,
+    "floor_hz": 60.0
+   },
+   "programme_check_s": 5.0,
+   "refresh_arm_reference_on_programme": true,
+   "tier_b": {
+    "enabled": true,
+    "min_excess_db": 20.0,
+    "min_age_s": 0.6,
+    "cooldown_s": 2.0,
+    "held_deepen_s": 3.0,
+    "verdict_timeout_s": 4.0,
+    "ringout_probe_wait_dwells": 2.0,
+    "ringout_hold_raise": true,
+    "ended_drop_db": 6.0
+   },
+   "alerts": {
+    "events": true,
+    "scribble_strip": true,
+    "color": "RDi",
+    "clear_s": 2.0,
+    "min_write_interval_s": 1.0,
+    "hold_s": 0.5
+   },
+   "at_arm_watch_min_prominence_db": 30.0,
+   "reforce_ballistics_on_freeze": true,
+   "frozen_reforce_s": 1.0,
+   "frozen_abort_s": 5.0,
+   "backoff_probe": {
+    "enabled": true,
+    "drop_db": 3.0,
+    "min_response_db": 4.5,
+    "settle_s": 0.3
+   }
+  },
+  "lf_edge": {
+   "lf_edge_hz": 70.7,
+   "from": "ch 4 HPF 101 Hz",
+   "mics": [
+    {
+     "ch": 4,
+     "hpf_on": true,
+     "hpf_hz": 101.0,
+     "edge_hz": 70.7
+    }
+   ],
+   "lf_feedback_possible": false,
+   "window_low_hz": 70.7
+  },
+  "lf_feedback_possible": false,
+  "programme_present": {
+   "detected": false,
+   "first_seen_s": null,
+   "armed_in_silence": true,
+   "arm_reference_refreshed_s": null,
+   "emit_moderate_forced_off": false
+  },
+  "tier_b": [],
+  "ignore": [],
+  "alerts": [
+   {
+    "t": 24.25,
+    "freq_hz": 5033.3,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 24.97,
+    "freq_hz": 5033.3,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 26.83,
+    "freq_hz": 5012.1,
+    "klass": "MODERATE",
+    "alert": "on"
+   }
+  ],
+  "strip_color": {
+   "original": "WH",
+   "alert": "RDi",
+   "writes": 2,
+   "restored": true
+  },
+  "at_arm_suppressed": [],
+  "flags_seen": [],
+  "ballistics_reforced": null,
+  "backoff_probes": [],
+  "errors": {}
+ },
+ "final_stage": "ABORT",
+ "aborted": true,
+ "abort_reason": "ring at 8884 Hz not tamed: GEQ band cannot cut deeper than -9 dB or the notch budget is spent",
+ "connection_lost": false,
+ "restored": null,
+ "preflight": {
+  "warnings": [
+   "ch.15 'Drum OH2': sends to Main LR but is muted",
+   "ch.16 'Drum FX': sends to Main LR but is muted"
+  ],
+  "mics": [
+   {
+    "ch": 4,
+    "target": "ch.4",
+    "name": "Lead Vox",
+    "muted": false,
+    "send_db": 0.0,
+    "send": "0.0",
+    "source": "IN04",
+    "physical_input": true,
+    "in_mute_group": false,
+    "patch_mic": null,
+    "owner": null,
+    "include": true,
+    "notes": []
+   },
+   {
+    "ch": 15,
+    "target": "ch.15",
+    "name": "Drum OH2",
+    "muted": true,
+    "send_db": -1.0,
+    "send": "-1.0",
+    "source": "IN15",
+    "physical_input": true,
+    "in_mute_group": false,
+    "patch_mic": null,
+    "owner": null,
+    "include": false,
+    "notes": [
+     "sends to Main LR but is muted"
+    ]
+   },
+   {
+    "ch": 16,
+    "target": "ch.16",
+    "name": "Drum FX",
+    "muted": true,
+    "send_db": -1.5,
+    "send": "-1.5",
+    "source": "IN16",
+    "physical_input": true,
+    "in_mute_group": false,
+    "patch_mic": null,
+    "owner": null,
+    "include": false,
+    "notes": [
+     "sends to Main LR but is muted"
+    ]
+   }
+  ],
+  "included": [
+   4
+  ]
+ },
+ "expected_mics": null,
+ "summary": "ring-out Main LR: master -25.1 -> -11.1 dB (highest -5.1), 2 notch(es), feedback first at -9.1 dB; ABORT: ring at 8884 Hz not tamed: GEQ band cannot cut deeper than -9 dB or the notch budget is spent"
+}

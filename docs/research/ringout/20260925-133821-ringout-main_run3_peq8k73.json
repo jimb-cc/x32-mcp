@@ -1,0 +1,1762 @@
+{
+ "session_id": "20260925-133821-ringout-main",
+ "system_id": null,
+ "mode": "ringout",
+ "bus": "main",
+ "target": "main.st",
+ "bus_name": "",
+ "started": "2026-09-25T13:38:21",
+ "ended": "2026-09-25T13:38:55",
+ "duration_s": 34.2,
+ "start_master_db": -25.1,
+ "start_master": "-25.1",
+ "end_master_db": -3.1,
+ "end_master": "-3.1",
+ "max_master_db": -0.1,
+ "max_master": "-0.1",
+ "gain_before_feedback_db": -8.1,
+ "gain_before_feedback": "-8.1",
+ "target_db": 0.0,
+ "step_db": 1.0,
+ "dwell_ms": 1500,
+ "notch_budget": 6,
+ "budget_left": 0,
+ "geq": {
+  "fx_slot": 5,
+  "side": "A",
+  "sel": "FX5L"
+ },
+ "rta": {
+  "target": "main.st",
+  "source_index": 72,
+  "post_eq": true,
+  "stat_expected": 168,
+  "stat_actual": 168,
+  "verified": true,
+  "options_cleared": false,
+  "autogain_cleared": false,
+  "detector_set_peak": false,
+  "decay_set_min": true,
+  "peakhold_cleared": false,
+  "gain_set": false,
+  "prefs_before": {
+   "source": 72,
+   "pos": 1,
+   "autogain": 0,
+   "det": 1,
+   "decay": 0.3333333432674408,
+   "peakhold": 0,
+   "options": 0,
+   "gain": 0.0
+  },
+  "settle_attempts": 1,
+  "settle_ms": 0.0
+ },
+ "rta_restored": {
+  "restored": [
+   "source",
+   "pos",
+   "autogain",
+   "det",
+   "decay",
+   "peakhold",
+   "gain"
+  ],
+  "failed": []
+ },
+ "snapshot": "20260925-133821-ringout-pre-main-st",
+ "notches": [
+  {
+   "bus": "main",
+   "band": 15,
+   "freq_hz": 500.0,
+   "depth_db": -3.0,
+   "session_id": "20260925-133821-ringout-main",
+   "ts": 1790339934.8273199,
+   "detections": 1,
+   "confidence": 0.9131738467763582,
+   "fx_slot": 5,
+   "side": "A",
+   "tiers": [
+    "A"
+   ]
+  },
+  {
+   "bus": "main",
+   "band": 18,
+   "freq_hz": 1000.0,
+   "depth_db": -3.0,
+   "session_id": "20260925-133821-ringout-main",
+   "ts": 1790339933.7977002,
+   "detections": 1,
+   "confidence": 0.8445040750845236,
+   "fx_slot": 5,
+   "side": "A",
+   "tiers": [
+    "A"
+   ]
+  },
+  {
+   "bus": "main",
+   "band": 23,
+   "freq_hz": 3150.0,
+   "depth_db": -6.0,
+   "session_id": "20260925-133821-ringout-main",
+   "ts": 1790339932.777023,
+   "detections": 2,
+   "confidence": 0.8774575471865078,
+   "fx_slot": 5,
+   "side": "A",
+   "tiers": [
+    "A"
+   ]
+  },
+  {
+   "bus": "main",
+   "band": 25,
+   "freq_hz": 5000.0,
+   "depth_db": -9.0,
+   "session_id": "20260925-133821-ringout-main",
+   "ts": 1790339932.7249758,
+   "detections": 3,
+   "confidence": 0.9067752246938997,
+   "fx_slot": 5,
+   "side": "A",
+   "tiers": [
+    "A"
+   ]
+  },
+  {
+   "bus": "main",
+   "band": 27,
+   "freq_hz": 8000.0,
+   "depth_db": -9.0,
+   "session_id": "20260925-133821-ringout-main",
+   "ts": 1790339931.9028854,
+   "detections": 3,
+   "confidence": 0.8249120983532733,
+   "fx_slot": 5,
+   "side": "A",
+   "tiers": [
+    "A"
+   ]
+  },
+  {
+   "bus": "main",
+   "band": 28,
+   "freq_hz": 10000.0,
+   "depth_db": -6.0,
+   "session_id": "20260925-133821-ringout-main",
+   "ts": 1790339934.6718197,
+   "detections": 2,
+   "confidence": 0.999,
+   "fx_slot": 5,
+   "side": "A",
+   "tiers": [
+    "A"
+   ]
+  }
+ ],
+ "existing_cuts": [],
+ "detections": 13,
+ "detection_log": [
+  {
+   "ts": 1790339925.596486,
+   "band": 80,
+   "freq_hz": 5026.514130385902,
+   "level_db": -81.515625,
+   "prominence_db": 15.48828125,
+   "slope_db_per_s": 9.955289901230831,
+   "frames": 30,
+   "confidence": 0.8373138573884917,
+   "reasons": [
+    "narrow",
+    "no_family",
+    "stable",
+    "sustained",
+    "new_energy",
+    "in_window",
+    "rise7dB"
+   ],
+   "class": "STRONG",
+   "centroid_band": 80.08,
+   "narrow_db": 14.7,
+   "rise_db": 7.0,
+   "excess_db": 14.5,
+   "master_db": -8.1
+  },
+  {
+   "ts": 1790339929.292346,
+   "band": 80,
+   "freq_hz": 5074.800090569674,
+   "level_db": -82.2421875,
+   "prominence_db": 15.890889084854237,
+   "slope_db_per_s": 7.1898976543275195,
+   "frames": 18,
+   "confidence": 0.8382529245211949,
+   "reasons": [
+    "narrow",
+    "no_family",
+    "stable",
+    "sustained",
+    "new_energy",
+    "in_window",
+    "rise7dB"
+   ],
+   "class": "STRONG",
+   "centroid_band": 80.21,
+   "narrow_db": 14.8,
+   "rise_db": 6.9,
+   "excess_db": 14.0,
+   "master_db": -5.1
+  },
+  {
+   "ts": 1790339929.7487724,
+   "band": 88,
+   "freq_hz": 8892.082786813868,
+   "level_db": -68.09375,
+   "prominence_db": 30.498275664145922,
+   "slope_db_per_s": 16.32956250063745,
+   "frames": 9,
+   "confidence": 0.8249120983532733,
+   "reasons": [
+    "narrow",
+    "no_family",
+    "stable",
+    "sustained",
+    "new_energy",
+    "in_window",
+    "rise6dB",
+    "fastrise22dB@89dB/s"
+   ],
+   "class": "STRONG",
+   "centroid_band": 88.31,
+   "narrow_db": 14.9,
+   "rise_db": 6.0,
+   "excess_db": 28.6,
+   "master_db": -4.1
+  },
+  {
+   "ts": 1790339931.746744,
+   "band": 75,
+   "freq_hz": 3540.847787040466,
+   "level_db": -77.6953125,
+   "prominence_db": 19.30859375,
+   "slope_db_per_s": 46.72506878783442,
+   "frames": 5,
+   "confidence": 0.8202513887997671,
+   "reasons": [
+    "narrow",
+    "no_family",
+    "stable",
+    "sustained",
+    "new_energy",
+    "in_window",
+    "rise6dB"
+   ],
+   "class": "STRONG",
+   "centroid_band": 75.02,
+   "narrow_db": 19.3,
+   "rise_db": 6.3,
+   "excess_db": 18.8,
+   "master_db": -3.1
+  },
+  {
+   "ts": 1790339931.9028854,
+   "band": 91,
+   "freq_hz": 10733.50647925349,
+   "level_db": -81.23046875,
+   "prominence_db": 15.7734375,
+   "slope_db_per_s": 8.320677835524682,
+   "frames": 41,
+   "confidence": 0.8244611378233954,
+   "reasons": [
+    "narrow",
+    "no_family",
+    "stable",
+    "sustained",
+    "new_energy",
+    "in_window",
+    "rise7dB"
+   ],
+   "class": "STRONG",
+   "centroid_band": 91.02,
+   "narrow_db": 10.8,
+   "rise_db": 7.2,
+   "excess_db": 14.4,
+   "master_db": -3.1
+  },
+  {
+   "ts": 1790339932.7249758,
+   "band": 81,
+   "freq_hz": 5344.015308377319,
+   "level_db": -65.73046875,
+   "prominence_db": 31.2734375,
+   "slope_db_per_s": 30.571001045112894,
+   "frames": 8,
+   "confidence": 0.9067752246938997,
+   "reasons": [
+    "narrow",
+    "no_family",
+    "stable",
+    "sustained",
+    "new_energy",
+    "in_window",
+    "rise7dB"
+   ],
+   "class": "STRONG",
+   "centroid_band": 80.96,
+   "narrow_db": 31.3,
+   "rise_db": 7.4,
+   "excess_db": 30.4,
+   "master_db": -2.1
+  },
+  {
+   "ts": 1790339932.777023,
+   "band": 75,
+   "freq_hz": 3543.5716949510957,
+   "level_db": -68.67578125,
+   "prominence_db": 23.865234375,
+   "slope_db_per_s": 27.83101441977328,
+   "frames": 24,
+   "confidence": 0.8774575471865078,
+   "reasons": [
+    "narrow",
+    "no_family",
+    "stable",
+    "sustained",
+    "new_energy",
+    "in_window",
+    "rise6dB"
+   ],
+   "class": "STRONG",
+   "centroid_band": 75.03,
+   "narrow_db": 19.4,
+   "rise_db": 6.0,
+   "excess_db": 27.6,
+   "master_db": -2.1
+  },
+  {
+   "ts": 1790339932.929675,
+   "band": 91,
+   "freq_hz": 10725.159192117897,
+   "level_db": -8.88671875,
+   "prominence_db": 80.037109375,
+   "slope_db_per_s": 135.058416513188,
+   "frames": 61,
+   "confidence": 0.999,
+   "reasons": [
+    "narrow",
+    "no_family",
+    "stable",
+    "sustained",
+    "new_energy",
+    "in_window",
+    "rise51dB",
+    "fastrise24dB@97dB/s",
+    "loud"
+   ],
+   "class": "STRONG",
+   "centroid_band": 91.01,
+   "narrow_db": 50.3,
+   "rise_db": 51.2,
+   "excess_db": 86.5,
+   "master_db": -2.1
+  },
+  {
+   "ts": 1790339933.7977002,
+   "band": 58,
+   "freq_hz": 1090.7437010136052,
+   "level_db": -70.17578125,
+   "prominence_db": 26.66796875,
+   "slope_db_per_s": 10.878755039213516,
+   "frames": 26,
+   "confidence": 0.8445040750845236,
+   "reasons": [
+    "narrow",
+    "no_family",
+    "stable",
+    "sustained",
+    "new_energy",
+    "in_window",
+    "fastrise17dB@66dB/s"
+   ],
+   "class": "STRONG",
+   "centroid_band": 58.03,
+   "narrow_db": 23.3,
+   "rise_db": 6.0,
+   "excess_db": 25.9,
+   "master_db": -1.1
+  },
+  {
+   "ts": 1790339934.6718197,
+   "band": 91,
+   "freq_hz": 10725.68737943475,
+   "level_db": -3.07421875,
+   "prominence_db": 83.220703125,
+   "slope_db_per_s": 22.193760345273933,
+   "frames": 95,
+   "confidence": 0.95625,
+   "reasons": [
+    "narrow",
+    "no_family",
+    "stable",
+    "sustained",
+    "new_energy",
+    "in_window",
+    "loud"
+   ],
+   "class": "STRONG",
+   "centroid_band": 91.01,
+   "narrow_db": 50.2,
+   "rise_db": -0.2,
+   "excess_db": 89.8,
+   "master_db": -0.1
+  },
+  {
+   "ts": 1790339934.8273199,
+   "band": 46,
+   "freq_hz": 472.1845800206584,
+   "level_db": -72.28515625,
+   "prominence_db": 24.71875,
+   "slope_db_per_s": 28.581585200625888,
+   "frames": 41,
+   "confidence": 0.9131738467763582,
+   "reasons": [
+    "narrow",
+    "no_family",
+    "stable",
+    "sustained",
+    "new_energy",
+    "in_window",
+    "rise10dB"
+   ],
+   "class": "STRONG",
+   "centroid_band": 45.95,
+   "narrow_db": 24.7,
+   "rise_db": 9.5,
+   "excess_db": 23.9,
+   "master_db": -0.1
+  },
+  {
+   "ts": 1790339934.9314146,
+   "band": 58,
+   "freq_hz": 1093.1170930676208,
+   "level_db": -66.9296875,
+   "prominence_db": 27.8671875,
+   "slope_db_per_s": 31.329165045729923,
+   "frames": 48,
+   "confidence": 0.9002425349928683,
+   "reasons": [
+    "narrow",
+    "no_family",
+    "stable",
+    "sustained",
+    "new_energy",
+    "in_window",
+    "rise11dB"
+   ],
+   "class": "STRONG",
+   "centroid_band": 58.07,
+   "narrow_db": 23.5,
+   "rise_db": 11.4,
+   "excess_db": 28.7,
+   "master_db": -0.1
+  },
+  {
+   "ts": 1790339935.0835526,
+   "band": 75,
+   "freq_hz": 3545.5686587183113,
+   "level_db": -73.29296875,
+   "prominence_db": 23.7109375,
+   "slope_db_per_s": 25.759622550441595,
+   "frames": 12,
+   "confidence": 0.869481995742019,
+   "reasons": [
+    "narrow",
+    "no_family",
+    "stable",
+    "sustained",
+    "new_energy",
+    "in_window",
+    "rise8dB"
+   ],
+   "class": "STRONG",
+   "centroid_band": 75.04,
+   "narrow_db": 23.7,
+   "rise_db": 8.1,
+   "excess_db": 22.7,
+   "master_db": -0.1
+  }
+ ],
+ "notch_log": [
+  {
+   "bus": "main",
+   "band": 25,
+   "freq_hz": 5000.0,
+   "depth_db": -3.0,
+   "session_id": "20260925-133821-ringout-main",
+   "ts": 1790339925.596486,
+   "detections": 1,
+   "confidence": 0.8373138573884917,
+   "fx_slot": 5,
+   "side": "A",
+   "rta_band": 80,
+   "rta_freq_hz": 5026.514130385902,
+   "level_db": -81.515625,
+   "master_db": -8.1,
+   "tier": "A",
+   "policy": null,
+   "reasons": [
+    "narrow",
+    "no_family",
+    "stable",
+    "sustained",
+    "new_energy",
+    "in_window",
+    "rise7dB"
+   ]
+  },
+  {
+   "bus": "main",
+   "band": 25,
+   "freq_hz": 5000.0,
+   "depth_db": -6.0,
+   "session_id": "20260925-133821-ringout-main",
+   "ts": 1790339929.292346,
+   "detections": 2,
+   "confidence": 0.8382529245211949,
+   "fx_slot": 5,
+   "side": "A",
+   "tiers": [
+    "A"
+   ],
+   "rta_band": 80,
+   "rta_freq_hz": 5074.800090569674,
+   "level_db": -82.2421875,
+   "master_db": -5.1,
+   "tier": "A",
+   "policy": null,
+   "reasons": [
+    "narrow",
+    "no_family",
+    "stable",
+    "sustained",
+    "new_energy",
+    "in_window",
+    "rise7dB"
+   ]
+  },
+  {
+   "bus": "main",
+   "band": 27,
+   "freq_hz": 8000.0,
+   "depth_db": -3.0,
+   "session_id": "20260925-133821-ringout-main",
+   "ts": 1790339929.7487724,
+   "detections": 1,
+   "confidence": 0.8249120983532733,
+   "fx_slot": 5,
+   "side": "A",
+   "rta_band": 88,
+   "rta_freq_hz": 8892.082786813868,
+   "level_db": -68.09375,
+   "master_db": -4.1,
+   "tier": "A",
+   "policy": null,
+   "reasons": [
+    "narrow",
+    "no_family",
+    "stable",
+    "sustained",
+    "new_energy",
+    "in_window",
+    "rise6dB",
+    "fastrise22dB@89dB/s"
+   ]
+  },
+  {
+   "bus": "main",
+   "band": 27,
+   "freq_hz": 8000.0,
+   "depth_db": -6.0,
+   "session_id": "20260925-133821-ringout-main",
+   "ts": 1790339929.7487724,
+   "detections": 2,
+   "confidence": 0.8249120983532733,
+   "fx_slot": 5,
+   "side": "A",
+   "tiers": [
+    "A"
+   ],
+   "rta_band": 88,
+   "rta_freq_hz": 8892.082786813868,
+   "level_db": -68.09375,
+   "master_db": -4.1,
+   "tier": "A",
+   "policy": null,
+   "reasons": [
+    "narrow",
+    "no_family",
+    "stable",
+    "sustained",
+    "new_energy",
+    "in_window",
+    "rise6dB",
+    "fastrise22dB@89dB/s"
+   ]
+  },
+  {
+   "bus": "main",
+   "band": 23,
+   "freq_hz": 3150.0,
+   "depth_db": -3.0,
+   "session_id": "20260925-133821-ringout-main",
+   "ts": 1790339931.746744,
+   "detections": 1,
+   "confidence": 0.8202513887997671,
+   "fx_slot": 5,
+   "side": "A",
+   "rta_band": 75,
+   "rta_freq_hz": 3540.847787040466,
+   "level_db": -77.6953125,
+   "master_db": -3.1,
+   "tier": "A",
+   "policy": null,
+   "reasons": [
+    "narrow",
+    "no_family",
+    "stable",
+    "sustained",
+    "new_energy",
+    "in_window",
+    "rise6dB"
+   ]
+  },
+  {
+   "bus": "main",
+   "band": 27,
+   "freq_hz": 8000.0,
+   "depth_db": -9.0,
+   "session_id": "20260925-133821-ringout-main",
+   "ts": 1790339931.9028854,
+   "detections": 3,
+   "confidence": 0.8249120983532733,
+   "fx_slot": 5,
+   "side": "A",
+   "tiers": [
+    "A"
+   ],
+   "rta_band": 91,
+   "rta_freq_hz": 10733.50647925349,
+   "level_db": -81.23046875,
+   "master_db": -3.1,
+   "tier": "A",
+   "policy": null,
+   "reasons": [
+    "narrow",
+    "no_family",
+    "stable",
+    "sustained",
+    "new_energy",
+    "in_window",
+    "rise7dB"
+   ]
+  },
+  {
+   "bus": "main",
+   "band": 25,
+   "freq_hz": 5000.0,
+   "depth_db": -9.0,
+   "session_id": "20260925-133821-ringout-main",
+   "ts": 1790339932.7249758,
+   "detections": 3,
+   "confidence": 0.9067752246938997,
+   "fx_slot": 5,
+   "side": "A",
+   "tiers": [
+    "A"
+   ],
+   "rta_band": 81,
+   "rta_freq_hz": 5344.015308377319,
+   "level_db": -65.73046875,
+   "master_db": -2.1,
+   "tier": "A",
+   "policy": null,
+   "reasons": [
+    "narrow",
+    "no_family",
+    "stable",
+    "sustained",
+    "new_energy",
+    "in_window",
+    "rise7dB"
+   ]
+  },
+  {
+   "bus": "main",
+   "band": 23,
+   "freq_hz": 3150.0,
+   "depth_db": -6.0,
+   "session_id": "20260925-133821-ringout-main",
+   "ts": 1790339932.777023,
+   "detections": 2,
+   "confidence": 0.8774575471865078,
+   "fx_slot": 5,
+   "side": "A",
+   "tiers": [
+    "A"
+   ],
+   "rta_band": 75,
+   "rta_freq_hz": 3543.5716949510957,
+   "level_db": -68.67578125,
+   "master_db": -2.1,
+   "tier": "A",
+   "policy": null,
+   "reasons": [
+    "narrow",
+    "no_family",
+    "stable",
+    "sustained",
+    "new_energy",
+    "in_window",
+    "rise6dB"
+   ]
+  },
+  {
+   "bus": "main",
+   "band": 28,
+   "freq_hz": 10000.0,
+   "depth_db": -3.0,
+   "session_id": "20260925-133821-ringout-main",
+   "ts": 1790339932.929675,
+   "detections": 1,
+   "confidence": 0.999,
+   "fx_slot": 5,
+   "side": "A",
+   "rta_band": 91,
+   "rta_freq_hz": 10725.159192117897,
+   "level_db": -8.88671875,
+   "master_db": -2.1,
+   "tier": "A",
+   "policy": null,
+   "reasons": [
+    "narrow",
+    "no_family",
+    "stable",
+    "sustained",
+    "new_energy",
+    "in_window",
+    "rise51dB",
+    "fastrise24dB@97dB/s",
+    "loud"
+   ]
+  },
+  {
+   "bus": "main",
+   "band": 18,
+   "freq_hz": 1000.0,
+   "depth_db": -3.0,
+   "session_id": "20260925-133821-ringout-main",
+   "ts": 1790339933.7977002,
+   "detections": 1,
+   "confidence": 0.8445040750845236,
+   "fx_slot": 5,
+   "side": "A",
+   "rta_band": 58,
+   "rta_freq_hz": 1090.7437010136052,
+   "level_db": -70.17578125,
+   "master_db": -1.1,
+   "tier": "A",
+   "policy": null,
+   "reasons": [
+    "narrow",
+    "no_family",
+    "stable",
+    "sustained",
+    "new_energy",
+    "in_window",
+    "fastrise17dB@66dB/s"
+   ]
+  },
+  {
+   "bus": "main",
+   "band": 28,
+   "freq_hz": 10000.0,
+   "depth_db": -6.0,
+   "session_id": "20260925-133821-ringout-main",
+   "ts": 1790339934.6718197,
+   "detections": 2,
+   "confidence": 0.999,
+   "fx_slot": 5,
+   "side": "A",
+   "tiers": [
+    "A"
+   ],
+   "rta_band": 91,
+   "rta_freq_hz": 10725.68737943475,
+   "level_db": -3.07421875,
+   "master_db": -0.1,
+   "tier": "A",
+   "policy": null,
+   "reasons": [
+    "narrow",
+    "no_family",
+    "stable",
+    "sustained",
+    "new_energy",
+    "in_window",
+    "loud"
+   ]
+  },
+  {
+   "bus": "main",
+   "band": 15,
+   "freq_hz": 500.0,
+   "depth_db": -3.0,
+   "session_id": "20260925-133821-ringout-main",
+   "ts": 1790339934.8273199,
+   "detections": 1,
+   "confidence": 0.9131738467763582,
+   "fx_slot": 5,
+   "side": "A",
+   "rta_band": 46,
+   "rta_freq_hz": 472.1845800206584,
+   "level_db": -72.28515625,
+   "master_db": -0.1,
+   "tier": "A",
+   "policy": null,
+   "reasons": [
+    "narrow",
+    "no_family",
+    "stable",
+    "sustained",
+    "new_energy",
+    "in_window",
+    "rise10dB"
+   ]
+  }
+ ],
+ "stages": [
+  {
+   "stage": "PREFLIGHT",
+   "ts": 1790339901.0158696,
+   "master_db": -25.1
+  },
+  {
+   "stage": "SNAPSHOT",
+   "ts": 1790339901.0158696,
+   "master_db": -25.1
+  },
+  {
+   "stage": "ARM",
+   "ts": 1790339901.0228758,
+   "master_db": -25.1,
+   "target_db": 0.0,
+   "step_db": 1.0,
+   "dwell_ms": 1500
+  },
+  {
+   "stage": "RAISE",
+   "ts": 1790339901.0599093,
+   "master_db": -24.1
+  },
+  {
+   "stage": "RAISE",
+   "ts": 1790339902.55451,
+   "master_db": -23.1
+  },
+  {
+   "stage": "RAISE",
+   "ts": 1790339904.0543377,
+   "master_db": -22.1
+  },
+  {
+   "stage": "RAISE",
+   "ts": 1790339905.5642269,
+   "master_db": -21.1
+  },
+  {
+   "stage": "RAISE",
+   "ts": 1790339907.0646193,
+   "master_db": -20.1
+  },
+  {
+   "stage": "RAISE",
+   "ts": 1790339908.5527518,
+   "master_db": -19.1
+  },
+  {
+   "stage": "RAISE",
+   "ts": 1790339910.0695984,
+   "master_db": -18.1
+  },
+  {
+   "stage": "RAISE",
+   "ts": 1790339911.5814633,
+   "master_db": -17.1
+  },
+  {
+   "stage": "RAISE",
+   "ts": 1790339913.096404,
+   "master_db": -16.1
+  },
+  {
+   "stage": "RAISE",
+   "ts": 1790339914.6129622,
+   "master_db": -15.1
+  },
+  {
+   "stage": "RAISE",
+   "ts": 1790339916.1043248,
+   "master_db": -14.1
+  },
+  {
+   "stage": "RAISE",
+   "ts": 1790339917.6210291,
+   "master_db": -13.1
+  },
+  {
+   "stage": "RAISE",
+   "ts": 1790339919.128397,
+   "master_db": -12.1
+  },
+  {
+   "stage": "RAISE",
+   "ts": 1790339920.649746,
+   "master_db": -11.1
+  },
+  {
+   "stage": "RAISE",
+   "ts": 1790339922.1552458,
+   "master_db": -10.1
+  },
+  {
+   "stage": "RAISE",
+   "ts": 1790339923.6506188,
+   "master_db": -9.1
+  },
+  {
+   "stage": "RAISE",
+   "ts": 1790339925.1410723,
+   "master_db": -8.1
+  },
+  {
+   "stage": "HOLD",
+   "ts": 1790339925.5974867,
+   "master_db": -8.1,
+   "freq_hz": 5026.5,
+   "rta_band": 80,
+   "confidence": 0.837
+  },
+  {
+   "stage": "NOTCH",
+   "ts": 1790339925.598488,
+   "master_db": -8.1,
+   "freq_hz": 5026.5,
+   "rta_band": 80,
+   "level_db": -81.5,
+   "band": 25,
+   "depth_db": -3.0
+  },
+  {
+   "stage": "VERIFY",
+   "ts": 1790339925.90527,
+   "master_db": -8.1,
+   "band": 25,
+   "depth_db": -3.0,
+   "ok": true,
+   "drop_db": 11.2,
+   "required_db": 6.0
+  },
+  {
+   "stage": "RAISE",
+   "ts": 1790339925.9072719,
+   "master_db": -7.1
+  },
+  {
+   "stage": "RAISE",
+   "ts": 1790339927.3929985,
+   "master_db": -6.1
+  },
+  {
+   "stage": "RAISE",
+   "ts": 1790339928.9114602,
+   "master_db": -5.1
+  },
+  {
+   "stage": "HOLD",
+   "ts": 1790339929.2943478,
+   "master_db": -5.1,
+   "freq_hz": 5074.8,
+   "rta_band": 80,
+   "confidence": 0.838
+  },
+  {
+   "stage": "NOTCH",
+   "ts": 1790339929.295349,
+   "master_db": -5.1,
+   "freq_hz": 5074.8,
+   "rta_band": 80,
+   "level_db": -82.2,
+   "band": 25,
+   "depth_db": -6.0
+  },
+  {
+   "stage": "VERIFY",
+   "ts": 1790339929.4955423,
+   "master_db": -5.1,
+   "band": 25,
+   "depth_db": -6.0,
+   "ok": true,
+   "drop_db": 9.6,
+   "required_db": 6.0
+  },
+  {
+   "stage": "RAISE",
+   "ts": 1790339929.4975443,
+   "master_db": -4.1
+  },
+  {
+   "stage": "HOLD",
+   "ts": 1790339929.749773,
+   "master_db": -4.1,
+   "freq_hz": 8892.1,
+   "rta_band": 88,
+   "confidence": 0.825
+  },
+  {
+   "stage": "NOTCH",
+   "ts": 1790339929.751775,
+   "master_db": -4.1,
+   "freq_hz": 8892.1,
+   "rta_band": 88,
+   "level_db": -68.1,
+   "band": 27,
+   "depth_db": -3.0
+  },
+  {
+   "stage": "VERIFY",
+   "ts": 1790339931.2642503,
+   "master_db": -4.1,
+   "band": 27,
+   "depth_db": -3.0,
+   "ok": false,
+   "drop_db": 4.5,
+   "required_db": 6.0
+  },
+  {
+   "stage": "NOTCH",
+   "ts": 1790339931.265252,
+   "master_db": -4.1,
+   "freq_hz": 8892.1,
+   "rta_band": 88,
+   "level_db": -68.1,
+   "band": 27,
+   "depth_db": -6.0
+  },
+  {
+   "stage": "VERIFY",
+   "ts": 1790339931.3923004,
+   "master_db": -4.1,
+   "band": 27,
+   "depth_db": -6.0,
+   "ok": true,
+   "drop_db": 10.7,
+   "required_db": 6.0
+  },
+  {
+   "stage": "RAISE",
+   "ts": 1790339931.3943014,
+   "master_db": -3.1
+  },
+  {
+   "stage": "HOLD",
+   "ts": 1790339931.7487457,
+   "master_db": -3.1,
+   "freq_hz": 3540.8,
+   "rta_band": 75,
+   "confidence": 0.82
+  },
+  {
+   "stage": "NOTCH",
+   "ts": 1790339931.7497463,
+   "master_db": -3.1,
+   "freq_hz": 3540.8,
+   "rta_band": 75,
+   "level_db": -77.7,
+   "band": 23,
+   "depth_db": -3.0
+  },
+  {
+   "stage": "VERIFY",
+   "ts": 1790339932.2099714,
+   "master_db": -3.1,
+   "band": 23,
+   "depth_db": -3.0,
+   "ok": true,
+   "drop_db": 10.2,
+   "required_db": 6.0
+  },
+  {
+   "stage": "HOLD",
+   "ts": 1790339932.2109723,
+   "master_db": -3.1,
+   "freq_hz": 10733.5,
+   "rta_band": 91,
+   "confidence": 0.824
+  },
+  {
+   "stage": "NOTCH",
+   "ts": 1790339932.2119734,
+   "master_db": -3.1,
+   "freq_hz": 10733.5,
+   "rta_band": 91,
+   "level_db": -81.2,
+   "band": 27,
+   "depth_db": -9.0
+  },
+  {
+   "stage": "VERIFY",
+   "ts": 1790339932.314066,
+   "master_db": -3.1,
+   "band": 27,
+   "depth_db": -9.0,
+   "ok": true,
+   "drop_db": 7.0,
+   "required_db": 6.0
+  },
+  {
+   "stage": "RAISE",
+   "ts": 1790339932.3160672,
+   "master_db": -2.1
+  },
+  {
+   "stage": "HOLD",
+   "ts": 1790339932.7269773,
+   "master_db": -2.1,
+   "freq_hz": 5344.0,
+   "rta_band": 81,
+   "confidence": 0.907
+  },
+  {
+   "stage": "NOTCH",
+   "ts": 1790339932.7279785,
+   "master_db": -2.1,
+   "freq_hz": 5344.0,
+   "rta_band": 81,
+   "level_db": -65.7,
+   "band": 25,
+   "depth_db": -9.0
+  },
+  {
+   "stage": "VERIFY",
+   "ts": 1790339932.982723,
+   "master_db": -2.1,
+   "band": 25,
+   "depth_db": -9.0,
+   "ok": true,
+   "drop_db": 11.1,
+   "required_db": 6.0
+  },
+  {
+   "stage": "HOLD",
+   "ts": 1790339932.982723,
+   "master_db": -2.1,
+   "freq_hz": 3543.6,
+   "rta_band": 75,
+   "confidence": 0.877
+  },
+  {
+   "stage": "NOTCH",
+   "ts": 1790339932.984725,
+   "master_db": -2.1,
+   "freq_hz": 3543.6,
+   "rta_band": 75,
+   "level_db": -64.9,
+   "band": 23,
+   "depth_db": -6.0
+  },
+  {
+   "stage": "VERIFY",
+   "ts": 1790339933.242989,
+   "master_db": -2.1,
+   "band": 23,
+   "depth_db": -6.0,
+   "ok": true,
+   "drop_db": 11.9,
+   "required_db": 6.0
+  },
+  {
+   "stage": "HOLD",
+   "ts": 1790339933.242989,
+   "master_db": -2.1,
+   "freq_hz": 10725.2,
+   "rta_band": 91,
+   "confidence": 0.999
+  },
+  {
+   "stage": "NOTCH",
+   "ts": 1790339933.2449908,
+   "master_db": -2.1,
+   "freq_hz": 10725.2,
+   "rta_band": 91,
+   "level_db": -2.1,
+   "band": 28,
+   "depth_db": -3.0
+  },
+  {
+   "stage": "VERIFY",
+   "ts": 1790339933.4944243,
+   "master_db": -2.1,
+   "band": 28,
+   "depth_db": -3.0,
+   "ok": true,
+   "drop_db": 10.0,
+   "required_db": 6.0
+  },
+  {
+   "stage": "RAISE",
+   "ts": 1790339933.4964259,
+   "master_db": -1.1
+  },
+  {
+   "stage": "HOLD",
+   "ts": 1790339933.7987008,
+   "master_db": -1.1,
+   "freq_hz": 1090.7,
+   "rta_band": 58,
+   "confidence": 0.845
+  },
+  {
+   "stage": "NOTCH",
+   "ts": 1790339933.8007028,
+   "master_db": -1.1,
+   "freq_hz": 1090.7,
+   "rta_band": 58,
+   "level_db": -70.2,
+   "band": 18,
+   "depth_db": -3.0
+  },
+  {
+   "stage": "VERIFY",
+   "ts": 1790339934.3652747,
+   "master_db": -1.1,
+   "band": 18,
+   "depth_db": -3.0,
+   "ok": true,
+   "drop_db": 11.4,
+   "required_db": 6.0
+  },
+  {
+   "stage": "RAISE",
+   "ts": 1790339934.3672762,
+   "master_db": -0.1
+  },
+  {
+   "stage": "HOLD",
+   "ts": 1790339934.673772,
+   "master_db": -0.1,
+   "freq_hz": 10725.7,
+   "rta_band": 91,
+   "confidence": 0.956
+  },
+  {
+   "stage": "NOTCH",
+   "ts": 1790339934.6747735,
+   "master_db": -0.1,
+   "freq_hz": 10725.7,
+   "rta_band": 91,
+   "level_db": -3.1,
+   "band": 28,
+   "depth_db": -6.0
+  },
+  {
+   "stage": "VERIFY",
+   "ts": 1790339934.8823698,
+   "master_db": -0.1,
+   "band": 28,
+   "depth_db": -6.0,
+   "ok": true,
+   "drop_db": 10.4,
+   "required_db": 6.0
+  },
+  {
+   "stage": "HOLD",
+   "ts": 1790339934.8823698,
+   "master_db": -0.1,
+   "freq_hz": 472.2,
+   "rta_band": 46,
+   "confidence": 0.913
+  },
+  {
+   "stage": "NOTCH",
+   "ts": 1790339934.883371,
+   "master_db": -0.1,
+   "freq_hz": 472.2,
+   "rta_band": 46,
+   "level_db": -71.0,
+   "band": 15,
+   "depth_db": -3.0
+  },
+  {
+   "stage": "VERIFY",
+   "ts": 1790339935.1897216,
+   "master_db": -0.1,
+   "band": 15,
+   "depth_db": -3.0,
+   "ok": true,
+   "drop_db": 11.6,
+   "required_db": 6.0
+  },
+  {
+   "stage": "BACKOFF",
+   "ts": 1790339935.1897216,
+   "master_db": -0.1,
+   "to_db": -3.1,
+   "backoff_db": 3.0
+  },
+  {
+   "stage": "DONE",
+   "ts": 1790339935.1917233,
+   "master_db": -3.1,
+   "reason": "notch budget spent"
+  }
+ ],
+ "frames": 665,
+ "detector": {
+  "flags": [
+   "PROGRAMME_PRESENT"
+  ],
+  "release_db_per_s": 106.875,
+  "arm_p95_db": -96.90234375,
+  "loud_threshold_db": -10.0,
+  "loudish_threshold_db": -20.0,
+  "window_low_hz": 70.7,
+  "cut_verdicts": [
+   {
+    "ts": 1790339925.855,
+    "freq_hz": 5028.8,
+    "band": 80,
+    "step_db": -3.0,
+    "depth_db": -3.0,
+    "bell_db": [
+     2.99,
+     3.0
+    ],
+    "drop_db": 6.54,
+    "verdict": "confirmed",
+    "deepen": false,
+    "emitted": true
+   },
+   {
+    "ts": 1790339929.495,
+    "freq_hz": 5077.4,
+    "band": 80,
+    "step_db": -3.0,
+    "depth_db": -6.0,
+    "bell_db": [
+     2.91,
+     3.03
+    ],
+    "drop_db": 6.09,
+    "verdict": "confirmed",
+    "deepen": false,
+    "emitted": true
+   },
+   {
+    "ts": 1790339930.261,
+    "freq_hz": 8910.9,
+    "band": 88,
+    "step_db": -3.0,
+    "depth_db": -3.0,
+    "bell_db": [
+     1.64,
+     2.54
+    ],
+    "drop_db": -6.42,
+    "verdict": "insufficient",
+    "deepen": true,
+    "emitted": true
+   },
+   {
+    "ts": 1790339931.441,
+    "freq_hz": 8924.0,
+    "band": 88,
+    "step_db": -3.0,
+    "depth_db": -6.0,
+    "bell_db": [
+     0.69,
+     3.4
+    ],
+    "drop_db": 10.59,
+    "verdict": "confirmed",
+    "deepen": false,
+    "emitted": true
+   },
+   {
+    "ts": 1790339932.107,
+    "freq_hz": 3542.2,
+    "band": 75,
+    "step_db": -3.0,
+    "depth_db": -3.0,
+    "bell_db": [
+     1.49,
+     2.45
+    ],
+    "drop_db": 5.59,
+    "verdict": "confirmed",
+    "deepen": false,
+    "emitted": true
+   },
+   {
+    "ts": 1790339932.93,
+    "freq_hz": 5343.4,
+    "band": 81,
+    "step_db": -3.0,
+    "depth_db": -9.0,
+    "bell_db": [
+     1.06,
+     3.84
+    ],
+    "drop_db": 7.15,
+    "verdict": "confirmed",
+    "deepen": false,
+    "emitted": true
+   },
+   {
+    "ts": 1790339933.189,
+    "freq_hz": 3541.1,
+    "band": 75,
+    "step_db": -3.0,
+    "depth_db": -6.0,
+    "bell_db": [
+     0.52,
+     3.39
+    ],
+    "drop_db": 7.02,
+    "verdict": "confirmed",
+    "deepen": false,
+    "emitted": true
+   },
+   {
+    "ts": 1790339933.443,
+    "freq_hz": 10725.3,
+    "band": 91,
+    "step_db": -3.0,
+    "depth_db": -3.0,
+    "bell_db": [
+     2.2,
+     2.78
+    ],
+    "drop_db": 6.82,
+    "verdict": "confirmed",
+    "deepen": false,
+    "emitted": true
+   },
+   {
+    "ts": 1790339934.312,
+    "freq_hz": 1091.9,
+    "band": 58,
+    "step_db": -3.0,
+    "depth_db": -3.0,
+    "bell_db": [
+     1.92,
+     2.67
+    ],
+    "drop_db": 6.93,
+    "verdict": "confirmed",
+    "deepen": false,
+    "emitted": true
+   },
+   {
+    "ts": 1790339934.879,
+    "freq_hz": 10725.7,
+    "band": 91,
+    "step_db": -3.0,
+    "depth_db": -6.0,
+    "bell_db": [
+     1.58,
+     3.34
+    ],
+    "drop_db": 10.45,
+    "verdict": "confirmed",
+    "deepen": false,
+    "emitted": true
+   },
+   {
+    "ts": 1790339935.136,
+    "freq_hz": 470.1,
+    "band": 46,
+    "step_db": -3.0,
+    "depth_db": -3.0,
+    "bell_db": [
+     2.4,
+     2.85
+    ],
+    "drop_db": 8.49,
+    "verdict": "confirmed",
+    "deepen": false,
+    "emitted": true
+   }
+  ]
+ },
+ "policy": {
+  "config": {
+   "lf_edge": {
+    "hpf_factor": 0.7,
+    "no_hpf_hz": 100.0,
+    "floor_hz": 60.0
+   },
+   "programme_check_s": 5.0,
+   "refresh_arm_reference_on_programme": true,
+   "tier_b": {
+    "enabled": true,
+    "min_excess_db": 20.0,
+    "min_age_s": 0.6,
+    "cooldown_s": 2.0,
+    "held_deepen_s": 3.0,
+    "verdict_timeout_s": 4.0,
+    "ringout_probe_wait_dwells": 2.0,
+    "ringout_hold_raise": true,
+    "ended_drop_db": 6.0
+   },
+   "alerts": {
+    "events": true,
+    "scribble_strip": true,
+    "color": "RDi",
+    "clear_s": 2.0,
+    "min_write_interval_s": 1.0,
+    "hold_s": 0.5
+   },
+   "at_arm_watch_min_prominence_db": 30.0,
+   "reforce_ballistics_on_freeze": true,
+   "frozen_reforce_s": 1.0,
+   "frozen_abort_s": 5.0,
+   "backoff_probe": {
+    "enabled": true,
+    "drop_db": 3.0,
+    "min_response_db": 4.5,
+    "settle_s": 0.3
+   }
+  },
+  "lf_edge": {
+   "lf_edge_hz": 70.7,
+   "from": "ch 4 HPF 101 Hz",
+   "mics": [
+    {
+     "ch": 4,
+     "hpf_on": true,
+     "hpf_hz": 101.0,
+     "edge_hz": 70.7
+    }
+   ],
+   "lf_feedback_possible": false,
+   "window_low_hz": 70.7
+  },
+  "lf_feedback_possible": false,
+  "programme_present": {
+   "detected": true,
+   "first_seen_s": 32.28,
+   "armed_in_silence": true,
+   "arm_reference_refreshed_s": null,
+   "emit_moderate_forced_off": false
+  },
+  "tier_b": [],
+  "ignore": [],
+  "alerts": [
+   {
+    "t": 24.28,
+    "freq_hz": 5091.2,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 25.0,
+    "freq_hz": 5091.2,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 28.08,
+    "freq_hz": 5063.5,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 28.85,
+    "freq_hz": 5063.5,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 30.79,
+    "freq_hz": 10731.6,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 30.9,
+    "freq_hz": 3543.3,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 31.41,
+    "freq_hz": 10731.6,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 31.41,
+    "freq_hz": 3543.3,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 31.56,
+    "freq_hz": 3548.6,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 31.72,
+    "freq_hz": 1088.2,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 31.77,
+    "freq_hz": 5341.4,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 32.18,
+    "freq_hz": 3548.6,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 32.28,
+    "freq_hz": 5341.4,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 32.49,
+    "freq_hz": 1088.2,
+    "klass": "MODERATE",
+    "alert": "off"
+   },
+   {
+    "t": 33.56,
+    "freq_hz": 472.3,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 33.82,
+    "freq_hz": 294.3,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 33.92,
+    "freq_hz": 3556.7,
+    "klass": "MODERATE",
+    "alert": "on"
+   },
+   {
+    "t": 34.13,
+    "freq_hz": 472.3,
+    "klass": "MODERATE",
+    "alert": "off"
+   }
+  ],
+  "strip_color": {
+   "original": "WH",
+   "alert": "RDi",
+   "writes": 4,
+   "restored": true
+  },
+  "at_arm_suppressed": [],
+  "flags_seen": [
+   {
+    "flag": "PROGRAMME_PRESENT",
+    "first_seen_s": 32.34
+   }
+  ],
+  "ballistics_reforced": null,
+  "backoff_probes": [],
+  "errors": {}
+ },
+ "final_stage": "DONE",
+ "aborted": false,
+ "abort_reason": null,
+ "connection_lost": false,
+ "restored": null,
+ "preflight": {
+  "warnings": [
+   "ch.15 'Drum OH2': sends to Main LR but is muted",
+   "ch.16 'Drum FX': sends to Main LR but is muted",
+   "programme detected on Main LR during the ring-out (t+32.3 s): the 'stage is quiet' contract does not hold, so MODERATE lines are not cut, only probe-confirmed / loud / rising lines (and loud-ish lines by tier B)"
+  ],
+  "mics": [
+   {
+    "ch": 4,
+    "target": "ch.4",
+    "name": "Lead Vox",
+    "muted": false,
+    "send_db": 0.0,
+    "send": "0.0",
+    "source": "IN04",
+    "physical_input": true,
+    "in_mute_group": false,
+    "patch_mic": null,
+    "owner": null,
+    "include": true,
+    "notes": []
+   },
+   {
+    "ch": 15,
+    "target": "ch.15",
+    "name": "Drum OH2",
+    "muted": true,
+    "send_db": -1.0,
+    "send": "-1.0",
+    "source": "IN15",
+    "physical_input": true,
+    "in_mute_group": false,
+    "patch_mic": null,
+    "owner": null,
+    "include": false,
+    "notes": [
+     "sends to Main LR but is muted"
+    ]
+   },
+   {
+    "ch": 16,
+    "target": "ch.16",
+    "name": "Drum FX",
+    "muted": true,
+    "send_db": -1.5,
+    "send": "-1.5",
+    "source": "IN16",
+    "physical_input": true,
+    "in_mute_group": false,
+    "patch_mic": null,
+    "owner": null,
+    "include": false,
+    "notes": [
+     "sends to Main LR but is muted"
+    ]
+   }
+  ],
+  "included": [
+   4
+  ]
+ },
+ "expected_mics": null,
+ "summary": "ring-out Main LR: master -25.1 -> -3.1 dB (highest -0.1), 6 notch(es), feedback first at -8.1 dB; DONE"
+}
