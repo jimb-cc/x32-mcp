@@ -10,7 +10,7 @@ from collections import defaultdict
 path = sys.argv[1]
 rows = [json.loads(l) for l in open(path, encoding="utf-8")]
 ts = [r["ts"] for r in rows]
-BAND_HZ = [10000.0 * 2 ** ((i - 90) / 10) for i in range(100)]
+BAND_HZ = [20.0 * 2 ** (i / 10) for i in range(100)]
 FLOOR = -97.0
 n = len(rows)
 print(f"{n} frames, {ts[-1]-ts[0]:.1f} s, mean dt {(ts[-1]-ts[0])/(n-1)*1000:.1f} ms")

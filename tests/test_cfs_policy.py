@@ -120,7 +120,13 @@ def test_tier_b_eligibility_rule():
     assert _elig(_cand(klass="STRONG"), at_arm_suppressed=True)[0]                   # ... unless watch declined an at-arm line
     assert not _elig(_cand(klass="TRACK"))[0] and not _elig(_cand(klass="MUSICAL"))[0] and not _elig(_cand(klass="STATIONARY"))[0]
     assert not _elig(_cand(stationary=True))[0]
-    assert not _elig(_cand(cut_verdict="held"))[0] and not _elig(_cand(cut_verdict="pending"))[0]
+    assert not _elig(_cand(cut_verdict="held", emitted=1))[0] and not _elig(_cand(cut_verdict="pending", emitted=1))[0]
+    # a BYSTANDER verdict (the line was never emitted: a neighbour's cut within reach of its bell judged it) bars the line only
+    # while it is pending -- K8 seed 5: the howl hops 200 cents, the deepen meant for it lands on the old notch, the hopped line
+    # is filed 'held' and nothing would ever have cut it
+    assert not _elig(_cand(cut_verdict="pending", emitted=0))[0]
+    assert _elig(_cand(cut_verdict="held", emitted=0))[0] and _elig(_cand(cut_verdict="ambiguous"))[0]
+    assert not _elig(_cand(cut_verdict="held", emitted=0, false_cut=True))[0]
     assert not _elig(_cand(false_cut=True))[0]
     assert not _elig(_cand(misses=1))[0]
     assert not _elig(_cand(reasons=("narrow", "stable")))[0]                          # family not ruled out yet

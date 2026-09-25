@@ -304,7 +304,7 @@ Also stated in [issue #8]: "/meters/15 (RTA output) is the one case where the X3
 - Formula: `dB = int16 / 256.0` → resolution 1/256 dB = 0.0039 dB; range −128.0 (0x8000 = −32768, the floor / "no signal") … 0.0 (0x0000 = clipping). Positive values do not occur (range is [0x8000, 0x0000]).
 - Worked examples (verified): bytes `00 80 00 c0` → shorts −32768, −16384 → −128.0 dB, −64.0 dB. Bytes `40 e0 ff ff` → shorts −8128, −1 → −31.75 dB, −0.0039 dB. Short −6144 (0xE800) → −24.0 dB.
 - Linear (for drawing on the same scale as other meters): `lin = 10 ** (dB/20)`.
-- MEASURED (2026-09-22/23, Verification log): the stream is the raw analysis. `gain` 0 vs 18, `autogain` ON, `peakhold` 2 — no change at all; the −40 dB oscillator reads −40.2/−39 in its band regardless. Only `det` (floor −97 RMS / −128 PEAK, levels otherwise equal) and `decay` (release ≈ 66 dB/s at 0.25) reach `/meters/15`. The server's pinning of gain/autogain/peak-hold at arm is harmless housekeeping for the engineer's screen, nothing more.
+- MEASURED (2026-09-22/23, Verification log): the stream is the raw analysis. `gain` 0 vs 18, `autogain` ON, `peakhold` 2 — no change at all; the −40 dB oscillator reads −40.2/−39 in its band regardless. Only `det` (floor −97 RMS / −128 PEAK, levels otherwise equal; PEAK attacks within a frame, RMS averages both ways) and `decay` (release 20/decay dB/s: 4.05 dB/frame measured at 0.25; under RMS the attack follows the same pole, T20 = decay) reach `/meters/15`. Every capture made after the server or a script wrote det = PEAK is in the RMS state: whether that write takes is open (REVIEW_RESPONSE_2026-09-24 §3). The server's pinning of gain/autogain/peak-hold at arm is harmless housekeeping for the engineer's screen, nothing more.
 
 **Band centre frequencies — SOURCE [DOC 4.09] p.19, verbatim table (Hz), 100 entries, index 0 … 99 row-major:**
 ```
@@ -616,9 +616,20 @@ Method as on 2026-09-22 plus `scripts/log_rta_frames.py` (every `/meters/15` fra
    therefore ~1.3/2.6/3.9 dB of real attenuation, which is why it took "−9" to die. Dual TruEQ (the band-interaction-
    corrected type) was not measured. The insert-on-Main + oscillator combination read total silence once, but the tone was
    off at the time: no conclusion about the injection point relative to the insert.
+   **DISPUTED 2026-09-24 (docs/REVIEW_RESPONSE_2026-09-24.md item 1):** only side A was moved, and on a stereo strip side A
+   is the L leg alone. A full-depth cut of gain g on one leg, read through a tap that sums L and R, reads
+   20·log10((1+g)/2): 2.49 dB for −6 and 4.07 dB for −12 (measured 2.6 and 4.1), and 3.70 dB one semitone off centre for a
+   Q 4.3 bell (measured 3.8 and 3.6). Not a GEQ depth until both legs are cut together (REVIEW_REPORT §8 item 5). The cut
+   being visible at the post-EQ tap does settle the injection point: the oscillator enters upstream of the insert send.
 
 8. **Semitone sweep 42 Hz – 9.5 kHz, 95 tones (`scripts/measure_rta_bands.py`; data `rta_bands_semitone_sweep_2026-09-23*.jsonl.gz`;
    det PEAK, decay 0.25, Main post-EQ, oscillator −40 dB):**
+   **CORRECTION 2026-09-24 (`scripts/reanalyse_rta_logs.py prefs`): the heading is what the script asked for, not what the
+   desk did.** The frame log shows a release of 1.00 dB/frame after every tone (decay 1.0: `measure_rta_release.py` had
+   restored its default four minutes earlier and this script did not set decay) and no value below −97.0 in 4956 frames
+   (the RMS state). Centres, flatness and the ±1 skirts are static and stand. The −2 skirt above 320 Hz reads the floor
+   itself in 31 of 59 tones. The "attack under PEAK" bullet is the RMS display pole at decay 1.0 (−3.0 dB after 3
+   frames, −1.0 after 7), not a property of PEAK. Both scripts now set, read back and record the prefs.
    * **The analysis bins are at `f(i) = 20 · 2^(i/10)` Hz, not at the DOC's printed table.** The table on DOC p.19 (item 4.2 above)
      is reproduced exactly by `10000·2^((i−90)/10)` (band 0 = 19.53 → "20", band 90 = 10.00K), but the desk's bins sit a
      constant **+0.034 oct** (a third of a band) above it: with the +1/−1 neighbour ratio as the estimator, the symmetry point
@@ -636,3 +647,56 @@ Method as on 2026-09-22 plus `scripts/log_rta_frames.py` (every `/meters/15` fra
    * **Attack under PEAK, decay 0.25** (from the first frame within 20 dB of the plateau): ≥ 200 Hz 3 frames to −3 dB and 6–7 to
      −1 dB (a fast 8–13 dB first step then a slow last decibel); 80–200 Hz 5–6 / 8–10; 42–67 Hz 5–7 / 9–10 with 1–3 dB/frame
      increments — the RMS figures of item 4 are 1–2 frames faster at HF. Either way the settle rule's k = 1 bound holds.
+
+### Verification log 2026-09-25 (studio, X32RACK-Jim FW 4.13 at 192.168.1.141) — see `docs/REVIEW_REQUEST_2026-09-25.md`
+
+1. **`/meters/15` is dormant until the console has displayed its RTA page once.** After a cold start on the HOME screen, with
+   Spotify at −10 dBFS on Ch 2/3 → Main and RTA prefs source 72 / POST / det raw 1 (RMS, item 5) / decay 0.25 all read back, every frame read
+   −97.0 in all 100 bands for 180 s (`rta_dormant_static_floor_2026-09-25.jsonl.gz`). Writing `/-stat/screen/screen 1` +
+   `/-stat/screen/METER/page 4` brought the stream alive within 0.8 s; it stayed alive after the screen was restored to
+   HOME. The channel EQ page (`CHAN/page 3`) did not wake it. Product action: a wake step in the arm preflight.
+2. **Real programme false positives**: 180 s of Spotify on Main (`programme_spotify_main_2026-09-25_rms025.jsonl.gz`,
+   `det` raw 1 = **RMS** (item 5) / decay 0.25 read back, p95 −21.9 dBFS) replayed through the shipped detector (`scripts/replay_rta_log.py`) gives **20
+   STRONG emissions** (watch and ring-out alike), all sustained musical notes passing BASE and earning RISE 6–9 dB (twice
+   FAST-RISE). The synthetic corpus's FP 0 does not transfer to real programme. Proposed gate G5: 0 emissions on every
+   desk-logged programme file.
+3. Frame period on both 180 s logs: **50.0 ms** (3598 frames / 179.9 s) — not the 52.0 ms of the 2026-09-22/23 logs.
+4. **`det` write and floors** (silence, prefs/screen writes only): writing raw 0 drops the floor to −128 within a second, page
+   or no page; writing raw 1 restores the −97 floor after a +50 dB all-band transient (max −44 dB from a −97 floor) that
+   decays over seconds. The enum labelling (raw 0 = RMS in `device.yaml`) is now in question — see the review request §2b.
+5. **The `det` enum is inverted in the descriptor** (`det_label.py`): the console's `/node -prefs/rta` line prints **PEAK for
+   raw 0 and RMS for raw 1**, toggled both ways and read back. So the server's arm-time `det 1` "PEAK" has always set RMS,
+   the 2026-09-23 scripted runs "at PEAK" were RMS (the frontier's re-analysis was right), and Jim's hand-set PEAK on
+   09-23 (floor −128) was raw 0. Floors: PEAK (raw 0) −128; RMS (raw 1) −97. Fix: `review/rta-det-enum` (PR #20).
+6. **Switching to RMS (raw 1) throws a broadband burst** (`rta_det_rise_frozen_2026-09-25.jsonl.gz`, phase `A_det1_b`): with a
+   2 kHz tone on, the frame after the write has every band ~25 dB up (median −72.6 against −97; the peak band −10.4 against
+   its −25.0 plateau), decaying at the decay-0.25 release (3–5 dB/frame) over ~10 frames. Switching to PEAK (raw 0) is clean:
+   the floor drops to −128 within a frame and the tone reads its plateau within one frame. An arm-time det write must be
+   followed by ≥ 0.6 s before any level reference is taken.
+7. **A steady electronic tone does not look frozen** (2 kHz, 58 frames, 4-decimal values, `measure_rta_det_rise.py` phase B):
+   the peak band shows 5–6 distinct values, longest bit-identical run **2 frames**, spread 0.03–0.05 dB under both detectors;
+   ±1 and ±2 skirt bands the same. `frozen_frames` 5 cannot fire on it. Floor bands are bit-identical (−97.0039, 58/58 under
+   RMS) — floors freeze, peaks do not.
+8. **LF attack is the analysis window, not the detector** (gated tones, decay 0.25, frames to −3 / −1 dB): 40 Hz PEAK 6/7,
+   RMS 5/7; 63 Hz 3/4 vs 4/6; 100 Hz 4/4 vs 4/5; 2 kHz PEAK **1/1**, RMS 1/3. Above ~200 Hz PEAK settles within one frame
+   (the settle rule with k = 1 is exact there); RMS needs three. On-centre 40 Hz skirts −24.9 / −12.5 / −13.7 / −25.5 (order
+   ≈ 2, symmetric); 63 Hz (0.03 oct off-centre) and 100 Hz (0.02 oct) show the expected asymmetry. 2000.0 Hz again splits
+   band 66 / 67 by 5.7 dB — the 09-23 grid reading, reproduced.
+9. **`/config/osc/level` follows the fader law** (the 161-step `send` scale, scales_params.md §10), not `[-90..10]` linear:
+   raw 0.1875 = −40.0 dB (the desk prints `-40.0` in `/node config/osc`), raw 0.3 = −26 dB — a tone meant as −60 dB read −25.0
+   on the stream. `Descriptor.scale("send").to_raw(dB)` is the conversion; `measure_rta_det_rise.py` uses it.
+10. **Semitone sweep under real PEAK / 0.25** (`measure_rta_bands.py` from PR #16 with the corrected `DET_INDEX`, prefs read back
+    "det PEAK, decay 0.25 s"; 95 tones 42.3 Hz – 9.46 kHz at −40 dB; `rta_bands_semitone_sweep_2026-09-25_peak025.jsonl.gz` +
+    `_frames_`; `scripts/compare_rta_sweeps.py` against the 09-23 RMS run):
+    * **Grid**: offset from `20·2^(i/10)` mean −0.0004 oct, sd 0.029 over the tones ≥ 300 Hz — identical to 09-23. Confirmed
+      under both detectors.
+    * **Flat**: −38.1 ± 0.6 dB (09-23 RMS: −38.0 ± 0.6).
+    * **Skirts are the filter bank, not the detector** (median relative dB at −2/−1/+1/+2 bands, on-centre tones): 40–80 Hz
+      −25.5/−13.6/−16.3/−32.4; 80–160 −40.1/−21.1/−26.0/−48.3; 160–320 −55.6/−29.1/−32.4/−57.0; 320–1000 −56.7/−31.0/−31.0/−56.0;
+      1–3 k −60.8/−35.8/−28.8/−53.8; 3–10 k −61.9/−34.0/−30.7/−54.8 — every figure within 2 dB of the RMS sweep. The 09-23 skirt
+      conclusions (order ≈ 5 above 200 Hz, ≈ 3 at 100 Hz, ≈ 2 at 50 Hz, asymmetric at LF) stand.
+    * **Attack under PEAK / 0.25** (median frames from the first frame above −120 dB to −3 / −1 dB of the plateau): ≥ 320 Hz
+      **0 / 0.5–1**, 160–320 Hz 1 / 1, 80–160 Hz 1 / 2, 40–80 Hz 2 / 3. The RMS run at decay 1.0 needed 4–6 / 7.5–9.5. Above
+      ~150 Hz the settle rule with k = 1 is exact; the −40 dB tones at 40–80 Hz settled in 2–3 frames here against 6–7 for the
+      −26 dB tones of item 8 (same detector, same decay) — the LF window-fill count depends on where the rise is caught; the
+      two frame logs carry both for a fit.

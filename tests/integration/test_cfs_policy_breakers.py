@@ -18,7 +18,7 @@ from typing import Any
 import pytest
 
 from conftest import CONN_OPTS, wait_until
-from test_cfs_policy_desk import COLOR, GEQ_BAND_1K, PAR_1K, Rig, RoomSourceRta, _armed, _strum, make_rig  # noqa: F401 (fixture)
+from test_cfs_policy_desk import COLOR, GEQ_BAND_1K, HZ_1K, PAR_1K, Rig, RoomSourceRta, _armed, _strum, make_rig  # noqa: F401 (fixture)
 from x32mcp.cfs import CfsManager, CfsMode, ReportStore
 from x32mcp.cfs_policy import CfsPolicyConfig
 from x32mcp.connection import X32Connection
@@ -301,6 +301,9 @@ async def test_e_tier_b_never_writes_a_band_shallower_than_the_operators_own_cut
     await asyncio.sleep(0.6)
     rig.rta.inject_note(1000.0, -18.0, rise_frames=1)
     await wait_until(lambda: _band_writes(rig, GEQ_BAND_1K) == [-3.0], timeout=3.0, what="the tier-B -3")
+    # the writer records the -3 when it SENDS it; on real sockets the datagram is still in flight, and a hand cut set now
+    # would be overwritten by our own -3 arriving after it. Wait until the desk has it (review request 2026-09-23 item 6).
+    await wait_until(lambda: float(rig.fake.value(PAR_1K)) == pytest.approx(-3.0, abs=0.01), timeout=2.0, what="the -3 applied on the desk")
     rig.fake.set_value(PAR_1K, -9.0)                         # front-panel move, pushed over /xremote
     await wait_until(lambda: ses.nc.gains.get(GEQ_BAND_1K, 0.0) <= -8.9 and ses.writer.gains.get(GEQ_BAND_1K, 0.0) <= -8.9,
                      timeout=3.0, what="hand cut adopted by controller and writer")
@@ -573,7 +576,7 @@ async def test_at_arm_loudish_line_under_30db_prominent_is_deepened_by_the_polic
     await wait_until(lambda: rig.notches(), timeout=4.0, what="tier-B cut of the at-arm line")
     n0 = rig.notches()[0]
     assert n0["tier"] == "B" and n0["policy"] == "at_arm", n0     # the notch's policy tag names the rule that engaged the line
-    cand = next(c for c in ses.det.candidates if abs(c.freq_hz - 1015) < 50)
+    cand = next(c for c in ses.det.candidates if abs(c.freq_hz - HZ_1K) < 50)
     assert "established_at_arm" not in cand.emit_evidence and "suppressed_at_arm" in cand.emit_evidence
     await asyncio.sleep(7.5)
     notches = rig.notches()
@@ -612,7 +615,7 @@ async def test_held_line_masked_by_a_transient_is_not_ignore_listed_as_ended(mak
     await asyncio.sleep(6.0)                                 # > held_deepen_s + a verdict, with the line standing again
     ign = list(ses.policy.ignore)
     writes = _band_writes(rig, GEQ_BAND_1K)
-    live = [(round(c.freq_hz), c.klass, c.cut_verdict) for c in ses.det.candidates if abs(c.freq_hz - 1015) < 50 and not c.misses]
+    live = [(round(c.freq_hz), c.klass, c.cut_verdict) for c in ses.det.candidates if abs(c.freq_hz - HZ_1K) < 50 and not c.misses]
     outcomes = [e["next_action"] for e in ses.policy.tier_b_log if e["action"] == "end"]
     print(f"ignore list: {ign}; band writes: {writes}; line now: {live}; alert: {rig.cfs.state.alert}; end rows: {outcomes}")
     await rig.cfs.stop()
@@ -643,3 +646,67 @@ async def test_held_line_that_really_ends_is_ignore_listed(make_rig):
     await rig.cfs.stop()
     await rig.settle()
     assert rig.fake.value(COLOR) == "GN" and float(rig.fake.value(PAR_1K)) == pytest.approx(-3.0, abs=0.01)
+
+
+# ------------------------------------------------------------------------------------------ (h) a bystander verdict must not orphan a line
+
+async def test_h_bystander_verdict_from_a_neighbours_cut_does_not_bar_the_line_from_its_own_tier_b_engagement(make_rig):
+    """K8 seed 5 at the cfs level (review response 2026-09-24, C2). A loud-ish MODERATE line A at 1 kHz is about to be cut -3
+    by tier B; a second family-less line B appears 0.3 octave up (1250 Hz: three RTA bands clear of A so both stay narrow,
+    outside the fake desk's +-1/6-octave bell) shortly before the write lands. ``note_cut()`` judges every live line within
+    1/3 octave of the bell, so B -- never emitted, never cut -- is filed with a bystander verdict ('held': the bell's expected
+    reach at 0.3 octave is under a decibel and B did not move; 'insufficient' / 'ambiguous' under noise). On main that verdict
+    barred B from tier B for ever ("cut verdict held") and the hopped howl of K8 was orphaned. Now B gets its own tier-B
+    engagement once the verdict has settled. Its write goes where the GEQ ladder puts a line one band from an open notch
+    (``merge_adjacent_bands`` 1): the 1 kHz notch is deepened to -6 (B's own band would be 1.25 kHz); the PEQ actuator
+    (design S5, merge 0.08 oct) is what gives such a line its own notch. A's own ladder is not touched by the policy
+    (held_deepen_s is out of reach here)."""
+    rig = await make_rig(policy={"tier_b": {"held_deepen_s": 30.0}})
+    await _armed(rig, notch_budget=4)
+    await asyncio.sleep(0.6)
+    hz_b = 1250.0
+    rig.rta.inject_note(1000.0, -18.0, rise_frames=1)
+    await asyncio.sleep(0.45)                                  # A is past its onset (not 'swelling'); B is born 9 frames later
+    rig.rta.inject_note(hz_b, -18.0, rise_frames=1)
+    ses = rig.cfs._ses
+    await wait_until(lambda: rig.notches(), timeout=3.0, what="A's tier-B cut")
+    n0 = rig.notches()[0]
+    assert n0["band"] == GEQ_BAND_1K and n0["tier"] == "B" and n0["depth_db"] == -3.0, n0
+    assert ses.nc.band_for_freq(hz_b) == GEQ_BAND_1K + 1       # B's own band is 1.25 kHz ...
+    assert ses.det.cfg.merge_adjacent_bands == 1               # ... one band from the open notch: the ladder merges into it
+
+    def b_verdicts() -> list[dict]:
+        return [v for v in ses.det.cut_log if abs(v["freq_hz"] - hz_b) < 60.0 and not v["emitted"]]
+
+    def b_engagements() -> list[dict]:
+        return [e for e in ses.policy.tier_b_log if e["action"] == "tier_b" and abs(e["freq_hz"] - hz_b) < 60.0]
+
+    await wait_until(b_verdicts, timeout=3.0, what="a bystander verdict on B from A's cut")
+    vb = b_verdicts()[0]
+    assert vb["verdict"] in ("held", "insufficient", "ambiguous") and vb["depth_db"] == -3.0, vb
+    assert not b_engagements(), "B must not be engaged while its bystander verdict is pending"
+    assert ses.detections == [], "neither line may be emitted by the detector (both MODERATE)"
+    # C2: a settled bystander verdict no longer bars B from its own engagement (after the 2 s engagement cooldown)
+    try:
+        await wait_until(b_engagements, timeout=6.0, what="B's own tier-B engagement after the bystander verdict")
+    except AssertionError:
+        print("candidates:", [(round(c.freq_hz), c.klass, round(c.level_db, 1), c.cut_verdict, c.emitted, tuple(c.reasons)[:6]) for c in ses.det.candidates])
+        print("tier_b log:", ses.policy.tier_b_log[-4:], "| cut_log:", ses.det.cut_log[-3:])
+        raise
+    eb = b_engagements()[0]
+    assert eb["tier"] == "B" and eb["reason"] == "tier_b", eb
+    await wait_until(lambda: len(rig.notches()) >= 2, timeout=3.0, what="the write for B's engagement")
+    n1 = rig.notches()[1]
+    assert n1["tier"] == "B" and n1["policy"] == "tier_b" and n1["band"] == GEQ_BAND_1K and n1["depth_db"] == -6.0, n1
+    assert eb["band"] == GEQ_BAND_1K and eb["depth_db"] == -6.0, eb
+    assert _band_writes(rig, GEQ_BAND_1K) == [-3.0, -6.0] and _band_writes(rig, GEQ_BAND_1K + 1) == []
+    await rig.settle()
+    assert float(rig.fake.value(PAR_1K)) == pytest.approx(-6.0, abs=0.01)
+    assert ses.nc.budget_left == 3 and ses.nc.touched_bands == {GEQ_BAND_1K}
+    rep = (await rig.cfs.stop())["report"]
+    await rig.settle()
+    assert rig.fake.value(COLOR) == "GN"
+    starts = [e for e in rep["policy"]["tier_b"] if e["action"] == "tier_b"]
+    assert [round(e["freq_hz"]) for e in starts] == [1015, 1250], starts
+    print("bystander verdict on B:", vb, "| engagements:", [(e["freq_hz"], e["band"], e["depth_db"]) for e in starts],
+          "| notches:", [(n["band"], n["tier"], n.get("policy"), n["depth_db"]) for n in rig.notches()])

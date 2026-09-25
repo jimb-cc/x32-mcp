@@ -19,7 +19,7 @@ from typing import Any, Sequence
 
 from .analyser import Analyser, band_position, nearest_band
 from .physics import (
-    FRAME_S, RTA_BANDS, RTA_BAND_HZ, GEQ_BAND_HZ, GEQ_Q_DEFAULT, AnalyserSettings, DEFAULT_ANALYSER,
+    FRAME_S, RTA_BANDS, RTA_BAND_HZ, GEQ_BAND_HZ, GEQ_Q_DEFAULT, PEQ_BANDS, AnalyserSettings, DEFAULT_ANALYSER,
     peaking_gain_db,
 )
 from .sources import CommonModeGain, FeedbackRing, Source
@@ -110,6 +110,8 @@ class Renderer:
         self.geq: dict[int, float] = {}
         self._geq_band_gain = [0.0] * RTA_BANDS
         self.geq_log: list[tuple[float, int, float]] = []   # (ts, band, gain_db)
+        self.peq: dict[int, tuple[float, float, float]] = {}   # bus PEQ band -> (f_hz, q, gain_db) [PEQ_ACTUATOR_DESIGN.md]
+        self.peq_log: list[tuple[float, int, float, float, float]] = []   # (ts, band, f_hz, q, gain_db)
         for i, r in enumerate(scene.rings):
             r.randomize(self.seed * 7 + 13 * i + int(scene.salt))   # wander / loop-gain wander realisations per seed
             r.reset()
@@ -134,18 +136,38 @@ class Renderer:
         if _log:
             self.geq_log.append((self.k * FRAME_S, band, gain_db))
 
+    def set_peq_notch(self, band: int, f_hz: float, q: float, gain_db: float, _log: bool = True) -> None:
+        """Set bus-PEQ ``band`` (1..6) to a peaking bell at ``f_hz`` with ``q`` and ``gain_db`` (<= 0: cuts only in
+        CFS2); gain 0 frees the band. The same RBJ prototype as the GEQ bells, ahead of the tap like them."""
+        if not 1 <= band <= PEQ_BANDS:
+            raise ValueError(f"PEQ band {band} out of range 1..{PEQ_BANDS}")
+        if gain_db > 0.0:
+            raise ValueError("CFS2 never boosts")
+        if gain_db == 0.0:
+            self.peq.pop(band, None)
+        else:
+            self.peq[band] = (float(f_hz), float(q), float(gain_db))
+        self._geq_band_gain = [self.geq_gain_at(f) for f in self.band_hz]
+        if _log:
+            self.peq_log.append((self.k * FRAME_S, band, float(f_hz), float(q), float(gain_db)))
+
     def geq_gain_at(self, f_hz: float) -> float:
-        if not self.geq:
-            return 0.0
-        q = self.scene.geq_q
-        return sum(peaking_gain_db(f_hz, self.geq_band_hz[b - 1], g, q) for b, g in self.geq.items())
+        """Total actuator gain at ``f_hz`` (dB): the GEQ insert's bells plus any bus-PEQ notches, both ahead of
+        the tap (the name predates the PEQ actuator; every caller wants the sum)."""
+        g = 0.0
+        if self.geq:
+            q = self.scene.geq_q
+            g += sum(peaking_gain_db(f_hz, self.geq_band_hz[b - 1], gg, q) for b, gg in self.geq.items())
+        if self.peq:
+            g += sum(peaking_gain_db(f_hz, fc, gg, qq) for fc, qq, gg in self.peq.values())
+        return g
 
     # -- simulation ------------------------------------------------------------------------------
     def _substep(self, t: float) -> None:
         sc = self.scene
         m = sc.master_db(t)
         gp = m * sc.prog_coupling
-        geq_on = bool(self.geq)
+        geq_on = bool(self.geq or self.peq)
         gbg = self._geq_band_gain
         tones: list[tuple[float, float]] = []
         noise: list[tuple[int, float]] = []

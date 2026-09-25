@@ -927,6 +927,45 @@ def _k6(seed, st):
                                                           vox_db=-28.0, t1=13.7), rings=[ring])
 
 
+@scenario("K7_limiter_howl_hops_100c_after_first_cut_e3p5", "K1's loop (2.5 kHz on GEQ 22, e 3.5, limiter -13) is cut once and then "
+          "the hand-held mic moves: the mode HOPS +100 cents at t=4.6 (0.083 oct: outside a Q 6 notch's core, inside the GEQ "
+          "band's). Under the GEQ the old slider still bites (~2.7 dB at -3); under a PEQ the first notch gives ~1.9 dB at -3 and "
+          "4.0 dB at -6 there", "FEEDBACK onset 3.0 (one episode through the hop); detect <= 300 ms; closed loop: ring DEAD by "
+          "the end under either actuator (GEQ: -6 on the band; PEQ: deepen to -6, or a second notch at the new centroid)", 14.0,
+          tags=("feedback", "kill", "limiter", "hop", "music", "mixture"))
+def _k7(seed, st):
+    ring = FeedbackRing(freq_hz=2500.0, excess_db=3.5, tau_loop_s=0.040, t_on=3.0, start_db=-60.0, sat_db=-13.0, wander_db=0.4,
+                        hop_at_s=4.6, hop_cents=100.0, label="howl_2k5_hop100")
+    return Scene(14.0, sources=[room_noise()] + loud_band(seed, bed_db=-40.0, drums_db=-30.0, bass_db=-34.0, gtr_db=-36.0,
+                                                          vox_db=-28.0, t1=13.7), rings=[ring])
+
+
+@scenario("K8_limiter_howl_hops_200c_after_first_cut_e4", "as K7 with a +200 cent hop (0.167 oct = the next GEQ centre, 3.15 kHz; a "
+          "Q 6 -6 notch gives only 2.1 dB there, a GEQ -6 at 2.5 k about 3 dB): both actuators need a SECOND band at the new "
+          "frequency, or the GEQ walked to -9", "FEEDBACK onset 3.0 (one episode through the hop); detect <= 300 ms; closed loop: "
+          "ring DEAD by the end", 14.0, tags=("feedback", "kill", "limiter", "hop", "music", "mixture"))
+def _k8(seed, st):
+    ring = FeedbackRing(freq_hz=2500.0, excess_db=4.0, tau_loop_s=0.040, t_on=3.0, start_db=-60.0, sat_db=-13.0, wander_db=0.4,
+                        hop_at_s=4.6, hop_cents=200.0, label="howl_2k5_hop200")
+    return Scene(14.0, sources=[room_noise()] + loud_band(seed, bed_db=-40.0, drums_db=-30.0, bass_db=-34.0, gtr_db=-36.0,
+                                                          vox_db=-28.0, t1=13.7), rings=[ring])
+
+
+@scenario("K8r_limiter_howl_hop_200c_regrows_e4", "K8 with the hop modelled as what it is physically: the old mode loses its "
+          "excess when the mic moves (2.5 kHz, e 4 -> -6 at t=4.6) and the NEW mode, 200 cents up, regrows from its seed at "
+          "e/tau (e 4, tau 40 ms: ~100 dB/s less what the first notch still takes there) instead of inheriting the plateau "
+          "within one frame. K8's instantaneous retune is the simulator's idealisation (CORPUS S7.5); this is the same event "
+          "with the growth a detector is entitled to see", "FEEDBACK onset 3.0 (old mode) and 4.6 (new mode); detect each <= "
+          "300 ms; closed loop: both DEAD by the end", 14.0, tags=("feedback", "kill", "limiter", "hop", "music", "mixture"))
+def _k8r(seed, st):
+    old = FeedbackRing(freq_hz=2500.0, tau_loop_s=0.040, t_on=3.0, start_db=-60.0, sat_db=-13.0, wander_db=0.4,
+                       excess_points=[(3.0, 4.0), (4.6, 4.0), (4.61, -6.0)], label="howl_2k5_old_mode")
+    new = FeedbackRing(freq_hz=2500.0 * 2.0 ** (200.0 / 1200.0), excess_db=4.0, tau_loop_s=0.040, t_on=4.6, start_db=-60.0,
+                       sat_db=-13.0, wander_db=0.4, label="howl_2k8_new_mode")
+    return Scene(14.0, sources=[room_noise()] + loud_band(seed, bed_db=-40.0, drums_db=-30.0, bass_db=-34.0, gtr_db=-36.0,
+                                                          vox_db=-28.0, t1=13.7), rings=[old, new])
+
+
 # ==================================================================================================
 # rendering + cache
 # ==================================================================================================

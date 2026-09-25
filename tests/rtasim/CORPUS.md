@@ -113,6 +113,12 @@ Things that made the detector's life unrealistically **easy** (E) or **hard**/ha
 
 ---
 
+*(The corpus runs on the grid it was built and baselined on, `10000·2^((i−90)/10)` (`rtasim.physics.RTA_BAND_HZ`), not yet on
+the desk's measured `20·2^(i/10)` (`x32mcp.meters`): its scenes mix bin-anchored frequencies (`band_centre_hz`) with
+world-anchored ones (notes, rings and GEQ centres in Hz), so the bins cannot move alone without changing what scenarios test.
+The grid moves with the measured analyser model and re-anchored scenarios in the corpus revision; see
+`docs/REVIEW_RESPONSE_2026-09-24.md` item 2 for what the corpus reads when only the bins are moved.)*
+
 ## 3. Scenario table (67 scenarios; ground truth from the rendered trace, seeds 1–3; "0 ev" = nothing may be detected)
 
 Columns: name | dur s | content | ground truth (on = t_onset, vis = t_prom range over seeds, pk = peak prominence) | budget ms |
@@ -203,6 +209,9 @@ Ground truth for all seeds: `reports/corpus-critic/ground_truth_all_seeds.json`.
 | K4_compressor_plateau_e6p5_quiet_2k5 | 14 | 2.5 kHz, e 6.5, τ 60 ms → compressor plateau −22 (~30 dB prominent), quiet music | on 3.0; needs −9; never loud/clipped | 300 | P13 below the loud lane, P8 |
 | K5_channel_shove_into_limiter_e5p5_2k5 | 14 | loop at −0.5 dB; +6 dB channel/DCA shove at t=3 moves programme, loop and plateau (M7) | on 3.0; 0 FP on the step; needs −6 | 300 | P7 common mode, P13 |
 | K6_limiter_held_howl_e3p5_midpoint_1k8 | 14 | 1789 Hz = GEQ 1.6 k/2 k midpoint, e 3.5, limiter −12 | on 3.0; one slider −3 gives ~−2.2 → survives; −6 or both neighbours −3 kills | 300 | interpolated f / flanking pair under survival pressure |
+| K7_limiter_howl_hops_100c_after_first_cut_e3p5 | 14 | K1's loop, e 3.5, hops +100 c at t=4.6 (after the first cut) | on 3.0, one episode; GEQ slider still bites; a Q 6 PEQ notch gives 1.9/4.0 dB at −3/−6 | 300 | hop vs notch width, merge-or-second-notch |
+| K8_limiter_howl_hops_200c_after_first_cut_e4 | 14 | as K7, +200 c (the next GEQ centre), e 4 | on 3.0, one episode; both actuators need a second band (GEQ: or −9 on the old one) | 300 | second notch / band |
+| K8r_limiter_howl_hop_200c_regrows_e4 | 14 | K8 with a physical hop: the old mode loses its excess at 4.6 s, the new mode (200 c up) regrows from its seed at e/τ | on 3.0 and 4.6, two episodes; the detector re-detects the new mode on its own evidence; PEQ: second notch on it, both dead | 300 | hop with growth; K8's instant retune is tier-B material (`policy="tier_b"`) |
 
 ## 4. Simulator parameters, defaults, citations (`tests/rtasim/physics.py`, `analyser.py`, `sources.py`, `render.py`)
 
@@ -343,6 +352,11 @@ alternation on split lines (S10, X9, X23).
    skirts are uniform (order ≈ 5) above ~200 Hz but widen to order ≈ 3 at 100 Hz and ≈ 2 at 50 Hz. Defaults are kept for
    baseline continuity; a corpus revision should adopt attack_k 1.0, a frequency-dependent skirt order, decay 0.25 → 80 dB/s
    and the corrected grid.)*
+   *(2026-09-24, REVIEW_RESPONSE §3 and §4: in the RMS state, which every capture after an arm-time PEAK write is in, the
+   display is one pole on power with T20 = decay, attack and release alike (PEAK attacks within a frame); the
+   baselines ran at decay 1.0 × 60 dB/s, which is 25 % slower than the 80 dB/s the desk shows at the forced 0.25, not 3×
+   faster; the LF attack is a window filling (length ≈ 1.65/Δf), which a one-pole with attack_k 1.0 does not reproduce;
+   the ±2 and ±3 skirt figures need the sweep re-run under verified prefs.)*
    Per-band power one-pole (τ_a = 0.5/Δf), Butterworth-2N skirts, dB-linear
    release, guessed peak-hold/decay/gain semantics. A real X32 may smear an LF tone over ±2–4 bands (FFT), have window-shaped
    rises and different skirts. Any design that normalises growth by *this* τ_a(i) curve, matches *this* N=3 skirt template (P11), or
@@ -369,7 +383,10 @@ alternation on split lines (S10, X9, X23).
    score TP/DUP, and TP timing starts at t_onset (negative latencies happen when the detector fires on programme sharing the band).
    EARLY credit (2 s) rewards cutting programme-excited ringing in feedback_watch scenes (S12, X17, X22): report EARLY separately
    and re-run with `EARLY_CREDIT_S = 0` before claiming watch-mode latencies. HARM/TAIL/DUP cuts cost nothing but budget.
-8. **Closed loop is idealised** — and, measured 2026-09-23, the GEQ model is wrong in *depth*: the desk's Dual Graphic EQ
+8. *(DISPUTED 2026-09-24, docs/REVIEW_RESPONSE_2026-09-24.md item 1: the depth readings below were taken with ONE leg of the
+   stereo Main cut and match a full-depth cut read through a summed tap to 0.1 dB. Do not scale any margin by them until
+   both legs have been cut together.)*
+   **Closed loop is idealised** — and, measured 2026-09-23, the GEQ model is wrong in *depth*: the desk's Dual Graphic EQ
    realises ≈ 0.43× a −6 slider and ≈ 0.35× a −12 slider at an isolated band (2.6 / 4.1 dB at 2 kHz, ±0.09 oct within 0.5 dB),
    whereas the renderer applies the nominal depth with an RBJ Q 3 bell. Every closed-loop kill margin in this document is
    therefore optimistic for the GEQ actuator by ~2.5×; the bus PEQ (RBJ, full depth, measured at 2 and 8 kHz) is not affected.
@@ -398,3 +415,17 @@ alternation on split lines (S10, X9, X23).
     one −3, so no closed-loop number said anything about deepening. What the corpus still cannot show: the *transient* a real
     limiter adds (undershoot on the loop's decay rate, recovery on the limiter's release) — the one level-domain signature that
     could separate the two cases, and a desk measurement, not a simulator constant.
+
+## 8. Actuators: GEQ insert (default) and bus PEQ (`actuator="peq"`)
+
+`run_one`/`evaluate`/`python -m rtasim.harness --closed --actuator=peq` cut through a stand-in for the product's
+`PeqNotchController` (`docs/PEQ_ACTUATOR_DESIGN.md`): a Q 6 (6.103 on the desk grid) peaking notch on the bus PEQ at the
+detection's interpolated frequency snapped to the desk's 201-step log grid, −3 dB steps to −12, deepened when a later
+detection lands within 0.08 oct of an owned notch, otherwise a new band (4 of 6). The renderer's `set_peq_notch` uses the same
+RBJ bell as the GEQ (`physics.peaking_gain_db`, ≡ the detector's `bell_attenuation_db`); GEQ and PEQ bells sum in dB ahead of
+the tap. `RunResult.notches` records every write with actuator, centre, Q and gain; `cuts` keeps its (ts, band, gain) shape
+with band = the GEQ band nearest the notch so `survived` and every consumer stay actuator-agnostic. The detector's
+`note_cut` gets `q=` once its signature accepts it (design §2.4); until then it brackets the drop with its GEQ Q range, which
+a full-depth on-centre PEQ notch satisfies. What the stand-in does NOT model (the product must): band classification at arm,
+the engineer's HPF, eq/on, pushes, the two-call open, `off_centre` re-measurement, mixed GEQ+PEQ sessions, Main LR. The X32's
+own PEQ shape and Q definition are UNCONFIRMED (design §9): desk test 3′ sets the Q-scale bracket.

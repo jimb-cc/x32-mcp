@@ -524,8 +524,8 @@ def test_rta_section(dev):
     assert len(hz) == 100
     assert all(b > a for a, b in zip(hz, hz[1:])), "band_hz must be ascending"
     for i, v in enumerate(hz):
-        assert v == round(10000 * 2 ** ((i - 90) / 10), 2), i
-    assert hz[0] == 19.53 and hz[90] == 10000 and hz[99] == 18660.66
+        assert v == round(20 * 2 ** (i / 10), 2), i
+    assert hz[0] == 20.0 and hz[90] == 10240 and hz[99] == 19108.52
     assert rta["source_param"] == "/-prefs/rta/source" and rta["stat_param"] == "/-stat/rtasource"
     assert rta["pos_param"] == "/-prefs/rta/pos" and rta["options_param"] == "/-prefs/rta/options"
     # the rta params exist in the descriptor

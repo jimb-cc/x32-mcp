@@ -274,7 +274,7 @@ def encode_meter_datagram(meter_type: int, values: Sequence[float], *, address: 
 def rta_band_centre(i: int) -> float:
     """Centre frequency (Hz) of RTA band ``i`` (0..99): 1/10-octave spacing anchored at band 90
     = 10 kHz (meters.md §4.2, verified against the DOC table)."""
-    return 10000.0 * 2.0 ** ((i - 90) / 10.0)
+    return 20.0 * 2.0 ** (i / 10.0)
 
 
 RTA_BAND_HZ: tuple[float, ...] = tuple(rta_band_centre(i) for i in range(RTA_BANDS))

@@ -3,7 +3,9 @@
 
 Read-only: it subscribes to the meter stream on its own socket and writes nothing to the desk (the
 RTA source / prefs are whatever the console has; point the RTA first with get_rta(target)).
-One line per frame: {"ts": <time.time()>, "k": <frame index>, "db": [100 floats]}. Use it for the
+One line per frame: {"ts": <time.time()>, "k": <frame index>, "db": [100 floats]} (3 decimals: the desk's 1/256 dB steps
+survive), and beside it ``<out>.prefs.json`` with the RTA prefs the desk reported when the log started (det, decay, peak-hold,
+gain, auto-gain, source, pos: raw values) -- the heading a capture is read under must come from the desk. Use it for the
 analyser rise-time / release measurements (gate the console oscillator on and off while it runs)
 and for anything else that needs frame-accurate timing rather than get_rta's averages.
 
@@ -37,6 +39,15 @@ async def main() -> int:
     conn = X32Connection(Descriptor.load(), EventBus())
     info = await conn.connect(a.host, a.port)
     print(f"connected to {info.name} ({info.model} FW {info.firmware}); logging {a.seconds:.0f} s to {a.out}", file=sys.stderr)
+    prefs = {}
+    for leaf in ("det", "decay", "peakhold", "gain", "autogain", "source", "pos"):
+        try:
+            prefs[leaf] = await conn.get(f"/-prefs/rta/{leaf}")
+        except Exception as e:        # a read that fails is recorded, never fatal: this script only listens
+            prefs[leaf] = f"unread: {e}"
+    with open(a.out + ".prefs.json", "w", encoding="utf-8") as ph:
+        json.dump({"ts": round(time.time(), 3), "console": info.name, "firmware": info.firmware, "prefs_raw": prefs}, ph)
+    print(f"RTA prefs as reported (raw): {prefs}", file=sys.stderr)
     n = 0
     t0 = time.time()
     with open(a.out, "w", encoding="utf-8") as fh:
@@ -44,7 +55,7 @@ async def main() -> int:
             nonlocal n
             if not fr.is_rta:
                 return
-            fh.write(json.dumps({"ts": round(fr.ts, 4), "k": n, "db": [round(v, 1) for v in fr.values]}) + "\n")
+            fh.write(json.dumps({"ts": round(fr.ts, 4), "k": n, "db": [round(v, 3) for v in fr.values]}) + "\n")
             n += 1
             if n % 100 == 0:
                 fh.flush()
