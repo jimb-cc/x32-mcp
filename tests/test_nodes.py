@@ -148,7 +148,7 @@ def test_every_device_yaml_format_is_implemented(d):
 
 
 def test_round_trip_every_node_section(d):
-    """Render → parse for all 2103 concrete node paths, padded and single-spaced."""
+    """Render → parse for all 2105 concrete node paths, padded and single-spaced."""
     n = 0
     for j, node in enumerate(d.nodes()):
         values = synth_values(node, j)
@@ -161,7 +161,7 @@ def test_round_trip_every_node_section(d):
             for k in node.fields:
                 assert same(back[k], values[k]), (node.path, k, values[k], back[k], line)
         n += 1
-    assert n == 2103
+    assert n == 2105
 
 
 def test_single_spaced_render_has_no_padding(d):
@@ -554,9 +554,9 @@ async def test_dump_with_stub_node_many(d):
     drop = {"/fx/8/par", "/ch/32/grp", "/headamp/127"}
     conn = StubConn(lines, drop=drop)
     st = await dump_desk_state(conn, d, concurrency=4)
-    assert conn.calls and conn.calls[0][1] == 4 and len(conn.calls[0][0]) == 2103
+    assert conn.calls and conn.calls[0][1] == 4 and len(conn.calls[0][0]) == 2105
     assert set(st.missing) == drop
-    assert len(st.sections) == 2103 - len(drop)
+    assert len(st.sections) == 2105 - len(drop)
     assert st.scene == {"index": 7, "name": "Molecules"}
     assert st.console == {"name": "X32-FAKE", "model": "X32RACK", "firmware": "4.06"}
     assert st.get("/ch/03/mix/fader") is None and st.get("/ch/03/mix/pan") == 0
@@ -579,7 +579,7 @@ async def test_dump_sections_filter_and_missing_scene(d):
     assert st.scene is None and st.missing == [] and len(st.sections) == len(paths)
     conn2 = StubConn({})
     empty = await dump_desk_state(conn2, d, sections=["/-stat"])
-    assert len(empty.missing) == 5 and empty.sections == {}
+    assert len(empty.missing) == 7 and empty.sections == {}
     with pytest.raises(ValueError):
         await dump_desk_state(conn2, d, sections=["not-a-scope"])
 

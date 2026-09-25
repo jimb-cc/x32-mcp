@@ -102,7 +102,7 @@ from .desk import Desk, DeskError, priority_writes
 from .detector import Candidate, Detection, DetectorConfig, FeedbackDetector, Notch, NotchController
 from .events import Event, EventBus
 from .meters import (FrameSource, LiveMeters, MeterFrame, RtaSourceError, RtaSourceResult, force_rta_ballistics, rta_band_hz,
-                     set_rta_source, restore_rta_prefs)
+                     set_rta_source, restore_rta_prefs, wake_rta_analyser)
 from .policy import FADER_FLOOR_DB, Policy, PolicyError
 from .provision import geq_sides_for, Preflight, bus_label, bus_target, preflight, validate_ringout_eqs
 from .scales import NEG_INF_DB, format_db
@@ -616,6 +616,7 @@ class _Session:
     confidence: dict[int, float] = field(default_factory=dict)
     candidate: Any = None
     rta: RtaSourceResult | None = None
+    rta_wake: dict[str, Any] | None = None   # wake_rta_analyser() at arm: was /meters/15 a static flat floor, and did the RTA page start it
     snapshot_id: str | None = None
     first_feedback_master_db: float | None = None
     end_master_db: float | None = None
@@ -770,8 +771,9 @@ class CfsManager:
         log.info("feedback watch armed on %s (%s), budget %d", t.label, ses.session_id, ses.budget)
         return {
             "session_id": ses.session_id, "bus": ses.bus, "bus_name": ses.bus_name, "preflight": pf.to_dict(),
-            "rta": _rta_dict(ses.rta), "geq": {"fx_slot": ses.fx_slot, "side": ses.side, "sel": ses.sel,
-                                                "existing_cuts": [self._notch_dict(ses, n) for n in ses.nc.notches]},
+            "rta": _rta_dict(ses.rta), "rta_wake": ses.rta_wake,
+            "geq": {"fx_slot": ses.fx_slot, "side": ses.side, "sel": ses.sel,
+                    "existing_cuts": [self._notch_dict(ses, n) for n in ses.nc.notches]},
             "lf_edge": self._lf_edge_dict(ses), "state": self.state.to_dict(),
         }
 
@@ -1147,8 +1149,14 @@ class CfsManager:
             await self._disarm()
             self._ses = None
             raise
+        # The console's analyser starts only once its METERS/RTA page has been shown (meters.md 2026-09-25 item 1): a stream
+        # that is one static flat frame now would arm the detector on a dead display. Probe, wake if needed, restore the screen.
+        ses.rta_wake = await wake_rta_analyser(self._conn, self._d, self._frames)
+        if ses.rta_wake.get("dormant"):
+            log.warning("CFS² %s: the RTA analyser was dormant at arm; METERS/RTA page shown -> %s", ses.session_id,
+                        "alive" if ses.rta_wake.get("woken") else "STILL STATIC (check the console's METERS -> RTA page)")
         self._events.publish("cfs.state", mode=self.mode.value, session_id=ses.session_id, bus=ses.bus, stage=ses.stage,
-                             rta_source=ses.target.key, rta_verified=bool(ses.rta and ses.rta.verified))
+                             rta_source=ses.target.key, rta_verified=bool(ses.rta and ses.rta.verified), rta_wake=ses.rta_wake)
 
     async def _disarm(self) -> None:
         if self._unsub_frames is not None:
@@ -2892,7 +2900,7 @@ class CfsManager:
             "target_db": _db1(ses.target_db), "step_db": ses.step_db, "dwell_ms": ses.dwell_ms,
             "notch_budget": ses.budget, "budget_left": ses.nc.budget_left,
             "geq": {"fx_slot": ses.fx_slot, "side": ses.side, "sel": ses.sel},
-            "rta": _rta_dict(ses.rta), "rta_restored": getattr(ses, "rta_restored", None), "snapshot": ses.snapshot_id,
+            "rta": _rta_dict(ses.rta), "rta_wake": getattr(ses, "rta_wake", None), "rta_restored": getattr(ses, "rta_restored", None), "snapshot": ses.snapshot_id,
             "notches": mine, "existing_cuts": pre,
             "detections": len(ses.detections), "detection_log": ses.detections[-_MAX_DETECTIONS_IN_REPORT:],
             "notch_log": ses.notch_log, "stages": ses.stages, "frames": ses.frames,

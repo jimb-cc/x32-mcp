@@ -338,3 +338,7 @@ semitone sweep ran at decay 1.0 in the −97-floor state, not at PEAK / 0.25. It
   music — proposed gate G5 on desk-logged programme (`scripts/replay_rta_log.py`, `docs/research/data/programme_*.jsonl.gz`);
   (3) the frontier's bundle is PRs #16/#17/#18 (C2 now has a cfs-level test); merge order in `REVIEW_REQUEST_2026-09-25.md`;
   (4) **the RTA `det` enum was inverted** (raw 0 = PEAK per the desk's own /node label): every arm-time "PEAK" write set RMS — PR #20.
+* **Arm-time analyser wake (2026-09-25, `review/rta-wake`)**: `meters.wake_rta_analyser()` runs in `CfsManager._arm` once
+  frames flow: a stream that is one static flat frame (the console's analyser has not been started since power-up) makes
+  it show the METERS/RTA page (`/-stat/screen/screen 1`, `/-stat/screen/METER/page 4`) for a moment and restore the screen;
+  the result is `rta_wake` in the arm result, the `cfs.state` event and the report. `FakeDesk(rta_dormant=True)` models it.

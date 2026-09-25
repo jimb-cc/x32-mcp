@@ -20,6 +20,7 @@ from x32mcp.connection import ConnectionState, X32Connection
 from x32mcp.desk import Desk
 from x32mcp.detector import Detection, DetectorConfig
 from x32mcp.events import EventBus
+from x32mcp.fakedesk import FakeDesk
 from x32mcp.meters import SyntheticRta, rta_band_hz
 from x32mcp.nodes import SnapshotStore
 from x32mcp.policy import Policy, PolicyError
@@ -735,3 +736,54 @@ async def test_session_restores_the_engineers_rta_prefs_when_it_ends(cfs, desk, 
     assert float(fakedesk.value("/-prefs/rta/gain")) == pytest.approx(24.0, abs=0.01)
     last = cfs._last.report if cfs._last is not None else rep
     assert set((last.get("rta_restored") or {}).get("restored", [])) >= {"source", "peakhold", "gain"}, last.get("rta_restored")
+
+
+# ---------------------------------------------------------------------------------------- arming on a dormant analyser
+
+async def test_arm_wakes_a_dormant_rta_analyser_and_restores_the_screen(descriptor, events, policy, reports, tmp_path):
+    """meters.md Verification log 2026-09-25 item 1: after a power-up the console's /meters/15 carries one static flat
+    frame (-97.0 in every band) until its METERS/RTA page has been shown once; the two studio sessions before that only
+    worked because the page had been visited by hand. Arming must notice the static flat stream, show the page for a
+    moment, restore the console's screen exactly, and report it."""
+    fake = FakeDesk(descriptor, host="127.0.0.1", port=0, name="X32-FAKE", rta_dormant=True)
+    await fake.start()
+    conn = X32Connection(descriptor, events, **CONN_OPTS)
+    await conn.connect(fake.host, fake.port)
+    desk = Desk(descriptor, conn, policy, events, SnapshotStore(tmp_path / "snap"))
+    cfs = CfsManager(desk, policy, events, reports, snapshots=SnapshotStore(tmp_path / "snap"))
+    try:
+        await provision(desk, [1])
+        route_mics(desk, fake, 1, [1, 2])
+        fset(desk, fake, "/bus/01/mix/fader", -20.0)
+        fset(desk, fake, "/-stat/screen/screen", 3)            # the console sits on its SETUP page
+        assert fake.rta_dormant
+        res = await cfs.feedback_watch(1)
+        w = res["rta_wake"]
+        assert w["dormant"] is True and w["woken"] is True and w["probe_frames"] >= 6, w
+        assert w["screen_before"] == {"/-stat/screen/screen": 3, "/-stat/screen/METER/page": 0}, w
+        assert fake.rta_dormant is False, "showing METERS/RTA must have started the fake's analyser"
+        await settle(conn)
+        assert fake.value("/-stat/screen/screen") == 3 and fake.value("/-stat/screen/METER/page") == 0, "screen not restored"
+        n0 = cfs.frames.frames_received
+        await wait_until(lambda: cfs.frames.frames_received >= n0 + 10, what="live frames after the wake")
+        fr = cfs.frames.last_frame
+        assert fr is not None and max(fr.values) - min(fr.values) > 1.0, "the stream is still flat"
+        rep = (await cfs.stop())["report"]
+        assert rep["rta_wake"]["dormant"] is True and rep["rta_wake"]["woken"] is True
+    finally:
+        await cfs.close()
+        await desk.close()
+        await conn.close()
+        await fake.stop()
+
+
+async def test_arm_leaves_a_live_rta_analyser_alone(desk, conn, fakedesk, cfs):
+    await provision(desk, [1])
+    route_mics(desk, fakedesk, 1, [1, 2])
+    fset(desk, fakedesk, "/bus/01/mix/fader", -20.0)
+    res = await cfs.feedback_watch(1)
+    w = res["rta_wake"]
+    assert w["dormant"] is False and w["woken"] is False and w["probe_frames"] >= 6, w
+    await settle(conn)
+    assert fakedesk.value("/-stat/screen/screen") == 0 and fakedesk.value("/-stat/screen/METER/page") == 0
+    assert (await cfs.stop())["report"]["rta_wake"]["dormant"] is False

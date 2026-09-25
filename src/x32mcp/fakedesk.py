@@ -107,6 +107,7 @@ _FX_TYPE_RE = re.compile(r"^/fx/(\d)/type$")
 # meters.md §1.1 (VERIFIED, X32.c 531-551): Xmeters[i].command are the literal strings
 # "/meters/0"…"/meters/16" WITH the leading slash, and the emulator matches nothing else.
 _METER_NAME_RE = re.compile(r"^/meters/(\d+)$")
+RTA_DORMANT_DB = -97.0  # the static frame a console's /meters/15 carries while its analyser has not been started (meters.md 2026-09-25)
 _METER_NAME_LOOSE_RE = re.compile(r"^/?meters/(\d+)$")  # only to explain the rejection at DEBUG
 _SCENE_FIELD_RE = re.compile(r"^/-show/showfile/scene/(\d{3})/(name|notes)$")
 _FREQ_K = re.compile(r"^([+-]?\d*)k(\d*)$")
@@ -153,7 +154,7 @@ _DEFAULTS: dict[str, Any] = {
     "talk/B/level": 0.0, "talk/B/dim": False, "talk/B/latch": False, "talk/B/destmap": 0,
     "mono/mode": "LR+M", "mono/link": False,
     "prepos/current": 0, "showfile/show/name": "FakeShow",
-    "selidx": 0, "solo": False, "talk/A": False, "talk/B": False, "rtasource": 168,
+    "selidx": 0, "solo": False, "talk/A": False, "talk/B": False, "rtasource": 168, "screen/screen": 0, "screen/METER/page": 0,
     "rtamodeeq": "BAR", "rtamodegeq": "BAR", "rtaeqpre": False, "rtageqpost": False,
     "geqonfdr": False, "geqpos": 0, "dcaspill": 0,
     "show_control": "SCENES",
@@ -290,8 +291,12 @@ class FakeDesk:
         firmware: str = "4.06",
         server_version: str = "V2.07",
         scene_dir: Path | str | None = None,
+        rta_dormant: bool = False,
     ) -> None:
         self.d = d
+        # meters.md 2026-09-25 item 1: a real console's analyser is not running after a power-up until its METERS/RTA page has
+        # been shown once; /meters/15 carries one static flat frame until then. Writing screen 1 + METER page 4 starts it.
+        self.rta_dormant = bool(rta_dormant)
         self.host = host
         self.port = int(port)
         self.name = name
@@ -774,6 +779,9 @@ class FakeDesk:
         self.state[address] = new
         if changed and (address.startswith("/-prefs/rta/") or "/insert/" in address or address.startswith("/fx/") or address == "/-stat/selidx"):
             self._cuts_dirty = True
+        if self.rta_dormant and address in ("/-stat/screen/screen", "/-stat/screen/METER/page"):
+            if int(self.state.get("/-stat/screen/screen", 0) or 0) == 1 and int(self.state.get("/-stat/screen/METER/page", 0) or 0) == 4:
+                self.rta_dormant = False        # the console shows its RTA page: the analyser starts and stays running
         return changed
 
     # -- node text ---------------------------------------------------------------------------------
@@ -1042,6 +1050,8 @@ class FakeDesk:
 
     def _meter_values(self, mtype: int, args: tuple[int, ...]) -> list[float]:
         if mtype == RTA_METER_TYPE:
+            if self.rta_dormant:
+                return [RTA_DORMANT_DB] * len(self.rta.band_hz)
             frame = self.rta.last_frame or self.rta.tick()
             return list(frame.values)
         count = METER_COUNTS[mtype]
